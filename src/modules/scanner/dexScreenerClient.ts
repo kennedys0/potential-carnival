@@ -17,7 +17,7 @@ export class DexScreenerClient {
     try {
       const res = await fetch(`${this.baseUrl}/${tokenAddress}`);
       if (!res.ok) return null;
-      const data = await res.json();
+      const data: any = await res.json();
       if (!data.pairs || data.pairs.length === 0) return null;
       // Filter pairs for solana chain and sort by liquidity descending
       const solanaPairs = data.pairs

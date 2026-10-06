@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: solana-scalping-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  bot:
+    build: .
+    container_name: solana-scalping-bot
+    restart: unless-stopped
+    depends_on:
+      - redis
+    env_file:
+      - .env
+
+volumes:
+  redis_data:
