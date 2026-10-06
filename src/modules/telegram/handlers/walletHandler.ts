@@ -6,7 +6,6 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 
   const wallet = await walletService.getOrCreateWallet(ctx.from.id);
   const balance = await walletService.getBalance(wallet.publicKey);
-  const qrBuffer = await walletService.generateQrBuffer(wallet.publicKey);
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
@@ -16,6 +15,7 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 
 💰 <b>Saldo Saat Ini:</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code> (${balance.lamports.toLocaleString()} lamports)
+• <i>Diperiksa: ${new Date().toLocaleTimeString()} UTC</i>
 
 <i>Deposit terdeteksi otomatis via WebSocket RPC.</i>
 `.trim();
@@ -28,6 +28,28 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
     .row()
     .text('🏠 Menu Utama', 'menu_main');
 
+  if (ctx.callbackQuery) {
+    const isPhotoMessage = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
+    try {
+      if (isPhotoMessage) {
+        await ctx.editMessageCaption({
+          caption: text,
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } else {
+        await ctx.editMessageText(text, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      }
+      return;
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
+    }
+  }
+
+  const qrBuffer = await walletService.generateQrBuffer(wallet.publicKey);
   await ctx.replyWithPhoto(new InputFile(qrBuffer, 'wallet-qr.png'), {
     caption: text,
     parse_mode: 'HTML',
@@ -60,14 +82,25 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
     .row()
     .text('🏠 Menu Utama', 'menu_main');
 
+  const isPhotoMessage = ctx.callbackQuery?.message && 'caption' in ctx.callbackQuery.message;
+
   try {
-    await ctx.editMessageCaption({
-      caption: text,
-      parse_mode: 'HTML',
-      reply_markup: keyboard,
-    });
-  } catch {
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    if (isPhotoMessage) {
+      await ctx.editMessageCaption({
+        caption: text,
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } else {
+      await ctx.editMessageText(text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    }
+  } catch (err: any) {
+    if (err?.description?.includes('message is not modified')) {
+      return;
+    }
   }
 }
 
@@ -87,6 +120,27 @@ Untuk melakukan penarikan saldo ke wallet eksternal Anda, silakan ketik perintah
   const keyboard = new InlineKeyboard()
     .text('💳 Cek Saldo', 'menu_wallet')
     .text('🏠 Menu Utama', 'menu_main');
+
+  if (ctx.callbackQuery) {
+    const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
+    try {
+      if (isPhoto) {
+        await ctx.editMessageCaption({
+          caption: text,
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } else {
+        await ctx.editMessageText(text, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      }
+      return;
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
+    }
+  }
 
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
@@ -113,8 +167,33 @@ Private Key memberikan akses penuh dan tak terbatas ke seluruh aset di wallet An
       .text('💳 Kembali ke Wallet', 'menu_wallet')
       .text('🏠 Menu Utama', 'menu_main');
 
+    if (ctx.callbackQuery) {
+      const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
+      try {
+        if (isPhoto) {
+          await ctx.editMessageCaption({
+            caption: text,
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          });
+        } else {
+          await ctx.editMessageText(text, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          });
+        }
+        return;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) return;
+      }
+    }
+
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
   } catch (err: any) {
-    await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${err.message}`, { parse_mode: 'HTML' });
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery({ text: `⚠️ Gagal: ${err.message}` });
+    } else {
+      await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${err.message}`, { parse_mode: 'HTML' });
+    }
   }
 }

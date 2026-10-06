@@ -133,15 +133,22 @@ export async function handleAutopilotLogs(
     }
   }
 
+  const timestamp = new Date().toLocaleTimeString();
+  text += `\n• <i>Diperbarui pada: ${timestamp} UTC</i>`;
+
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Log', 'autopilot_logs')
     .text('🤖 Dashboard Autopilot', 'menu_autopilot')
     .row()
     .text('🏠 Menu Utama', 'menu_main');
 
-  try {
-    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-  } catch {
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
+    }
+  } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
   }
 }
@@ -153,6 +160,7 @@ export async function handleAutopilotStats(
   if (!ctx.from) return;
 
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
+  const timestamp = new Date().toLocaleTimeString();
   const text = `
 📊 <b>Statistik Kinerja Autopilot</b>
 
@@ -162,6 +170,7 @@ export async function handleAutopilotStats(
 • <b>Realized PnL:</b> +0.0000 SOL ($0.00)
 • <b>Max Consecutive Losses:</b> 0
 • <b>Circuit Breaker:</b> 🟢 NORMAL (Tidak Terpicu)
+• <i>Diperiksa pada: ${timestamp} UTC</i>
 
 <i>Data diperbarui secara otomatis setiap kali trade dieksekusi dan ditutup.</i>
 `.trim();
@@ -172,9 +181,13 @@ export async function handleAutopilotStats(
     .row()
     .text('🏠 Menu Utama', 'menu_main');
 
-  try {
-    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-  } catch {
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
+    }
+  } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
   }
 }

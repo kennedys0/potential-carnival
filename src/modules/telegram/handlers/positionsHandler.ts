@@ -8,6 +8,7 @@ export async function handlePositionsMenu(
   if (!ctx.from) return;
 
   const openTrades = await tradeRepo.getOpenTradesByUserId(ctx.from.id);
+  const timestamp = new Date().toLocaleTimeString();
 
   let text = '';
   if (openTrades.length === 0) {
@@ -20,6 +21,8 @@ export async function handlePositionsMenu(
 1. Ketik <code>/scan &lt;CA&gt;</code> untuk menganalisis token Solana.
 2. Gunakan tombol Buy untuk eksekusi manual (Paper/Live).
 3. Atau aktifkan <b>🤖 Autopilot</b> untuk auto-snipe otomatis sesuai kriteria AI.
+
+• <i>Diperiksa pada: ${timestamp} UTC</i>
 `.trim();
   } else {
     text = `📊 <b>Daftar Posisi Aktif (${openTrades.length})</b>\n\n`;
@@ -30,6 +33,7 @@ export async function handlePositionsMenu(
       text += `• <b>Ukuran:</b> ${trade.sol_amount} SOL (${trade.token_amount.toFixed(2)} tokens)\n`;
       text += `• <b>Status:</b> <code>${trade.status}</code>\n\n`;
     }
+    text += `• <i>Diperbarui pada: ${timestamp} UTC</i>`;
   }
 
   const keyboard = new InlineKeyboard()
@@ -42,8 +46,10 @@ export async function handlePositionsMenu(
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) {
+        return;
+      }
     }
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });

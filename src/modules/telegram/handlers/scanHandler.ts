@@ -12,16 +12,35 @@ export async function handleScanCommand(
   securityService: SecurityFilterService,
   analyzerService: AnalyzerService
 ): Promise<void> {
-  const loadingMsg = await ctx.reply('⏳ <i>Sedang memindai kontrak token dan data on-chain real-time...</i>', {
-    parse_mode: 'HTML',
-  });
+  const isCallback = !!ctx.callbackQuery;
+  const callbackMessageId = isCallback && ctx.callbackQuery?.message
+    ? ctx.callbackQuery.message.message_id
+    : undefined;
+
+  let activeMessageId = callbackMessageId;
+
+  if (isCallback) {
+    try {
+      await ctx.answerCallbackQuery({ text: '🔄 Memperbarui analisis token...' });
+    } catch {
+      // ignore
+    }
+  } else {
+    const loadingMsg = await ctx.reply('⏳ <i>Sedang memindai kontrak token dan data on-chain real-time...</i>', {
+      parse_mode: 'HTML',
+    });
+    activeMessageId = loadingMsg.message_id;
+  }
+
+  const chatId = ctx.chat?.id;
+  if (!chatId || !activeMessageId) return;
 
   try {
     const pair = await scannerService.scanTokenByAddress(tokenMint);
     if (!pair) {
       await ctx.api.editMessageText(
-        ctx.chat!.id,
-        loadingMsg.message_id,
+        chatId,
+        activeMessageId,
         `❌ <b>Token Tidak Ditemukan!</b>\nTidak ada pool likuiditas aktif di Solana untuk CA: <code>${tokenMint}</code>`,
         { parse_mode: 'HTML' }
       );
@@ -44,16 +63,23 @@ export async function handleScanCommand(
     const reportText = formatTokenReport(pair, security, aiAnalysis);
     const keyboard = createTokenKeyboard(tokenMint, true);
 
-    await ctx.api.editMessageText(ctx.chat!.id, loadingMsg.message_id, reportText, {
+    await ctx.api.editMessageText(chatId, activeMessageId, reportText, {
       parse_mode: 'HTML',
       reply_markup: keyboard,
     });
   } catch (err: any) {
-    await ctx.api.editMessageText(
-      ctx.chat!.id,
-      loadingMsg.message_id,
-      `⚠️ <b>Gagal memindai token:</b> ${err.message || 'Error tidak diketahui'}`,
-      { parse_mode: 'HTML' }
-    );
+    if (err?.description?.includes('message is not modified')) {
+      return;
+    }
+    try {
+      await ctx.api.editMessageText(
+        chatId,
+        activeMessageId,
+        `⚠️ <b>Gagal memindai token:</b> ${err.message || 'Error tidak diketahui'}`,
+        { parse_mode: 'HTML' }
+      );
+    } catch {
+      // ignore
+    }
   }
 }

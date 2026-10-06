@@ -30,8 +30,8 @@ Butuh bantuan lebih lanjut? Hubungi admin bot.
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
     }
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });

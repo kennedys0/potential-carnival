@@ -116,16 +116,22 @@ export function registerBotRoutes(
     if (data === 'menu_main') {
       await ctx.answerCallbackQuery();
       const text = '🏠 <b>Menu Utama Solana Scalping Bot</b>\nPilih salah satu aksi di bawah untuk melanjutkan:';
+      const isPhoto = ctx.callbackQuery?.message && 'caption' in ctx.callbackQuery.message;
       try {
-        await ctx.editMessageText(text, {
-          parse_mode: 'HTML',
-          reply_markup: createMainMenuKeyboard(),
-        });
-      } catch {
-        await ctx.reply(text, {
-          parse_mode: 'HTML',
-          reply_markup: createMainMenuKeyboard(),
-        });
+        if (isPhoto) {
+          await ctx.editMessageCaption({
+            caption: text,
+            parse_mode: 'HTML',
+            reply_markup: createMainMenuKeyboard(),
+          });
+        } else {
+          await ctx.editMessageText(text, {
+            parse_mode: 'HTML',
+            reply_markup: createMainMenuKeyboard(),
+          });
+        }
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) return;
       }
     } else if (data === 'menu_wallet') {
       await ctx.answerCallbackQuery();
@@ -144,16 +150,30 @@ export function registerBotRoutes(
       await handleHelpMenu(ctx);
     } else if (data === 'menu_scan') {
       await ctx.answerCallbackQuery();
-      await ctx.reply(
+      const text = (
         '🔍 <b>Scan Token Solana</b>\n\n' +
         'Silakan kirimkan <b>Contract Address (CA)</b> token Solana di chat ini, atau gunakan perintah:\n' +
         '<code>/scan &lt;CA&gt;</code>\n\n' +
-        '<i>Contoh: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v</i>',
-        {
-          parse_mode: 'HTML',
-          reply_markup: new InlineKeyboard().text('🏠 Menu Utama', 'menu_main'),
-        }
+        '<i>Contoh: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v</i>'
       );
+      const keyboard = new InlineKeyboard().text('🏠 Menu Utama', 'menu_main');
+      const isPhoto = ctx.callbackQuery?.message && 'caption' in ctx.callbackQuery.message;
+      try {
+        if (isPhoto) {
+          await ctx.editMessageCaption({
+            caption: text,
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          });
+        } else {
+          await ctx.editMessageText(text, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          });
+        }
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) return;
+      }
     }
 
     // 2. Wallet Actions
@@ -208,7 +228,6 @@ export function registerBotRoutes(
     // 5. Token Scan Actions
     else if (data.startsWith('refresh:')) {
       const tokenMint = data.split(':')[1];
-      await ctx.answerCallbackQuery({ text: '🔄 Memindai ulang token...' });
       await handleScanCommand(ctx, tokenMint, services.scannerService, services.securityService, services.analyzerService);
     } else if (data.startsWith('buy:')) {
       if (!ctx.from) return;

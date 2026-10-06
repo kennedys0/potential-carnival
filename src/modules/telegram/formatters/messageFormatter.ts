@@ -59,6 +59,7 @@ ${ai.key_reasons.map((r) => `  - ${r}`).join('\n')}
 ${progressBar}
 ${flagList}
 ${aiSection}
+🕒 <i>Diperbarui: ${new Date().toLocaleTimeString()} UTC</i>
 <i>⚠️ DYOR. Bukan nasihat finansial.</i>
 `.trim();
 }
