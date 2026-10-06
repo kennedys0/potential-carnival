@@ -64,7 +64,7 @@ ${ai.key_reasons.map((r) => `  - ${r}`).join('\n')}
 ${progressBar}
 ${flagList}
 ${aiSection}
-🕒 <i>Diperbarui: ${new Date().toLocaleTimeString()} UTC</i>
+🕒 <i>Diperbarui: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 <i>⚠️ DYOR. Bukan nasihat finansial.</i>
 `.trim();
 }

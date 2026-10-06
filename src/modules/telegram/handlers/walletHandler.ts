@@ -15,7 +15,7 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 
 💰 <b>Saldo Saat Ini:</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code> (${balance.lamports.toLocaleString()} lamports)
-• <i>Diperiksa: ${new Date().toLocaleTimeString()} UTC</i>
+• <i>Diperiksa: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 
 <i>Deposit terdeteksi otomatis via WebSocket RPC.</i>
 `.trim();
@@ -71,7 +71,7 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
 
 💰 <b>Saldo Saat Ini (Terbaru):</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code> (${balance.lamports.toLocaleString()} lamports)
-• <i>Diperbarui pada: ${new Date().toLocaleTimeString()} UTC</i>
+• <i>Diperbarui pada: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()

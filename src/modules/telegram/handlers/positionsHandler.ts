@@ -8,7 +8,7 @@ export async function handlePositionsMenu(
   if (!ctx.from) return;
 
   const openTrades = await tradeRepo.getOpenTradesByUserId(ctx.from.id);
-  const timestamp = new Date().toLocaleTimeString();
+  const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
 
   let text = '';
   if (openTrades.length === 0) {

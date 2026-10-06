@@ -133,8 +133,8 @@ export async function handleAutopilotLogs(
     }
   }
 
-  const timestamp = new Date().toLocaleTimeString();
-  text += `\n• <i>Diperbarui pada: ${timestamp} UTC</i>`;
+  const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
+  text += `\n• <i>Diperbarui pada: ${timestamp}</i>`;
 
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Log', 'autopilot_logs')
@@ -160,7 +160,7 @@ export async function handleAutopilotStats(
   if (!ctx.from) return;
 
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
-  const timestamp = new Date().toLocaleTimeString();
+  const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
   const text = `
 📊 <b>Statistik Kinerja Autopilot</b>
 
@@ -170,7 +170,7 @@ export async function handleAutopilotStats(
 • <b>Realized PnL:</b> +0.0000 SOL ($0.00)
 • <b>Max Consecutive Losses:</b> 0
 • <b>Circuit Breaker:</b> 🟢 NORMAL (Tidak Terpicu)
-• <i>Diperiksa pada: ${timestamp} UTC</i>
+• <i>Diperiksa pada: ${timestamp}</i>
 
 <i>Data diperbarui secara otomatis setiap kali trade dieksekusi dan ditutup.</i>
 `.trim();
