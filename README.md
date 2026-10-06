@@ -113,7 +113,7 @@ flowchart TD
 
 ## 🛠️ Tech Stack
 
-- **Runtime & Bahasa**: Node.js v20+ LTS, TypeScript 5.7+
+- **Runtime & Bahasa**: Node.js v22+ LTS, TypeScript 5.7+
 - **Telegram Bot Framework**: `grammy` v1.35+
 - **Blockchain**: `@solana/web3.js`, `@solana/spl-token`, `@jup-ag/api`
 - **Database**: Supabase (`@supabase/supabase-js`)
@@ -174,7 +174,7 @@ solana-scalping/
 ## 📋 Prasyarat Sistem
 
 Sebelum memulai instalasi, pastikan sistem Anda memiliki:
-1. **Node.js**: Versi 20.x atau lebih baru (`node -v`).
+1. **Node.js**: Versi 22.x atau lebih baru (`node -v`).
 2. **NPM**: Versi 10.x atau lebih baru (`npm -v`).
 3. **Docker & Docker Compose**: Untuk menjalankan Redis dan kontainer aplikasi secara terisolasi.
 4. **Proyek Supabase**: Akun Supabase gratis atau self-hosted PostgreSQL.
@@ -221,9 +221,9 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 MASTER_ENCRYPTION_KEY=your_generated_64_hex_chars_key_here
 
 # Konfigurasi Gateway AI (OpenAI-Compatible: DeepSeek / Qwen)
-AI_BASE_URL=https://bandelbanget.xyz/v1
+AI_BASE_URL=https://baseurl.xyz/v1
 AI_API_KEY=your_ai_api_key_here
-AI_MODEL=deepseek-v4-flash
+AI_MODEL=gpt-4o-mini
 
 # Redis Connection URL
 REDIS_URL=redis://127.0.0.1:6379
