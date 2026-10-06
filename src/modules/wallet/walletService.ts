@@ -41,6 +41,21 @@ export class WalletService {
     };
   }
 
+  async getTokenBalance(walletPubkeyString: string, tokenMintString: string): Promise<number> {
+    const walletPubkey = new PublicKey(walletPubkeyString);
+    const tokenMint = new PublicKey(tokenMintString);
+    const accounts = await this.connection.getParsedTokenAccountsByOwner(walletPubkey, { mint: tokenMint });
+    if (accounts.value.length === 0) return 0;
+    
+    // Sum up if there are multiple accounts for the same mint, usually just one
+    let total = 0;
+    for (const acc of accounts.value) {
+      const amountStr = acc.account.data.parsed.info.tokenAmount.amount;
+      total += parseInt(amountStr, 10);
+    }
+    return total;
+  }
+
   async generateQrBuffer(address: string): Promise<Buffer> {
     return QRCode.toBuffer(address, {
       type: 'png',

@@ -14,7 +14,7 @@ export function createTelegramBot(token?: string): Bot {
   // Middleware: Access Control
   bot.use(async (ctx, next) => {
     if (!ctx.from) return; // ignore if no from
-    if (whitelistedUsers.length > 0 && !whitelistedUsers.includes(ctx.from.id)) {
+    if (whitelistedUsers.length === 0 || !whitelistedUsers.includes(ctx.from.id)) {
       logger.warn({ userId: ctx.from.id }, 'Unauthorized access attempt');
       // For stealth, we can ignore, but let's reply once to notify they are blocked
       return; 

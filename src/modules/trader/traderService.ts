@@ -115,10 +115,16 @@ export class TraderService {
       
       const wallet = await this.walletService.getOrCreateWallet(trade.user_id);
       
-      // Calculate token amount in raw integer (assuming 6 decimals for meme tokens as fallback, but better if we had exact decimals)
-      // Since we don't store decimals in TradeRecord, let's assume Jupiter can handle precise if we fetch decimals.
-      // But for simplicity in Phase 5:
-      const amountLamports = Math.floor(amountToClose * 1_000_000); 
+      // Calculate token amount in raw integer (base units) exactly from RPC to avoid dust or decimals mismatch
+      const totalTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
+      if (totalTokenBalance === 0) {
+        throw new Error('Token balance is 0. Cannot close position.');
+      }
+
+      const amountLamports = Math.floor(totalTokenBalance * (percentageToClose / 100));
+      if (amountLamports <= 0) {
+        throw new Error('Calculated token amount to close is 0.');
+      }
 
       // Swap from TOKEN to WSOL
       const quote = await this.jupiterClient.getQuote(
