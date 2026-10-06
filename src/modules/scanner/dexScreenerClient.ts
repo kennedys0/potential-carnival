@@ -8,6 +8,8 @@ export interface DexScreenerPair {
   volume: { m5: number; h1: number; h24: number };
   priceChange: { m5: number; h1: number; h24: number };
   pairCreatedAt: number;
+  fdv?: number;
+  marketCap?: number;
 }
 
 export class DexScreenerClient {

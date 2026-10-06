@@ -2,6 +2,16 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 dotenv.config();
 
+const hex64Regex = /^[0-9a-f]{64}$/i;
+const isLowEntropy = (key: string) => {
+  if (key === '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef') return true;
+  // Check for repeated patterns (e.g. all 0s, all 'a's, or 'abcdabcd')
+  if (/^([0-9a-f])\1+$/i.test(key)) return true;
+  const uniqueChars = new Set(key).size;
+  if (uniqueChars < 8) return true;
+  return false;
+};
+
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   TELEGRAM_BOT_TOKEN: z.string().min(1, 'Telegram Bot Token is required'),
@@ -9,20 +19,32 @@ export const EnvSchema = z.object({
   SOLANA_WSS_URL: z.string().min(1, 'Solana WSS URL is required'),
   SUPABASE_URL: z.string().url('Supabase URL must be valid URL'),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'Supabase Service Role Key is required'),
-  MASTER_ENCRYPTION_KEY: z.string().length(64, 'Master Encryption Key must be 64 hex characters (32 bytes)'),
+  MASTER_ENCRYPTION_KEY: z.string()
+    .length(64, 'Master Encryption Key must be 64 hex characters (32 bytes)')
+    .regex(hex64Regex, 'Master Encryption Key must be valid hex string')
+    .refine((val) => !isLowEntropy(val), { message: 'Master Encryption Key has low entropy, uses sample value, or repeating pattern' }),
   ANTHROPIC_API_KEY: z.string().optional(),
-  AI_BASE_URL: z.string().default('https://bandelbanget.xyz/v1'),
-  AI_API_KEY: z.string().default('sk-qwen-aa2a54d96046e0b2579a779f76f1dc0c701fb89b18f36068'),
-  AI_MODEL: z.string().default('deepseek-v4-flash'),
+  AI_BASE_URL: z.string().optional(),
+  AI_API_KEY: z.string().optional(),
+  AI_MODEL: z.string().optional(),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   JITO_TIP_LAMPORTS: z.coerce.number().default(100000),
+  WHITELISTED_USERS: z.string().default(''), // comma-separated user IDs
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
 
 export function validateEnv(raw: Record<string, unknown> = process.env): Env {
-  return EnvSchema.parse(raw);
+  try {
+    return EnvSchema.parse(raw);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      console.error('❌ Environment validation failed:', JSON.stringify(error.errors, null, 2));
+    }
+    if (raw.NODE_ENV === 'test' || process.env.NODE_ENV === 'test') throw error;
+    process.exit(1);
+  }
 }
 
 // Lazy or defaulted env getter so test imports don't fail without full process.env

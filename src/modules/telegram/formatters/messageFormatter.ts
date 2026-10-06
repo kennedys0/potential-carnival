@@ -24,7 +24,8 @@ export function formatPrice(price: number): string {
 export function formatTokenReport(
   pair: DexScreenerPair,
   security: SecurityScoreResult,
-  ai: AiAnalysis | null
+  ai: AiAnalysis | null,
+  hasIndicators: boolean
 ): string {
   const priceNum = parseFloat(pair.priceUsd || '0');
   const levelEmoji = security.level === 'SAFE' ? '🟢' : security.level === 'CAUTION' ? '🟡' : '🔴';
@@ -34,8 +35,12 @@ export function formatTokenReport(
     ? security.riskFlags.map((f) => `• ⚠️ ${f}`).join('\n')
     : '• ✅ Tidak ada bendera risiko terdeteksi';
 
-  let aiSection = '<i>🤖 Analisa AI: Menunggu data tambahan...</i>';
-  if (ai) {
+  let aiSection = '';
+  if (!hasIndicators) {
+    aiSection = '<i>🤖 Analisa AI: Data tidak cukup (menunggu candle lebih banyak)</i>';
+  } else if (!ai) {
+    aiSection = '<i>🤖 Analisa AI: AI unavailable</i>';
+  } else {
     const verdictEmoji = ai.verdict === 'BUY' ? '🟢' : ai.verdict === 'WAIT' ? '🟡' : '🔴';
     aiSection = `
 🤖 <b>Analisa AI Scalping:</b>

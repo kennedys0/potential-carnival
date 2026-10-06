@@ -3,7 +3,7 @@ import { validateEnv } from '../../src/config/env';
 
 describe('Environment Validation', () => {
   it('throws error when required variables are missing', () => {
-    expect(() => validateEnv({})).toThrow();
+    expect(() => validateEnv({ NODE_ENV: 'test' })).toThrow();
   });
 
   it('validates complete environment variables successfully', () => {
@@ -14,8 +14,7 @@ describe('Environment Validation', () => {
       SOLANA_WSS_URL: 'wss://api.mainnet-beta.solana.com',
       SUPABASE_URL: 'https://xyzcompany.supabase.co',
       SUPABASE_SERVICE_ROLE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy',
-      MASTER_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-      ANTHROPIC_API_KEY: 'sk-ant-api03-dummy',
+      MASTER_ENCRYPTION_KEY: 'e1a49f7b3c2d8e6f1a5b9d3c4e7f8a2b5d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a',
       REDIS_URL: 'redis://127.0.0.1:6379',
     };
     const parsed = validateEnv(valid);

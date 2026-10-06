@@ -7,12 +7,16 @@ import { ScannerService } from '../scanner/scannerService';
 import { SecurityFilterService } from '../security/securityFilterService';
 import { AnalyzerService } from '../analyzer/analyzerService';
 import { TraderService } from '../trader/traderService';
+import { getRedisConnection } from '../../queue/connection';
 import { handleStartCommand } from './handlers/startHandler';
 import {
   handleWalletMenu,
   handleWalletRefresh,
   handleWalletWithdrawPrompt,
+  handleWalletWithdrawConfirm,
+  handleWalletWithdrawExecute,
   handleWalletExportPrompt,
+  handleWalletExportExecute,
 } from './handlers/walletHandler';
 import { handleScanCommand } from './handlers/scanHandler';
 import {
@@ -92,9 +96,34 @@ export function registerBotRoutes(
       await handleWalletWithdrawPrompt(ctx);
       return;
     }
-    await ctx.reply('🔒 <b>Konfirmasi Withdrawal</b>\nFitur transfer broadcast on-chain diproteksi. Pastikan wallet tujuan valid.', {
-      parse_mode: 'HTML',
-    });
+    
+    const parts = match.split(/\s+/);
+    if (parts.length < 2) {
+      await ctx.reply('⚠️ Format salah. Gunakan: <code>/withdraw &lt;ALAMAT_SOLANA&gt; &lt;JUMLAH_SOL&gt;</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const address = parts[0];
+    const amountStr = parts[1].toUpperCase();
+    
+    const amount = amountStr === 'MAX' ? 'MAX' : parseFloat(amountStr);
+    if (amount !== 'MAX' && (isNaN(amount) || amount <= 0)) {
+      await ctx.reply('⚠️ Jumlah tidak valid. Masukkan angka yang benar atau MAX.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    await handleWalletWithdrawConfirm(ctx, address, amount, services.walletService);
+  });
+
+  // Command /export_key
+  bot.command('export_key', async (ctx) => {
+    const match = ctx.match?.trim();
+    if (match === 'SAYA_MENGERTI_RISIKONYA') {
+      const redis = getRedisConnection();
+      await handleWalletExportExecute(ctx, services.walletService, redis);
+    } else {
+      await ctx.reply('⚠️ Anda harus mengetik perintah konfirmasi dengan benar jika ingin mengekspor Private Key.');
+    }
   });
 
   // Auto-detect Contract Address sent directly in text chat (Solana Base58 address format: 32-44 characters)
@@ -183,9 +212,16 @@ export function registerBotRoutes(
     } else if (data === 'wallet_withdraw') {
       await ctx.answerCallbackQuery();
       await handleWalletWithdrawPrompt(ctx);
+    } else if (data.startsWith('withdraw_execute:')) {
+      const [, address, amount] = data.split(':');
+      await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
+      await handleWalletWithdrawExecute(ctx, address, amount, services.walletService);
+    } else if (data === 'withdraw_cancel') {
+      await ctx.answerCallbackQuery({ text: '❌ Penarikan dibatalkan.' });
+      await handleWalletMenu(ctx, services.walletService);
     } else if (data === 'wallet_export') {
       await ctx.answerCallbackQuery();
-      await handleWalletExportPrompt(ctx, services.walletService);
+      await handleWalletExportPrompt(ctx);
     }
 
     // 3. Autopilot Actions
@@ -222,6 +258,37 @@ export function registerBotRoutes(
         sizing_params: { fixed_sol: size },
       });
       await ctx.answerCallbackQuery({ text: `Trade size diubah ke ${size} SOL` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_cycle_sl') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const currentSl = (cfg.exit_params as any)?.sl_percent || 8;
+      // Cycle: 5 -> 8 -> 10 -> 15 -> 20 -> 5
+      const nextSl = currentSl === 5 ? 8 : currentSl === 8 ? 10 : currentSl === 10 ? 15 : currentSl === 15 ? 20 : 5;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        exit_params: { ...cfg.exit_params, sl_percent: nextSl },
+      });
+      await ctx.answerCallbackQuery({ text: `Stop Loss diubah ke ${nextSl}%` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_cycle_tp') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const currentTp = (cfg.exit_params as any)?.tp1_percent || 15;
+      // Cycle: 10 -> 15 -> 20 -> 30 -> 50 -> 100 -> 10
+      const nextTp = currentTp === 10 ? 15 : currentTp === 15 ? 20 : currentTp === 20 ? 30 : currentTp === 30 ? 50 : currentTp === 50 ? 100 : 10;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        exit_params: { ...cfg.exit_params, tp1_percent: nextTp },
+      });
+      await ctx.answerCallbackQuery({ text: `Take Profit diubah ke ${nextTp}%` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_toggle_trailing') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const trailingEnabled = (cfg.exit_params as any)?.trailing_stop_enabled || false;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        exit_params: { ...cfg.exit_params, trailing_stop_enabled: !trailingEnabled },
+      });
+      await ctx.answerCallbackQuery({ text: `Trailing Stop ${!trailingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
       await handleSettingsMenu(ctx, services.autopilotRepo);
     }
 

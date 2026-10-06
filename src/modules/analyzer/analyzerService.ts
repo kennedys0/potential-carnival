@@ -3,6 +3,9 @@ import { calculateEMA } from './indicators/ema';
 import { calculateRSI } from './indicators/rsi';
 import { calculateATR, Candle } from './indicators/atr';
 import { calculateVolumeSpikeRatio } from './indicators/volumeSpike';
+import { appSettings } from '../../config/settings';
+
+import { calculateVWAP } from './indicators/vwap';
 
 export const AiAnalysisSchema = z.object({
   verdict: z.enum(['BUY', 'WAIT', 'AVOID']),
@@ -25,6 +28,7 @@ export interface TechnicalIndicatorsSnapshot {
   ema21: number;
   rsi14: number;
   atr14: number;
+  vwap: number;
   volumeSpikeRatio: number;
   calculatedStopLoss: number;
   calculatedTp1: number;
@@ -39,25 +43,40 @@ export class AnalyzerService {
     currentPrice: number,
     currentVolume: number,
     pastVolumes: number[]
-  ): TechnicalIndicatorsSnapshot {
+  ): TechnicalIndicatorsSnapshot | null {
+    if (candles.length < appSettings.ANALYZER_PARAMS.MIN_CANDLES) {
+      return null;
+    }
+
+    const lastCandle = candles[candles.length - 1];
+    if (!lastCandle) return null;
+
+    const now = Date.now();
+    const candleAgeMs = now - lastCandle.timestamp;
+    if (candleAgeMs > appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS) {
+      return null;
+    }
+
     const closes = candles.map((c) => c.close);
     const ema9 = calculateEMA(closes, 9);
     const ema21 = calculateEMA(closes, 21);
     const rsi14 = calculateRSI(closes, 14);
     const atr14 = calculateATR(candles, 14);
+    const vwap = calculateVWAP(candles);
     const volumeSpikeRatio = calculateVolumeSpikeRatio(currentVolume, pastVolumes);
 
-    // ATR-based dynamic risk bounds (non-hallucinated math)
-    const calculatedStopLoss = Math.max(currentPrice - 1.5 * atr14, currentPrice * 0.9);
+    // ATR-based dynamic risk bounds
+    const calculatedStopLoss = Math.max(currentPrice - appSettings.RISK_MULTIPLIER_STOP_LOSS * atr14, currentPrice * appSettings.MAX_LOSS_PERCENTAGE);
     const riskDelta = currentPrice - calculatedStopLoss;
-    const calculatedTp1 = currentPrice + 1.5 * riskDelta;
-    const calculatedTp2 = currentPrice + 3.0 * riskDelta;
+    const calculatedTp1 = currentPrice + appSettings.RISK_MULTIPLIER_TP1 * riskDelta;
+    const calculatedTp2 = currentPrice + appSettings.RISK_MULTIPLIER_TP2 * riskDelta;
 
     return {
       ema9,
       ema21,
       rsi14,
       atr14,
+      vwap,
       volumeSpikeRatio,
       calculatedStopLoss,
       calculatedTp1,
@@ -72,57 +91,47 @@ export class AnalyzerService {
     securityFlags: string[]
   ): Promise<AiAnalysis | null> {
     if (!this.llmClient) {
-      // Fallback programatik jika LLM tidak aktif / unavailable
-      const verdict =
-        indicators.rsi14 > 45 && indicators.rsi14 < 70 && indicators.ema9 > indicators.ema21
-          ? 'BUY'
-          : 'WAIT';
-      const confidence = verdict === 'BUY' ? 75 : 50;
-
-      return {
-        verdict,
-        confidence,
-        setup_type: 'MOMENTUM',
-        entry_zone: { min_usd: currentPrice * 0.99, max_usd: currentPrice * 1.01 },
-        take_profit_levels: [
-          { level: 1, price_usd: indicators.calculatedTp1, percentage: 15 },
-          { level: 2, price_usd: indicators.calculatedTp2, percentage: 30 },
-        ],
-        stop_loss_usd: indicators.calculatedStopLoss,
-        risk_reward_ratio: 2.0,
-        key_reasons: [
-          `EMA9 ($${indicators.ema9.toFixed(6)}) ${indicators.ema9 >= indicators.ema21 ? 'di atas' : 'di bawah'} EMA21`,
-          `RSI14 netral-bullish pada level ${indicators.rsi14.toFixed(1)}`,
-          `Volume Spike Ratio ${indicators.volumeSpikeRatio}x`,
-        ],
-        red_flags: securityFlags,
-        invalidation_condition: `Harga tembus di bawah SL $${indicators.calculatedStopLoss.toFixed(6)}`,
-        estimated_holding_time: '5m - 30m',
-      };
+      console.warn('AI unavailable: llmClient not configured');
+      return null;
     }
 
     try {
+      let analysis: AiAnalysis;
       if (typeof this.llmClient.analyze === 'function') {
-        return await this.llmClient.analyze({
+        analysis = await this.llmClient.analyze({
           tokenSymbol,
           currentPrice,
           indicators,
           securityFlags,
         });
+      } else {
+        const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VWAP=${indicators.vwap}, VolumeSpike=${indicators.volumeSpikeRatio}x. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
+        const response = await this.llmClient.messages.create({
+          model: appSettings.FALLBACK_AI_MODEL,
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        });
+
+        const parsed = JSON.parse(response.content[0].text);
+        analysis = AiAnalysisSchema.parse(parsed);
       }
 
-      // Anthropic format fallback
-      const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VolumeSpike=${indicators.volumeSpikeRatio}x. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
-      const response = await this.llmClient.messages.create({
-        model: 'claude-3-5-haiku-20241022',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }],
-      });
+      // Validasi LLM output: SL < entry < TP
+      if (analysis.verdict === 'BUY') {
+        if (analysis.stop_loss_usd >= currentPrice) {
+          console.warn(`LLM validation failed: SL (${analysis.stop_loss_usd}) >= Entry (${currentPrice})`);
+          return null; // Reject inconsistency
+        }
+        const minTp = analysis.take_profit_levels.reduce((min, tp) => Math.min(min, tp.price_usd), Infinity);
+        if (minTp <= currentPrice) {
+          console.warn(`LLM validation failed: TP (${minTp}) <= Entry (${currentPrice})`);
+          return null; // Reject inconsistency
+        }
+      }
 
-      const parsed = JSON.parse(response.content[0].text);
-      return AiAnalysisSchema.parse(parsed);
+      return analysis;
     } catch {
-      return null; // Graceful fallback to null without crashing
+      return null; // Graceful fallback
     }
   }
 }

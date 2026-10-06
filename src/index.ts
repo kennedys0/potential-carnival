@@ -8,13 +8,16 @@ import { TradeRepository } from './database/repositories/tradeRepository';
 import { AutopilotRepository } from './database/repositories/autopilotRepository';
 import { getRedisConnection } from './queue/connection';
 import { createQueues } from './queue/queues';
+import { createMonitorWorker } from './queue/workers/monitorWorker';
 import { WalletService } from './modules/wallet/walletService';
 import { ScannerService } from './modules/scanner/scannerService';
 import { DexScreenerClient } from './modules/scanner/dexScreenerClient';
+import { GeckoTerminalClient } from './modules/scanner/geckoTerminalClient';
 import { SecurityFilterService } from './modules/security/securityFilterService';
 import { AnalyzerService } from './modules/analyzer/analyzerService';
 import { OpenAiCompatibleProvider } from './modules/analyzer/llmProvider';
 import { TraderService } from './modules/trader/traderService';
+import { JupiterClient } from './modules/trader/jupiterClient';
 import { AutopilotEngine } from './modules/autopilot/autopilotEngine';
 import { createTelegramBot } from './modules/telegram/bot';
 import { registerBotRoutes } from './modules/telegram/router';
@@ -38,20 +41,47 @@ async function main() {
   // Core Services
   const walletService = new WalletService(walletRepo, solanaConnection);
   const dexScreenerClient = new DexScreenerClient();
-  const scannerService = new ScannerService(dexScreenerClient);
+  const geckoTerminalClient = new GeckoTerminalClient();
+
   const securityService = new SecurityFilterService(solanaConnection);
-  const llmProvider = new OpenAiCompatibleProvider({
+  const llmProvider = env.AI_BASE_URL && env.AI_API_KEY ? new OpenAiCompatibleProvider({
     baseUrl: env.AI_BASE_URL,
     apiKey: env.AI_API_KEY,
-    model: env.AI_MODEL,
-  });
+    model: env.AI_MODEL || 'deepseek-v4-flash',
+  }) : undefined;
   const analyzerService = new AnalyzerService(llmProvider);
-  const traderService = new TraderService(tradeRepo);
+  const jupiterClient = new JupiterClient(solanaConnection);
+  const traderService = new TraderService(tradeRepo, walletService, jupiterClient);
   const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService);
 
   // BullMQ Queues & Redis
   const redis = getRedisConnection();
   const queues = createQueues();
+
+  const scannerService = new ScannerService(dexScreenerClient, geckoTerminalClient, redis);
+
+  // BullMQ Workers
+  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo);
+
+  // Position Monitoring Scheduler (runs every minute)
+  if (process.env.NODE_ENV !== 'test') {
+    setInterval(async () => {
+      try {
+        const { data: openTrades, error } = await supabase.from('trades').select('*').in('status', ['OPEN', 'PARTIAL_EXIT']);
+        if (!error && openTrades) {
+          for (const trade of openTrades) {
+            await queues.monitorQueue.add('monitor-position', {
+              positionId: trade.id,
+              userId: trade.user_id,
+              tokenMint: trade.token_mint,
+            });
+          }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Error in position monitoring scheduler');
+      }
+    }, 60000);
+  }
 
   // Telegram Bot
   const bot = createTelegramBot();
@@ -73,6 +103,21 @@ async function main() {
         logger.info({ username: botInfo.username }, 'Telegram Bot successfully started and listening');
       },
     });
+
+    // Start Deposit Monitoring
+    walletService.startDepositMonitoring(async (userId, amountSol, signature) => {
+      let text = `🟢 <b>Deposit Berhasil Diterima!</b>\n\n💰 <b>Jumlah:</b> <code>${amountSol.toFixed(4)} SOL</code>`;
+      if (signature) {
+        text += `\n🔍 <a href="https://solscan.io/tx/${signature}">Lihat di Solscan</a>`;
+      }
+      try {
+        await bot.api.sendMessage(userId, text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+      } catch (err) {
+        logger.error({ err, userId }, 'Gagal mengirim notifikasi deposit');
+      }
+    }).catch(err => {
+      logger.error({ err }, 'Gagal memulai deposit monitoring');
+    });
   }
 
   // Graceful Shutdown
@@ -80,6 +125,7 @@ async function main() {
     logger.info(`Received ${signal}. Starting graceful shutdown...`);
     try {
       await bot.stop();
+      await monitorWorker.close();
       await queues.scanQueue.close();
       await queues.evalQueue.close();
       await queues.execQueue.close();

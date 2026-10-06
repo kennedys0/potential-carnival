@@ -34,4 +34,12 @@ export class WalletRepository {
     if (error) return null;
     return data as WalletRecord;
   }
+
+  async getAllWallets(): Promise<WalletRecord[]> {
+    const { data, error } = await this.db
+      .from('user_wallets')
+      .select('*');
+    if (error) throw new Error(`Failed to getAllWallets: ${error.message}`);
+    return data as WalletRecord[];
+  }
 }

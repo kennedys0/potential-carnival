@@ -49,18 +49,22 @@ export async function handleScanCommand(
 
     const priceUsd = parseFloat(pair.priceUsd || '0');
     const security = await securityService.evaluateToken(tokenMint, {
-      liquidityUsd: pair.liquidity?.usd || 0,
-      marketCapUsd: (pair.liquidity?.usd || 0) * 4,
+      liquidityUsd: pair.liquidity?.usd || null,
+      marketCapUsd: pair.marketCap || pair.fdv || null,
     });
 
-    const dummyCandles = [
-      { high: priceUsd * 1.02, low: priceUsd * 0.98, close: priceUsd * 1.01 },
-      { high: priceUsd * 1.03, low: priceUsd * 0.99, close: priceUsd },
-    ];
-    const indicators = analyzerService.calculateIndicators(dummyCandles, priceUsd, pair.volume?.m5 || 1000, [1000, 1200]);
-    const aiAnalysis = await analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
+    const candles = await scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
+    const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
+    const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
 
-    const reportText = formatTokenReport(pair, security, aiAnalysis);
+    const indicators = analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
+    
+    let aiAnalysis = null;
+    if (indicators) {
+       aiAnalysis = await analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
+    }
+
+    const reportText = formatTokenReport(pair, security, aiAnalysis, !!indicators);
     const keyboard = createTokenKeyboard(tokenMint, true);
 
     await ctx.api.editMessageText(chatId, activeMessageId, reportText, {

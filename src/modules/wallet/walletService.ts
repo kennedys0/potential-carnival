@@ -61,6 +61,177 @@ export class WalletService {
       },
       env.MASTER_ENCRYPTION_KEY
     );
-    return bs58.encode(keypair.secretKey);
+    const pk = bs58.encode(keypair.secretKey);
+    KeypairService.clearKeypair(keypair); // zero out memory
+    return pk;
+  }
+
+  async withdrawSol(userId: number, destinationAddress: string, amountSol: number | 'MAX'): Promise<string> {
+    const wallet = await this.walletRepo.getWalletByUserId(userId);
+    if (!wallet) throw new Error('Wallet belum terdaftar.');
+    
+    let destPubkey: PublicKey;
+    try {
+      destPubkey = new PublicKey(destinationAddress);
+    } catch {
+      throw new Error('Alamat Solana tujuan tidak valid.');
+    }
+
+    if (destPubkey.toBase58() === wallet.public_key) {
+      throw new Error('Tidak dapat mengirim ke alamat sendiri.');
+    }
+    
+    // Check if it's a program (not a normal wallet)
+    const destAccount = await this.connection.getAccountInfo(destPubkey);
+    if (destAccount && destAccount.executable) {
+      throw new Error('Alamat tujuan adalah Program, bukan wallet biasa.');
+    }
+
+    const sourcePubkey = new PublicKey(wallet.public_key);
+    const balance = await this.connection.getBalance(sourcePubkey);
+    
+    if (balance === 0) throw new Error('Saldo kosong.');
+
+    const env = getEnv();
+    const keypair = KeypairService.decrypt(
+      {
+        encryptedData: wallet.encrypted_private_key,
+        iv: wallet.iv,
+        authTag: wallet.auth_tag,
+      },
+      env.MASTER_ENCRYPTION_KEY
+    );
+
+    try {
+      const { SystemProgram, TransactionMessage, VersionedTransaction } = await import('@solana/web3.js');
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+
+      // Calculate fee
+      const tempAmount = amountSol === 'MAX' ? 1000 : Math.floor(amountSol * LAMPORTS_PER_SOL);
+      const tempInstructions = [
+        SystemProgram.transfer({
+          fromPubkey: sourcePubkey,
+          toPubkey: destPubkey,
+          lamports: tempAmount,
+        }),
+      ];
+      
+      const message = new TransactionMessage({
+        payerKey: sourcePubkey,
+        recentBlockhash: blockhash,
+        instructions: tempInstructions,
+      }).compileToV0Message();
+      
+      const fee = await this.connection.getFeeForMessage(message, 'confirmed');
+      const estimatedFee = fee.value || 5000;
+      
+      let transferLamports = 0;
+      if (amountSol === 'MAX') {
+        transferLamports = balance - estimatedFee;
+      } else {
+        transferLamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+      }
+
+      if (transferLamports <= 0 || transferLamports + estimatedFee > balance) {
+        throw new Error('Saldo tidak cukup untuk menutupi jumlah transfer dan biaya jaringan (fee).');
+      }
+
+      const instructions = [
+        SystemProgram.transfer({
+          fromPubkey: sourcePubkey,
+          toPubkey: destPubkey,
+          lamports: transferLamports,
+        }),
+      ];
+
+      const finalMessage = new TransactionMessage({
+        payerKey: sourcePubkey,
+        recentBlockhash: blockhash,
+        instructions: instructions,
+      }).compileToV0Message();
+
+      const transaction = new VersionedTransaction(finalMessage);
+      transaction.sign([keypair]);
+
+      const signature = await this.connection.sendTransaction(transaction, {
+        maxRetries: 3,
+        preflightCommitment: 'confirmed',
+      });
+
+      await this.connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+
+      return signature;
+    } finally {
+      KeypairService.clearKeypair(keypair); // zero out memory per transaction
+    }
+  }
+
+  async signAndSendVersionedTransaction(userId: number, transaction: any): Promise<string> {
+    const wallet = await this.walletRepo.getWalletByUserId(userId);
+    if (!wallet) throw new Error('Wallet belum terdaftar.');
+
+    const env = getEnv();
+    const keypair = KeypairService.decrypt(
+      {
+        encryptedData: wallet.encrypted_private_key,
+        iv: wallet.iv,
+        authTag: wallet.auth_tag,
+      },
+      env.MASTER_ENCRYPTION_KEY
+    );
+
+    try {
+      transaction.sign([keypair]);
+
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+      const signature = await this.connection.sendTransaction(transaction, {
+        maxRetries: 3,
+        preflightCommitment: 'confirmed',
+      });
+
+      await this.connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+
+      return signature;
+    } finally {
+      KeypairService.clearKeypair(keypair); // zero out memory per transaction
+    }
+  }
+
+  async startDepositMonitoring(onDeposit: (userId: number, amountSol: number, signature?: string) => Promise<void>): Promise<void> {
+    const wallets = await this.walletRepo.getAllWallets();
+    for (const wallet of wallets) {
+      const pubkey = new PublicKey(wallet.public_key);
+      let previousBalance = await this.connection.getBalance(pubkey);
+
+      this.connection.onAccountChange(
+        pubkey,
+        async (accountInfo, context) => {
+          const newBalance = accountInfo.lamports;
+          if (newBalance > previousBalance) {
+            const diffLamports = newBalance - previousBalance;
+            const diffSol = diffLamports / LAMPORTS_PER_SOL;
+            // Best effort to get signature
+            let signature: string | undefined;
+            try {
+              const sigs = await this.connection.getSignaturesForAddress(pubkey, { limit: 1 });
+              if (sigs && sigs.length > 0) {
+                signature = sigs[0].signature;
+              }
+            } catch {
+              // ignore
+            }
+            await onDeposit(wallet.user_id, diffSol, signature);
+          }
+          previousBalance = newBalance;
+        },
+        'confirmed'
+      );
+    }
   }
 }

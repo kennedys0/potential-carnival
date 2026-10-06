@@ -145,55 +145,160 @@ Untuk melakukan penarikan saldo ke wallet eksternal Anda, silakan ketik perintah
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
 
-export async function handleWalletExportPrompt(ctx: Context, walletService: WalletService): Promise<void> {
+export async function handleWalletExportPrompt(ctx: Context): Promise<void> {
   if (!ctx.from) return;
+
+  const text = `
+⚠️ <b>PERINGATAN KEAMANAN TINGGI!</b> ⚠️
+
+Private Key memberikan akses penuh dan tak terbatas ke seluruh aset di wallet Anda.
+<b>JANGAN PERNAH</b> membagikan Private Key ini kepada siapa pun! 
+Jika Anda mengerti risiko ini dan tetap ingin mengekspor Private Key Anda, balas pesan ini dengan mengetik perintah berikut dengan persis:
+
+<code>/export_key SAYA_MENGERTI_RISIKONYA</code>
+
+<i>Pesan berisi private key akan diproteksi agar tidak bisa di-forward, dan akan terhapus otomatis dalam 1 menit.</i>
+`.trim();
+
+  const keyboard = new InlineKeyboard()
+    .text('❌ Batal', 'menu_wallet');
+
+  if (ctx.callbackQuery) {
+    const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
+    try {
+      if (isPhoto) {
+        await ctx.editMessageCaption({
+          caption: text,
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } else {
+        await ctx.editMessageText(text, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      }
+      return;
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
+    }
+  }
+
+  await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+}
+
+export async function handleWalletExportExecute(
+  ctx: Context,
+  walletService: WalletService,
+  redis: any
+): Promise<void> {
+  if (!ctx.from || !ctx.chat) return;
+
+  // Pastikan hanya di private chat
+  if (ctx.chat.type !== 'private') {
+    await ctx.reply('⚠️ Export private key hanya bisa dilakukan di Private Chat (DM) dengan bot.');
+    return;
+  }
 
   try {
     const privateKey = await walletService.exportPrivateKey(ctx.from.id);
 
     const text = `
-⚠️ <b>PERINGATAN KEAMANAN TINGGI!</b> ⚠️
-
-Private Key memberikan akses penuh dan tak terbatas ke seluruh aset di wallet Anda.
-<b>JANGAN PERNAH</b> membagikan Private Key ini kepada siapa pun!
-
 🔑 <b>Base58 Private Key Anda:</b>
 <code>${privateKey}</code>
 
-<i>Klik teks di atas untuk menyalin. Segera simpan di password manager aman dan hapus pesan ini setelah selesai!</i>
+<i>Klik teks di atas untuk menyalin. Pesan ini akan otomatis terhapus dalam 1 menit!</i>
 `.trim();
+
+    const msg = await ctx.reply(text, { 
+      parse_mode: 'HTML', 
+      protect_content: true // tidak bisa di-forward / screenshot (jika didukung)
+    });
+
+    const chatId = ctx.chat.id;
+    const messageId = msg.message_id;
+
+    // Schedule deletion via Redis to survive restarts
+    const jobId = `delete_msg:${chatId}:${messageId}`;
+    await redis.set(jobId, JSON.stringify({ chatId, messageId }), 'EX', 60);
+    
+    // Also try doing it in-memory immediately just in case
+    setTimeout(async () => {
+      try {
+        await ctx.api.deleteMessage(chatId, messageId);
+        await redis.del(jobId);
+      } catch {
+        // ignore
+      }
+    }, 60000);
+
+  } catch (err: any) {
+    await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${err.message}`, { parse_mode: 'HTML' });
+  }
+}
+
+export async function handleWalletWithdrawConfirm(
+  ctx: Context,
+  address: string,
+  amount: number | 'MAX',
+  walletService: WalletService
+): Promise<void> {
+  const text = `
+🔒 <b>Konfirmasi Withdrawal SOL</b>
+
+<b>Alamat Tujuan:</b>
+<code>${address}</code>
+
+<b>Jumlah:</b> <code>${amount === 'MAX' ? 'MAX (Semua Saldo)' : amount + ' SOL'}</code>
+
+<i>Pastikan alamat tujuan valid di jaringan Solana. Transaksi yang sudah terkirim tidak dapat dibatalkan.</i>
+`.trim();
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Confirm Kirim', `withdraw_execute:${address}:${amount}`)
+    .text('❌ Cancel', 'withdraw_cancel');
+
+  await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+}
+
+export async function handleWalletWithdrawExecute(
+  ctx: Context,
+  address: string,
+  amountStr: string,
+  walletService: WalletService
+): Promise<void> {
+  if (!ctx.from) return;
+  
+  try {
+    const amount = amountStr === 'MAX' ? 'MAX' : parseFloat(amountStr);
+    
+    // Attempt withdrawal
+    const signature = await walletService.withdrawSol(ctx.from.id, address, amount);
+    
+    const text = `
+✅ <b>Withdrawal Berhasil Terkirim!</b>
+
+<b>Alamat Tujuan:</b> <code>${address}</code>
+<b>Jumlah:</b> <code>${amount === 'MAX' ? 'Seluruh Saldo' : amount + ' SOL'}</code>
+
+🔍 <b>Lihat di Explorer:</b>
+<a href="https://solscan.io/tx/${signature}">Solscan</a>
+    `.trim();
 
     const keyboard = new InlineKeyboard()
       .text('💳 Kembali ke Wallet', 'menu_wallet')
+      .row()
       .text('🏠 Menu Utama', 'menu_main');
 
-    if (ctx.callbackQuery) {
-      const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
-      try {
-        if (isPhoto) {
-          await ctx.editMessageCaption({
-            caption: text,
-            parse_mode: 'HTML',
-            reply_markup: keyboard,
-          });
-        } else {
-          await ctx.editMessageText(text, {
-            parse_mode: 'HTML',
-            reply_markup: keyboard,
-          });
-        }
-        return;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) return;
-      }
-    }
-
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard, link_preview_options: { is_disabled: true } });
   } catch (err: any) {
-    if (ctx.callbackQuery) {
-      await ctx.answerCallbackQuery({ text: `⚠️ Gagal: ${err.message}` });
-    } else {
-      await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${err.message}`, { parse_mode: 'HTML' });
-    }
+    const text = `❌ <b>Gagal Withdrawal:</b> ${err.message}`;
+    const keyboard = new InlineKeyboard()
+      .text('💳 Kembali ke Wallet', 'menu_wallet')
+      .row()
+      .text('🏠 Menu Utama', 'menu_main');
+
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
   }
 }
+

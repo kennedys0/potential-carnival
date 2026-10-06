@@ -14,4 +14,10 @@ export class KeypairService {
     const secretKey = decryptPrivateKey(payload, masterKeyHex);
     return Keypair.fromSecretKey(secretKey);
   }
+
+  static clearKeypair(keypair: Keypair): void {
+    if (keypair && keypair.secretKey) {
+      keypair.secretKey.fill(0);
+    }
+  }
 }
