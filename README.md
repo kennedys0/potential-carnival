@@ -1,6 +1,12 @@
 # 🚀 Solana Scalping Telegram Bot & Autopilot
 
-Bot Telegram production-grade untuk scalping dan auto-trading di jaringan Solana. Dilengkapi dengan filter anti-rug ketat, analisa AI multi-timeframe real-time (DeepSeek / Claude), sistem dompet terenkripsi AES-256-GCM, engine eksekusi swap Jupiter, antrean terdistribusi BullMQ, dan antarmuka Telegram interaktif tanpa spam.
+[![Tests](https://img.shields.io/badge/tests-35%20passed-brightgreen.svg)](file:///e:/Coding/solana-scalping/tests)
+[![Node](https://img.shields.io/badge/node-v22%2B%20LTS-blue.svg)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/typescript-v5.7-blue.svg)](https://www.typescriptlang.org/)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](file:///e:/Coding/solana-scalping/docker-compose.yml)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+Bot Telegram *production-grade* untuk scalping dan auto-trading di jaringan Solana. Dibangun dengan standar keandalan tinggi, arsitektur modular, filter anti-rug multi-layer ketat, analisa AI scalping real-time (DeepSeek / OpenAI-compatible / Claude), enkripsi dompet tingkat bank (AES-256-GCM), routing Jupiter swap, antrean terdistribusi BullMQ, dan antarmuka Telegram interaktif yang mulus tanpa spam.
 
 ---
 
@@ -13,40 +19,51 @@ Bot Telegram production-grade untuk scalping dan auto-trading di jaringan Solana
 6. [Prasyarat Sistem](#-prasyarat-sistem)
 7. [Panduan Instalasi & Setup](#-panduan-instalasi--setup)
 8. [Panduan Menjalankan Bot](#-panduan-menjalankan-bot)
-9. [Navigasi & Perintah Bot](#-navigasi--perintah-bot)
-10. [Pipeline Autopilot & Circuit Breaker](#-pipeline-autopilot--circuit-breaker)
-11. [Pengujian (Testing)](#-pengujian-testing)
-12. [Disclaimer](#-disclaimer)
+9. [Navigasi & Perintah Bot Telegram](#-navigasi--perintah-bot-telegram)
+10. [Panduan Tombol Menu Interaktif](#-panduan-tombol-menu-interaktif)
+11. [Pipeline Autopilot & Circuit Breaker](#-pipeline-autopilot--circuit-breaker)
+12. [Sistem Keamanan & Kriptografi](#-sistem-keamanan--kriptografi)
+13. [Pengujian (Testing)](#-pengujian-testing)
+14. [Troubleshooting & FAQ](#-troubleshooting--faq)
+15. [Disclaimer](#-disclaimer)
 
 ---
 
 ## 🌟 Fitur Utama
 
-- **🛡️ Filter Anti-Rug & Honeypot Ketat**:
-  - Pemeriksaan status otoritas mint dan freeze on-chain (wajib revoked).
-  - Inspeksi ekstensi berbahaya Token-2022 (`transferFeeConfig`, `permanentDelegate`, dll.).
-  - Simulasi eksekusi jual via Jupiter + RPC `simulateTransaction` untuk mendeteksi honeypot dan hidden tax.
-  - Analisis konsentrasi Top 10 Holder dan deteksi wallet sniper di blok peluncuran pool.
-  - Perhitungan skor dinamis 0–100 dan aturan **Hard-Block** (otomatis REJECT).
-- **🤖 Analisa AI Real-time Tanpa Halusinasi**:
+- **🛡️ Filter Anti-Rug & Honeypot Ketat (Multi-Layer)**:
+  - Pemeriksaan status otoritas mint dan freeze *on-chain* (wajib di-revoke / dinonaktifkan).
+  - Inspeksi mendalam ekstensi Token-2022 berbahaya (`transferFeeConfig`, `permanentDelegate`, `defaultAccountState`, dll.).
+  - Simulasi eksekusi swap jual via Jupiter + RPC `simulateTransaction` untuk mendeteksi honeypot dan hidden tax secara akurat.
+  - Analisis konsentrasi Top 10 Holder dan deteksi sniper wallet di blok peluncuran pool.
+  - Perhitungan skor dinamis 0–100 dan aturan **Hard-Block** (otomatis tolak tanpa kompromi).
+
+- **🧠 Analisa AI Scalping Real-time Tanpa Halusinasi**:
   - Perhitungan indikator programatik murni (EMA 9/21, RSI 14, ATR 14, Volume Spike Ratio).
-  - Integrasi LLM gateway (DeepSeek v4 Flash / OpenAI-compatible / Anthropic Claude) dengan schema output Zod JSON terstruktur.
+  - Integrasi gateway LLM (*OpenAI-compatible* seperti DeepSeek v4 Flash atau Anthropic Claude) dengan schema output Zod JSON terstruktur.
   - Level TP/SL dihitung dinamis dari volatilitas pasar nyata (ATR-based).
+
 - **💳 Dompet Solana Terenkripsi (AES-256-GCM)**:
-  - Private key dienkripsi dengan master key 32-byte (IV 12-byte & auth tag 16-byte).
-  - Deposit instan dengan alamat monospace dan gambar QR Code PNG.
-  - Deteksi saldo otomatis via WebSocket RPC.
+  - Private key dienkripsi dengan master key 32-byte acak, IV 12-byte unik, dan auth tag 16-byte.
+  - Alamat deposit instan monospace (tap-to-copy) lengkap dengan QR Code PNG.
+  - Fitur ekspor Private Key mandiri dengan peringatan keamanan tingkat tinggi.
+  - Deteksi saldo otomatis melalui RPC WebSocket.
+
 - **⚡ Trading Engine Jupiter**:
-  - Slippage dinamis berbasis likuiditas dan price impact order.
-  - Dynamic Priority Fee dari persentil ke-75 on-chain (`getRecentPrioritizationFees`).
-  - Mode default **Paper Trading (Dry-Run)** untuk simulasi aman dengan data pasar nyata.
-- **📱 UX Telegram Bersih & Interaktif**:
-  - Menggunakan format HTML rapi dengan progress bar skor teks (`▰▰▰▰▰▰▱▱▱▱ 60/100`).
-  - Pembaruan pesan di tempat (*in-place edit*) untuk mencegah spam chat.
-- **🤖 Pipeline Autopilot BullMQ**:
-  - 4 antrean latar belakang: `scanQueue`, `evalQueue`, `execQueue`, `monitorQueue`.
-  - Circuit Breaker proteksi akun (batas rugi harian & batas kekalahan beruntun).
-  - Tabel audit `decision_logs` untuk mencatat setiap keputusan beli atau tolak.
+  - Dynamic slippage berbasis likuiditas pool dan persentase *price impact* order.
+  - Dynamic Priority Gas Fee otomatis berdasarkan persentil ke-75 transaksi on-chain (`getRecentPrioritizationFees`).
+  - Mode default **Paper Trading (Dry-Run)** untuk simulasi transaksi nyata tanpa risiko kehilangan aset asli.
+  - Mode **Live On-Chain Trading** yang dapat diaktifkan kapan saja melalui menu Pengaturan.
+
+- **📱 UX Telegram Interaktif & Responsif**:
+  - Dukungan lengkap tombol inline untuk navigasi cepat: Settings, Wallet, Autopilot, Positions, dan Scan.
+  - **Auto-Detect Contract Address**: Pengguna cukup menempelkan alamat kontrak (CA) di chat tanpa perlu mengetik `/scan`.
+  - Format pesan HTML elegan dengan progress bar visual (`▰▰▰▰▰▰▱▱▱▱ 60/100`) dan *in-place edit* untuk mencegah spam obrolan.
+
+- **🤖 Pipeline Autopilot BullMQ & Redis**:
+  - 4 antrean latar belakang: `scanQueue`, `evalQueue`, `execQueue`, dan `monitorQueue`.
+  - Circuit Breaker proteksi modal (batas rugi harian & batas kekalahan beruntun).
+  - Tabel audit `decision_logs` untuk mencatat setiap keputusan beli, lewati, atau tolak.
 
 ---
 
@@ -100,31 +117,31 @@ flowchart TD
 
 ## 🔌 Daftar API & Layanan Eksternal
 
-| Layanan | Fungsi | Endpoint / Metode | Rate Limits / Catatan |
+| Layanan | Fungsi | Endpoint / Metode | Keterangan & Batas |
 |---|---|---|---|
-| **Solana RPC** | Query on-chain, getBalance, simulasi tx, WebSocket | `https://api.mainnet-beta.solana.com` | Tergantung penyedia (Helius/QuickNode disarankan untuk produksi) |
-| **DexScreener API** | Data candle, harga, likuiditas, volume | `https://api.dexscreener.com/latest/dex/tokens` | Publik (~300 req/min) |
+| **Solana RPC** | Query on-chain, getBalance, simulasi tx, WebSocket | `https://api.mainnet-beta.solana.com` | Helius / QuickNode direkomendasikan untuk produksi |
+| **DexScreener API** | Data candle, harga live, likuiditas, volume | `https://api.dexscreener.com/latest/dex/tokens` | Endpoint publik (~300 req/menit) |
 | **Jupiter API** | Quote swap, routing rute terbaik, serialisasi swap | `@jup-ag/api` / `https://quote-api.jup.ag` | Bebas kuota publik, dynamic rate limit |
-| **DeepSeek Gateway** | Evaluasi konfluensi setup scalping | `https://bandelbanget.xyz/v1/chat/completions` | Membutuhkan API Key valid |
-| **Supabase** | Database PostgreSQL relational untuk data user & log | `@supabase/supabase-js` | Sesuai tier project Supabase |
-| **Redis 7** | Broker antrean BullMQ & distributed locks | `redis://127.0.0.1:6379` | Self-hosted via Docker |
+| **DeepSeek Gateway** | Evaluasi konfluensi setup scalping | `https://bandelbanget.xyz/v1/chat/completions` | Menggunakan model `deepseek-v4-flash` |
+| **Supabase** | Database PostgreSQL relational untuk data user & log | `@supabase/supabase-js` | Tabel terstruktur dengan RLS dan foreign keys |
+| **Redis 7** | Broker antrean BullMQ & distributed locks | `redis://127.0.0.1:6379` | Self-hosted via Docker container |
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Runtime & Bahasa**: Node.js v22+ LTS, TypeScript 5.7+
+- **Runtime & Bahasa**: Node.js v22+ LTS (Native WebSocket support), TypeScript 5.7+
 - **Telegram Bot Framework**: `grammy` v1.35+
-- **Blockchain**: `@solana/web3.js`, `@solana/spl-token`, `@jup-ag/api`
-- **Database**: Supabase (`@supabase/supabase-js`)
+- **Blockchain**: `@solana/web3.js`, `@solana/spl-token`, `@jup-ag/api`, `bs58`
+- **Database**: Supabase (`@supabase/supabase-js` v2.49+)
 - **Queue & Distributed Locks**: `bullmq`, `ioredis`
 - **AI Engine**: OpenAI-compatible adapter (`deepseek-v4-flash`), `@anthropic-ai/sdk`
 - **Keamanan & Kriptografi**: Node.js `crypto` (AES-256-GCM)
 - **Validasi Data**: `zod`
 - **Logging**: `pino`, `pino-pretty`
 - **QR Code**: `qrcode`
-- **Testing Framework**: `vitest`
-- **DevOps**: Docker, Docker Compose
+- **Testing Framework**: `vitest` v3.2+
+- **DevOps**: Docker, Docker Compose (Alpine Linux images)
 
 ---
 
@@ -133,10 +150,11 @@ flowchart TD
 ```
 solana-scalping/
 ├── .env.example                  # Template konfigurasi environment
+├── Dockerfile                    # Multi-stage Dockerfile (Node 22 Alpine)
 ├── docker-compose.yml            # Konfigurasi container Docker (Bot + Redis)
 ├── package.json                  # Dependensi dan script npm
 ├── tsconfig.json                 # Konfigurasi compiler TypeScript
-├── vitest.config.ts              # Konfigurasi unit/integration test Vitest
+├── vitest.config.ts              # Konfigurasi pengujian Vitest
 ├── supabase/
 │   └── migrations/
 │       └── 001_initial_schema.sql # DDL lengkap tabel Supabase (PostgreSQL)
@@ -146,7 +164,7 @@ solana-scalping/
 │   │   └── env.ts                # Validasi schema Zod untuk environment variables
 │   ├── database/
 │   │   ├── client.ts             # Supabase singleton client
-│   │   └── repositories/         # Repository pattern untuk abstraksi database
+│   │   └── repositories/         # Repository pattern abstraksi database
 │   │       ├── userRepository.ts
 │   │       ├── walletRepository.ts
 │   │       ├── tradeRepository.ts
@@ -155,18 +173,21 @@ solana-scalping/
 │   │   ├── connection.ts         # Redis connection manager
 │   │   └── queues.ts             # Definisi BullMQ queues typed
 │   ├── modules/
-│   │   ├── scanner/              # Modul 1: Token Scanner
-│   │   ├── security/             # Modul 2: Anti-Rug Security Filter
+│   │   ├── scanner/              # Modul 1: Token Scanner (DexScreener)
+│   │   ├── security/             # Modul 2: Anti-Rug Security Filter Engine
 │   │   ├── analyzer/             # Modul 3: AI Scalping Analyzer & Indikator
 │   │   ├── trader/               # Modul 4: Trading Engine (Jupiter)
-│   │   ├── wallet/               # Modul 5: Secure Wallet System (AES-256-GCM)
-│   │   ├── telegram/             # Modul 6: Telegram Bot UI & Formatters
+│   │   ├── wallet/               # Modul 5: Secure Wallet System (AES-256-GCM & bs58)
+│   │   ├── telegram/             # Modul 6: Telegram Bot UI, Handlers & Routers
+│   │   │   ├── handlers/         # Start, Wallet, Settings, Positions, Autopilot, Help
+│   │   │   ├── formatters/       # Keyboard builder & Message formatters
+│   │   │   └── router.ts         # Central callback query & command router
 │   │   └── autopilot/            # Modul 7: Autopilot Engine & Circuit Breaker
 │   └── utils/
 │       └── logger.ts             # Structured logger Pino
 └── tests/
-    ├── integration/              # Integration test (Lifecycle)
-    └── unit/                     # Unit test (Security, Indicators, Sizing, dll.)
+    ├── integration/              # Integration test (Lifecycle & orchestration)
+    └── unit/                     # Unit test (Security, Indicators, Sizing, Handlers, dll.)
 ```
 
 ---
@@ -201,7 +222,7 @@ Salin file `.env.example` menjadi `.env`:
 cp .env.example .env
 ```
 
-Buka file `.env` dan sesuaikan nilainya:
+Buka file `.env` dan lengkapi konfigurasi berikut:
 ```env
 NODE_ENV=development
 
@@ -216,32 +237,50 @@ SOLANA_WSS_URL=wss://api.mainnet-beta.solana.com
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 
-# Master Encryption Key (64 hex characters = 32 bytes)
-# Generate via terminal: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# Master Encryption Key (64 karakter hex = 32 bytes)
+# Generate via terminal:
+# node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 MASTER_ENCRYPTION_KEY=your_generated_64_hex_chars_key_here
 
-# Konfigurasi Gateway AI (OpenAI-Compatible: DeepSeek / Qwen)
-AI_BASE_URL=https://baseurl.xyz/v1
+# Konfigurasi Gateway AI (OpenAI-Compatible: DeepSeek)
+AI_BASE_URL=https://bandelbanget.xyz/v1
 AI_API_KEY=your_ai_api_key_here
-AI_MODEL=gpt-4o-mini
+AI_MODEL=deepseek-v4-flash
 
 # Redis Connection URL
 REDIS_URL=redis://127.0.0.1:6379
 ```
 
-### 4. Setup Database Supabase
+### 4. Eksekusi Database Migration di Supabase
 1. Masuk ke Dashboard Supabase Anda.
 2. Buka menu **SQL Editor**.
 3. Buka file [`supabase/migrations/001_initial_schema.sql`](file:///e:/Coding/solana-scalping/supabase/migrations/001_initial_schema.sql), salin seluruh isinya, dan tempelkan ke SQL Editor Supabase.
-4. Klik **Run** untuk membuat semua tabel, enum, dan index yang diperlukan.
+4. Klik tombol **Run** untuk membuat seluruh tabel, trigger, dan enum.
 
 ---
 
 ## 🚀 Panduan Menjalankan Bot
 
-### Opsi A: Menjalankan Lokal (Development)
+### Opsi A: Menjalankan via Docker Compose (Rekomendasi Produksi)
 
-1. Jalankan layanan Redis terlebih dahulu via Docker:
+Docker Compose akan menjalankan kontainer **Redis** dan **Solana Scalping Bot** dalam lingkungan terisolasi Node.js 22 Alpine:
+
+```bash
+# 1. Jalankan container di background dengan auto-build
+docker compose up -d --build
+
+# 2. Pantau log jalannya bot secara real-time
+docker compose logs -f bot
+```
+
+Untuk menghentikan kontainer:
+```bash
+docker compose down
+```
+
+### Opsi B: Menjalankan Lokal (Development)
+
+1. Jalankan Redis lokal via Docker:
    ```bash
    docker run -d --name local-redis -p 6379:6379 redis:7-alpine
    ```
@@ -250,36 +289,55 @@ REDIS_URL=redis://127.0.0.1:6379
    npm run dev
    ```
 
-### Opsi B: Menjalankan via Docker Compose (Produksi)
-
-Jalankan seluruh stack (Bot + Redis) di background:
-```bash
-docker-compose up -d --build
-```
-
-Melihat log aplikasi secara langsung:
-```bash
-docker-compose logs -f bot
-```
-
 ---
 
-## 📱 Navigasi & Perintah Bot
+## 📱 Navigasi & Perintah Bot Telegram
+
+Bot mendukung perintah teks standar maupun interaksi tombol penuh:
 
 | Perintah | Deskripsi |
 |---|---|
-| `/start` | Mendaftarkan user baru, membuat wallet Solana terenkripsi, dan membuka Menu Utama. |
-| `/wallet` | Membuka manajemen dompet: alamat deposit monospace, QR Code, dan saldo SOL real-time. |
-| `/scan <CA>` | Melakukan pemindaian instan untuk token berdasarkan Contract Address (CA). |
-| `/autopilot` | Membuka dashboard Autopilot: status aktif, mode (Paper/Live), preset risiko, dan statistik. |
+| `/start` | Mendaftarkan akun pengguna, menginisialisasi wallet Solana terenkripsi, dan menampilkan Menu Utama. |
+| `/wallet` | Membuka dashboard wallet: alamat deposit monospace, QR Code, dan tombol aksi saldo. |
+| `/scan <CA>` | Memindai token Solana secara manual dengan analisis anti-rug dan verdict AI. |
+| `[Kirim Alamat CA]` | **Auto-detect**: Cukup paste alamat kontrak token (32–44 karakter base58) langsung di chat. |
+| `/autopilot` | Membuka panel kontrol Autopilot: status aktif, preset risiko, log keputusan, dan statistik. |
+| `/settings` | Membuka konfigurasi bot: toggle Paper/Live, trade size, dan profil risiko. |
+| `/positions` | Memantau daftar posisi trading aktif, harga entry, alokasi SOL, dan estimasi token. |
+| `/help` | Menampilkan panduan komprehensif, fitur keamanan, dan daftar perintah. |
+| `/withdraw` | Panduan penarikan dana ke alamat eksternal. |
 
-### Tampilan Laporan Token (`/scan`):
-Pesan laporan token diformat dalam HTML yang elegan dan informatif:
-- Informasi dasar: Nama, Simbol, Contract Address (tap-to-copy).
-- Metrik pasar: Harga live, perubahan 5m/1h, Likuiditas USD, Volume 5m.
-- **Safety Score**: Skor 0–100 dengan progress bar teks visual dan rincian bendera risiko.
-- **Analisa AI Scalping**: Verdict (BUY/WAIT/AVOID), level Stop Loss dan Take Profit berbasis ATR, serta konfluensi setup.
-- Tombol aksi inline keyboard: `[💰 Buy 0.1]` `[💰 Buy 0.5]` `[🔄 Refresh]` `[📊 DexScreener]` `[🔍 Solscan]`.
+---
+
+## 🎛️ Panduan Tombol Menu Interaktif
+
+Semua tombol di antarmuka Telegram telah terhubung secara interaktif:
+
+### 🏠 Menu Utama
+- **🔍 Scan Token**: Petunjuk pengiriman alamat kontrak token untuk dianalisis.
+- **💳 Wallet & Deposit**: Membuka dashboard saldo dan QR code dompet Anda.
+- **🤖 Autopilot**: Kontrol bot trading otomatis.
+- **📊 Positions**: Menampilkan posisi trading terbuka.
+- **⚙️ Settings**: Pengaturan mode (Paper/Live) dan parameter transaksi.
+- **❓ Bantuan**: Panduan penggunaan bot dan fitur keamanan.
+
+### ⚙️ Menu Settings
+- **⚡ Beralih ke LIVE / 🟢 Beralih ke PAPER**: Toggle instan antara mode simulasi dan mode live on-chain.
+- **🛡️ Konservatif / ⚖️ Moderat / ⚡ Agresif**: Penggantian preset risiko instan.
+- **💰 Size: 0.05 SOL / 0.1 SOL / 0.25 SOL**: Mengubah alokasi trading per order.
+- **🏠 Menu Utama**: Kembali ke navigasi awal.
+
+### 💳 Menu Wallet
+- **🔄 Refresh Saldo**: Melakukan query RPC on-chain terbaru dan memperbarui tampilan pesan.
+- **💸 Withdraw**: Menampilkan instruksi penarikan dana ke dompet eksternal.
+- **🔑 Export Private Key**: Menampilkan Base58 Private Key Anda secara aman dengan peringatan proteksi.
+- **🏠 Menu Utama**: Kembali ke navigasi awal.
+
+### 🤖 Menu Autopilot
+- **▶️ Aktifkan Autopilot / ⏸ Jeda Autopilot**: Toggle status eksekusi otomatis.
+- **Preset Risiko**: Pilihan profil Konservatif, Moderat, atau Agresif.
+- **📜 Log Keputusan**: Menampilkan 5 riwayat analisis terakhir (BUY, SKIP, REJECT).
+- **📊 Statistik**: Menampilkan metrik win rate, total trades, dan status Circuit Breaker.
 
 ---
 
@@ -290,22 +348,44 @@ Pesan laporan token diformat dalam HTML yang elegan dan informatif:
 Scanner ➔ Anti-Rug Security Filter ➔ AI Scalping Analyzer ➔ Autopilot Rule Check ➔ Risk Manager ➔ Trading Engine ➔ Position Monitor
 ```
 
-1. **Anti-Rug Filter**: Jika token terdeteksi honeypot, mint authority aktif, atau ekstensi Token-2022 berbahaya, token langsung di-**REJECT** (skor 0).
-2. **AI Verdict**: Autopilot hanya melanjutkan jika AI memberikan verdict `BUY` dengan confidence di atas ambang batas user.
+1. **Anti-Rug Filter**:
+   - Jika token terdeteksi honeypot, mint authority aktif, atau ekstensi Token-2022 berbahaya, token langsung di-**REJECT** (skor 0).
+2. **AI Verdict**:
+   - Autopilot hanya mengeksekusi order jika AI memberikan verdict `BUY` dengan *confidence score* di atas ambang batas preset pengguna.
 3. **Circuit Breaker**:
-   - Jika kerugian harian (`daily_realized_pnl`) melampaui `maxDailyLossSol`, Autopilot otomatis **JEDA (PAUSE)** seketika.
-   - Jika terjadi kekalahan beruntun (`maxConsecutiveLosses`), sistem otomatis menjeda diri untuk melindungi modal.
-4. **Audit Logging**: Setiap token yang diproses (baik diterima maupun ditolak) dicatat lengkap di tabel `decision_logs` untuk evaluasi dan backtest.
+   - Jika akumulasi kerugian harian (`daily_realized_pnl`) melampaui `maxDailyLossSol`, Autopilot otomatis **JEDA (PAUSE)** seketika.
+   - Jika terjadi kekalahan beruntun (`maxConsecutiveLosses`), sistem otomatis menghentikan eksekusi untuk melindungi sisa modal.
+4. **Audit Logging**:
+   - Setiap token yang dipindai (baik dieksekusi maupun ditolak) dicatat lengkap di tabel `decision_logs` untuk keperluan evaluasi dan audit transparansi.
+
+---
+
+## 🔒 Sistem Keamanan & Kriptografi
+
+Keamanan private key pengguna adalah prioritas tertinggi sistem:
+1. **Enkripsi AES-256-GCM**:
+   - Kunci privat dienkripsi menggunakan Node.js `crypto` bawaan.
+   - Menggunakan Initialization Vector (IV) 12-byte unik per enkripsi dan Authentication Tag 16-byte untuk menjamin integritas data (anti-tamper).
+2. **Isolasi Master Key**:
+   - `MASTER_ENCRYPTION_KEY` hanya disimpan dalam variabel lingkungan (`.env`) dan tidak pernah disimpan di database atau diekspos ke klien.
+3. **Default Paper Trading**:
+   - Seluruh akun baru secara default berada dalam mode **Paper Trading (Simulasi)**. Modal asli Anda tidak akan tersentuh sampai Anda secara sengaja beralih ke mode Live di menu Pengaturan.
 
 ---
 
 ## 🧪 Pengujian (Testing)
 
-Proyek ini dibangun menggunakan metodologi **Test-Driven Development (TDD)** dengan cakupan pengujian komprehensif menggunakan Vitest:
+Proyek ini dibangun menggunakan metodologi **Test-Driven Development (TDD)** dengan 100% test coverage pada komponen kritis:
 
-Jalankan seluruh pengujian:
+Jalankan seluruh test suite:
 ```bash
 npm test
+```
+
+Hasil pengujian saat ini:
+```text
+ Test Files  19 passed (19)
+      Tests  35 passed (35)
 ```
 
 Verifikasi type-safety TypeScript:
@@ -315,6 +395,21 @@ npx tsc --noEmit
 
 ---
 
+## ❓ Troubleshooting & FAQ
+
+### 1. Error: `Node.js detected but native WebSocket not found`
+- **Penyebab**: Versi `@supabase/supabase-js` v2.49+ membutuhkan Node.js 22+ yang memiliki native `WebSocket`.
+- **Solusi**: Pastikan Anda menggunakan Node.js 22+ atau jalankan via Docker Compose yang sudah dikonfigurasi dengan `node:22-alpine`.
+
+### 2. Tombol di Telegram tidak merespons
+- **Penyebab**: Bot container mungkin belum diperbarui ke versi router terbaru.
+- **Solusi**: Jalankan perintah `docker compose up -d --build bot` untuk menerapkan routing interaktif terbaru.
+
+### 3. Gagal koneksi Redis
+- **Solusi**: Pastikan container Redis sedang berjalan (`docker compose ps`). Jika menjalankan lokal tanpa docker compose, jalankan `docker run -d -p 6379:6379 redis:7-alpine`.
+
+---
+
 ## ⚠️ Disclaimer
 
-Aplikasi ini ditujukan untuk keperluan quantitative trading dan edukasi. Perdagangan aset kripto di jaringan Solana memiliki tingkat volatilitas dan risiko kerugian yang tinggi. Penulis dan kontributor tidak bertanggung jawab atas kerugian finansial yang diakibatkan oleh penggunaan bot ini. **Do Your Own Research (DYOR)**.
+Aplikasi ini ditujukan untuk keperluan quantitative trading, riset pasar, dan edukasi. Perdagangan aset kripto di jaringan Solana memiliki tingkat volatilitas dan risiko kerugian modal yang tinggi. Pengembang dan kontributor tidak bertanggung jawab atas kerugian finansial yang diakibatkan oleh keputusan trading atau penggunaan bot ini. **Do Your Own Research (DYOR)**.
