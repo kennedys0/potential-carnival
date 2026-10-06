@@ -1,5 +1,6 @@
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import QRCode from 'qrcode';
+import bs58 from 'bs58';
 import { KeypairService } from './keypairService';
 import { WalletRepository } from '../../database/repositories/walletRepository';
 import { getEnv } from '../../config/env';
@@ -46,5 +47,20 @@ export class WalletService {
       width: 300,
       margin: 2,
     });
+  }
+
+  async exportPrivateKey(userId: number): Promise<string> {
+    const wallet = await this.walletRepo.getWalletByUserId(userId);
+    if (!wallet) throw new Error('Wallet belum terdaftar. Ketik /start terlebih dahulu.');
+    const env = getEnv();
+    const keypair = KeypairService.decrypt(
+      {
+        encryptedData: wallet.encrypted_private_key,
+        iv: wallet.iv,
+        authTag: wallet.auth_tag,
+      },
+      env.MASTER_ENCRYPTION_KEY
+    );
+    return bs58.encode(keypair.secretKey);
   }
 }

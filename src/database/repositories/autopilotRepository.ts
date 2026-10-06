@@ -90,8 +90,35 @@ export class AutopilotRepository {
     return inserted as AutopilotConfigRecord;
   }
 
+  async updateConfig(
+    userId: number,
+    updates: Partial<AutopilotConfigRecord>
+  ): Promise<AutopilotConfigRecord> {
+    const { data, error } = await this.db
+      .from('autopilot_configs')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) throw new Error(`Failed to update autopilot config: ${error.message}`);
+    return data as AutopilotConfigRecord;
+  }
+
   async saveDecisionLog(log: DecisionLogRecord): Promise<void> {
     const { error } = await this.db.from('decision_logs').insert(log);
     if (error) throw new Error(`Failed to saveDecisionLog: ${error.message}`);
+  }
+
+  async getRecentDecisionLogs(userId: number, limit = 5): Promise<DecisionLogRecord[]> {
+    const { data, error } = await this.db
+      .from('decision_logs')
+      .select('*')
+      .eq('user_id', userId)
+      .order('timestamp', { ascending: false })
+      .limit(limit);
+
+    if (error) throw new Error(`Failed to getRecentDecisionLogs: ${error.message}`);
+    return (data || []) as DecisionLogRecord[];
   }
 }

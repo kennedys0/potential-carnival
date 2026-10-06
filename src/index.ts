@@ -62,6 +62,8 @@ async function main() {
     scannerService,
     securityService,
     analyzerService,
+    tradeRepo,
+    traderService,
   });
 
   // Start Bot Polling (in development or non-test mode)
