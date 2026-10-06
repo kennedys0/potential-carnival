@@ -9,6 +9,7 @@ import { AnalyzerService } from '../analyzer/analyzerService';
 import { TraderService } from '../trader/traderService';
 import { getRedisConnection } from '../../queue/connection';
 import { handleStartCommand } from './handlers/startHandler';
+import { currencyService } from '../../utils/currencyService';
 import {
   handleWalletMenu,
   handleWalletRefresh,
@@ -68,7 +69,7 @@ export function registerBotRoutes(
 
   // Command /positions
   bot.command('positions', async (ctx) => {
-    await handlePositionsMenu(ctx, services.tradeRepo);
+    await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
   });
 
   // Command /help
@@ -126,6 +127,23 @@ export function registerBotRoutes(
     }
   });
 
+  // Command /livefeed
+  bot.command('livefeed', async (ctx) => {
+    if (!ctx.from) return;
+    
+    // We import liveFeedSubscribers dynamically because router.ts is imported in index.ts which imports trendScanner.ts.
+    // To avoid circular dependency issues, we can just require it
+    const { liveFeedSubscribers } = require('../scanner/trendScanner');
+    
+    if (liveFeedSubscribers.has(ctx.from.id)) {
+      liveFeedSubscribers.delete(ctx.from.id);
+      await ctx.reply('🔕 <b>Live Feed Dimatikan</b>\n\nAnda tidak akan menerima notifikasi saat Autopilot mem-bypass token.', { parse_mode: 'HTML' });
+    } else {
+      liveFeedSubscribers.add(ctx.from.id);
+      await ctx.reply('🔔 <b>Live Feed Diaktifkan!</b>\n\nSistem akan mengirimkan laporan setiap kali Autopilot selesai memindai token-token trending di latar belakang (Setiap ~2 menit). \n\n<i>Ketik /livefeed lagi untuk mematikan.</i>', { parse_mode: 'HTML' });
+    }
+  });
+
   // Auto-detect Contract Address sent directly in text chat (Solana Base58 address format: 32-44 characters)
   bot.on('message:text', async (ctx, next) => {
     const text = ctx.message.text.trim();
@@ -173,7 +191,7 @@ export function registerBotRoutes(
       await handleSettingsMenu(ctx, services.autopilotRepo);
     } else if (data === 'menu_positions') {
       await ctx.answerCallbackQuery();
-      await handlePositionsMenu(ctx, services.tradeRepo);
+      await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
     } else if (data === 'menu_help') {
       await ctx.answerCallbackQuery();
       await handleHelpMenu(ctx);
@@ -321,11 +339,14 @@ export function registerBotRoutes(
           source: 'MANUAL',
         });
 
+        await currencyService.fetchRates();
+        const amountIdr = amount * currencyService.getIdrPerSol();
+
         await ctx.reply(
           `✅ <b>Order Berhasil Dieksekusi!</b>\n\n` +
           `• <b>Mode:</b> ${isDryRun ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}\n` +
           `• <b>Token:</b> ${symbol} (<code>${mint.slice(0, 8)}...</code>)\n` +
-          `• <b>Alokasi:</b> <code>${amount} SOL</code>\n` +
+          `• <b>Alokasi:</b> <code>${amount} SOL</code> (${currencyService.formatIdr(amountIdr)})\n` +
           `• <b>Estimasi Token:</b> <code>${trade.token_amount.toFixed(2)}</code>\n` +
           `• <b>Entry Price:</b> $${priceUsd.toFixed(6)}\n` +
           `• <b>Status:</b> <code>${trade.status}</code>`,
@@ -338,6 +359,51 @@ export function registerBotRoutes(
         );
       } catch (err: any) {
         await ctx.reply(`❌ <b>Gagal eksekusi order:</b> ${err.message}`, { parse_mode: 'HTML' });
+      }
+    } else if (data.startsWith('sell:')) {
+      if (!ctx.from) return;
+      const [, tradeId, percentStr] = data.split(':');
+      const percent = parseFloat(percentStr) || 100;
+      
+      await ctx.answerCallbackQuery({ text: `⏳ Memproses penutupan posisi ${percent}%...` });
+      
+      try {
+        const trade = await services.tradeRepo.getTradeById(tradeId);
+        if (!trade || trade.user_id !== ctx.from.id) throw new Error('Posisi tidak ditemukan atau akses ditolak');
+        
+        const pair = await services.scannerService.scanTokenByAddress(trade.token_mint);
+        const priceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0;
+        if (priceUsd === 0) throw new Error('Gagal mendapatkan harga terkini token');
+
+        await services.traderService.closePosition(trade, priceUsd, percent);
+        
+        await currencyService.fetchRates();
+        const idrPerSol = currencyService.getIdrPerSol();
+        
+        const entryPrice = trade.entry_price_usd;
+        const pnlPercent = ((priceUsd - entryPrice) / entryPrice) * 100;
+        const pnlSol = trade.sol_amount * (pnlPercent / 100) * (percent / 100);
+        const pnlIdr = pnlSol * idrPerSol;
+        const pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
+
+        await ctx.reply(
+          `✅ <b>Posisi Berhasil Ditutup (${percent}%)!</b>\n\n` +
+          `• <b>Token:</b> ${trade.token_symbol}\n` +
+          `• <b>Entry Price:</b> $${entryPrice.toFixed(6)}\n` +
+          `• <b>Exit Price:</b> $${priceUsd.toFixed(6)}\n` +
+          `• <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b> (${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
+          `• <b>Profit/Loss:</b> ${pnlIdr > 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: new InlineKeyboard()
+              .text('📊 Cek Posisi', 'menu_positions')
+              .text('🏠 Menu Utama', 'menu_main'),
+          }
+        );
+        // Refresh positions list message
+        await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
+      } catch (err: any) {
+        await ctx.reply(`❌ <b>Gagal menutup posisi:</b> ${err.message}`, { parse_mode: 'HTML' });
       }
     } else {
       await ctx.answerCallbackQuery();

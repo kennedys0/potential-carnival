@@ -1,11 +1,17 @@
 import { Context, InlineKeyboard, InputFile } from 'grammy';
 import { WalletService } from '../../wallet/walletService';
 
+import { currencyService } from '../../../utils/currencyService';
+
 export async function handleWalletMenu(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
 
+  await currencyService.fetchRates();
   const wallet = await walletService.getOrCreateWallet(ctx.from.id);
   const balance = await walletService.getBalance(wallet.publicKey);
+
+  const solValueIdr = balance.sol * currencyService.getIdrPerSol();
+  const solValueUsd = balance.sol * currencyService.getUsdPerSol();
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
@@ -14,7 +20,8 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 <code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
 
 💰 <b>Saldo Saat Ini:</b>
-• <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code> (${balance.lamports.toLocaleString()} lamports)
+• <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code>
+• <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ $${solValueUsd.toFixed(2)})
 • <i>Diperiksa: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 
 <i>Deposit terdeteksi otomatis via WebSocket RPC.</i>
@@ -60,8 +67,12 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 export async function handleWalletRefresh(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
 
+  await currencyService.fetchRates();
   const wallet = await walletService.getOrCreateWallet(ctx.from.id);
   const balance = await walletService.getBalance(wallet.publicKey);
+
+  const solValueIdr = balance.sol * currencyService.getIdrPerSol();
+  const solValueUsd = balance.sol * currencyService.getUsdPerSol();
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
@@ -70,7 +81,8 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
 <code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
 
 💰 <b>Saldo Saat Ini (Terbaru):</b>
-• <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code> (${balance.lamports.toLocaleString()} lamports)
+• <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code>
+• <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ $${solValueUsd.toFixed(2)})
 • <i>Diperbarui pada: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 `.trim();
 

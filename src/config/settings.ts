@@ -10,7 +10,7 @@ export const AppSettingsSchema = z.object({
   RISK_MULTIPLIER_TP2: z.number().default(3.0),
   MAX_LOSS_PERCENTAGE: z.number().default(0.9), // 10% max loss fallback
   ANALYZER_PARAMS: z.object({
-    MIN_CANDLES: z.number().default(21),
+    MIN_CANDLES: z.number().default(3),
     MAX_STALE_CANDLE_AGE_MS: z.number().default(300000), // 5 minutes
   }).default({}),
   SECURITY_PARAMS: z.object({

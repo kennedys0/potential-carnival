@@ -1,6 +1,7 @@
 import { Connection } from '@solana/web3.js';
 import { getEnv } from './config/env';
 import { logger } from './utils/logger';
+import { createFallbackFetch } from './utils/rpcFallback';
 import { getSupabaseClient } from './database/client';
 import { UserRepository } from './database/repositories/userRepository';
 import { WalletRepository } from './database/repositories/walletRepository';
@@ -21,6 +22,7 @@ import { JupiterClient } from './modules/trader/jupiterClient';
 import { AutopilotEngine } from './modules/autopilot/autopilotEngine';
 import { createTelegramBot } from './modules/telegram/bot';
 import { registerBotRoutes } from './modules/telegram/router';
+import { TrendScanner } from './modules/scanner/trendScanner';
 
 async function main() {
   logger.info('Initializing Solana Scalping Bot services...');
@@ -29,6 +31,7 @@ async function main() {
   const solanaConnection = new Connection(env.SOLANA_RPC_URL, {
     commitment: 'confirmed',
     wsEndpoint: env.SOLANA_WSS_URL,
+    fetch: createFallbackFetch(env.SOLANA_RPC_URL, env.SOLANA_RPC_FALLBACK_URL),
   });
 
   // Repositories
@@ -43,14 +46,15 @@ async function main() {
   const dexScreenerClient = new DexScreenerClient();
   const geckoTerminalClient = new GeckoTerminalClient();
 
-  const securityService = new SecurityFilterService(solanaConnection);
+  const jupiterClient = new JupiterClient(solanaConnection);
+  const securityService = new SecurityFilterService(solanaConnection, jupiterClient);
   const llmProvider = env.AI_BASE_URL && env.AI_API_KEY ? new OpenAiCompatibleProvider({
     baseUrl: env.AI_BASE_URL,
     apiKey: env.AI_API_KEY,
     model: env.AI_MODEL || 'deepseek-v4-flash',
+    timeoutMs: 60000,
   }) : undefined;
   const analyzerService = new AnalyzerService(llmProvider);
-  const jupiterClient = new JupiterClient(solanaConnection);
   const traderService = new TraderService(tradeRepo, walletService, jupiterClient);
   const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService);
 
@@ -59,6 +63,14 @@ async function main() {
   const queues = createQueues();
 
   const scannerService = new ScannerService(dexScreenerClient, geckoTerminalClient, redis);
+  
+  const trendScanner = new TrendScanner(
+    scannerService,
+    autopilotEngine,
+    securityService,
+    analyzerService,
+    autopilotRepo
+  );
 
   // BullMQ Workers
   const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo);
@@ -81,6 +93,9 @@ async function main() {
         logger.error({ err }, 'Error in position monitoring scheduler');
       }
     }, 60000);
+
+    // Start Autopilot Trend Scanner
+    trendScanner.start();
   }
 
   // Telegram Bot
@@ -125,6 +140,7 @@ async function main() {
     logger.info(`Received ${signal}. Starting graceful shutdown...`);
     try {
       await bot.stop();
+      trendScanner.stop();
       await monitorWorker.close();
       await queues.scanQueue.close();
       await queues.evalQueue.close();

@@ -121,4 +121,14 @@ export class AutopilotRepository {
     if (error) throw new Error(`Failed to getRecentDecisionLogs: ${error.message}`);
     return (data || []) as DecisionLogRecord[];
   }
+
+  async getAllActiveConfigs(): Promise<AutopilotConfigRecord[]> {
+    const { data, error } = await this.db
+      .from('autopilot_configs')
+      .select('*')
+      .eq('is_active', true);
+
+    if (error) throw new Error(`Failed to getAllActiveConfigs: ${error.message}`);
+    return (data || []) as AutopilotConfigRecord[];
+  }
 }

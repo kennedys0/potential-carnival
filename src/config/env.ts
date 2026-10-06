@@ -16,7 +16,9 @@ export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   TELEGRAM_BOT_TOKEN: z.string().min(1, 'Telegram Bot Token is required'),
   SOLANA_RPC_URL: z.string().url('Solana RPC URL must be valid HTTP(S) URL'),
+  SOLANA_RPC_FALLBACK_URL: z.string().url().optional(),
   SOLANA_WSS_URL: z.string().min(1, 'Solana WSS URL is required'),
+  SOLANA_WSS_FALLBACK_URL: z.string().optional(),
   SUPABASE_URL: z.string().url('Supabase URL must be valid URL'),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'Supabase Service Role Key is required'),
   MASTER_ENCRYPTION_KEY: z.string()

@@ -46,6 +46,20 @@ export class TradeRepository {
     return (data || []) as TradeRecord[];
   }
 
+  async getTradeById(id: string): Promise<TradeRecord | null> {
+    const { data, error } = await this.db
+      .from('trades')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null; // not found
+      throw new Error(`Failed to getTradeById: ${error.message}`);
+    }
+    return data as TradeRecord;
+  }
+
   async updateTradeStatus(id: string, updates: Partial<TradeRecord>): Promise<void> {
     const { error } = await this.db
       .from('trades')

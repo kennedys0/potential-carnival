@@ -34,7 +34,6 @@ export class JupiterClient {
         userPublicKey,
         wrapAndUnwrapSol: true,
         dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 'auto' as any,
       }
     });
 

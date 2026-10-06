@@ -9,6 +9,14 @@ export function formatProgressBar(current: number, max: number = 100, length: nu
   return '▰'.repeat(filledCount) + '▱'.repeat(emptyCount) + ` ${Math.round(current)}/${max}`;
 }
 
+export function escapeHtml(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export function formatUsd(val: number): string {
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
   if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
@@ -32,7 +40,7 @@ export function formatTokenReport(
   const progressBar = formatProgressBar(security.score, 100);
 
   const flagList = security.riskFlags.length > 0
-    ? security.riskFlags.map((f) => `• ⚠️ ${f}`).join('\n')
+    ? security.riskFlags.map((f) => `• ⚠️ ${escapeHtml(f)}`).join('\n')
     : '• ✅ Tidak ada bendera risiko terdeteksi';
 
   let aiSection = '';
@@ -44,11 +52,11 @@ export function formatTokenReport(
     const verdictEmoji = ai.verdict === 'BUY' ? '🟢' : ai.verdict === 'WAIT' ? '🟡' : '🔴';
     aiSection = `
 🤖 <b>Analisa AI Scalping:</b>
-• <b>Verdict:</b> ${verdictEmoji} <b>${ai.verdict}</b> (Confidence: ${ai.confidence}%)
-• <b>Setup:</b> ${ai.setup_type}
+• <b>Verdict:</b> ${verdictEmoji} <b>${escapeHtml(ai.verdict)}</b> (Confidence: ${ai.confidence}%)
+• <b>Setup:</b> ${escapeHtml(ai.setup_type)}
 • <b>Stop Loss:</b> ${formatPrice(ai.stop_loss_usd)} | <b>R:R:</b> ${ai.risk_reward_ratio}
 • <b>Alasan:</b>
-${ai.key_reasons.map((r) => `  - ${r}`).join('\n')}
+${ai.key_reasons.map((r) => `  - ${escapeHtml(r)}`).join('\n')}
 `;
   }
 
