@@ -13,6 +13,7 @@ import { ScannerService } from './modules/scanner/scannerService';
 import { DexScreenerClient } from './modules/scanner/dexScreenerClient';
 import { SecurityFilterService } from './modules/security/securityFilterService';
 import { AnalyzerService } from './modules/analyzer/analyzerService';
+import { OpenAiCompatibleProvider } from './modules/analyzer/llmProvider';
 import { TraderService } from './modules/trader/traderService';
 import { AutopilotEngine } from './modules/autopilot/autopilotEngine';
 import { createTelegramBot } from './modules/telegram/bot';
@@ -39,7 +40,12 @@ async function main() {
   const dexScreenerClient = new DexScreenerClient();
   const scannerService = new ScannerService(dexScreenerClient);
   const securityService = new SecurityFilterService(solanaConnection);
-  const analyzerService = new AnalyzerService();
+  const llmProvider = new OpenAiCompatibleProvider({
+    baseUrl: env.AI_BASE_URL,
+    apiKey: env.AI_API_KEY,
+    model: env.AI_MODEL,
+  });
+  const analyzerService = new AnalyzerService(llmProvider);
   const traderService = new TraderService(tradeRepo);
   const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService);
 

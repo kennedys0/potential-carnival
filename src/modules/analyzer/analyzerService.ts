@@ -102,7 +102,16 @@ export class AnalyzerService {
     }
 
     try {
-      // Panggilan LLM dengan structured JSON output
+      if (typeof this.llmClient.analyze === 'function') {
+        return await this.llmClient.analyze({
+          tokenSymbol,
+          currentPrice,
+          indicators,
+          securityFlags,
+        });
+      }
+
+      // Anthropic format fallback
       const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VolumeSpike=${indicators.volumeSpikeRatio}x. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
       const response = await this.llmClient.messages.create({
         model: 'claude-3-5-haiku-20241022',
