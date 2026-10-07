@@ -23,7 +23,12 @@ vi.mock('bullmq', () => ({
 }));
 
 const mockRedis = {
+  get: vi.fn().mockResolvedValue(null),
   set: vi.fn().mockResolvedValue('OK'),
+};
+
+const mockBotApi = {
+  sendMessage: vi.fn().mockResolvedValue(true),
 };
 
 vi.mock('../../src/queue/connection', () => ({
@@ -53,7 +58,7 @@ describe('MonitorWorker', () => {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '1500000000' }), // +50% PnL (hits TP2)
     };
 
-    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient);
+    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient, mockBotApi);
 
     // Test PENDING
     await worker.processor({ data: { positionId: 'pos-1', userId: 111, tokenMint: 'tokenA' } });
@@ -64,7 +69,7 @@ describe('MonitorWorker', () => {
     expect(mockTraderService.closePosition).not.toHaveBeenCalled();
   });
 
-  it('prevents double-sell by acquiring redis lock before calling closePosition', async () => {
+  it('prevents double-sell by local redis lock (kills M1-monitor-no-lock)', async () => {
     const mockTradeRepo: any = {
       getOpenTradesByUserId: vi.fn().mockResolvedValue([
         { id: 'pos-lock', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'OPEN', sol_spent_lamports: 1000000000 },
@@ -81,26 +86,41 @@ describe('MonitorWorker', () => {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '1500000000' }), // +50%
     };
 
-    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient);
+    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient, mockBotApi);
 
-    // Mock redis.set to return null (meaning lock is already acquired)
+    // Mock redis.set to return null for local lock (lock already acquired)
     mockRedis.set.mockResolvedValueOnce(null);
 
     await worker.processor({ data: { positionId: 'pos-lock', userId: 111, tokenMint: 'tokenA' } });
     
-    // Should NOT call closePosition because lock was not acquired
+    // Should NOT call closePosition because local lock stopped it
     expect(mockTraderService.closePosition).not.toHaveBeenCalled();
+  });
 
-    // Now mock redis to return 'OK'
-    mockRedis.set.mockResolvedValueOnce('OK');
-    await worker.processor({ data: { positionId: 'pos-lock', userId: 111, tokenMint: 'tokenA' } });
+  it('prevents double-sell gracefully if traderService throws terkunci', async () => {
+    const mockTradeRepo: any = {
+      getOpenTradesByUserId: vi.fn().mockResolvedValue([
+        { id: 'pos-lock', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'OPEN', sol_spent_lamports: 1000000000 },
+      ]),
+    };
+    const mockTraderService: any = {
+      closePosition: vi.fn().mockRejectedValue(new Error('Penutupan posisi sedang diproses (terkunci).')),
+    };
+    const mockScannerService: any = {};
+    const mockAutopilotRepo: any = {
+      getOrCreateConfig: vi.fn().mockResolvedValue({ exit_params: { tp2_percent: 30 } }),
+    };
+    const mockJupiterClient: any = {
+      getQuote: vi.fn().mockResolvedValue({ outAmount: '1500000000' }), // +50%
+    };
+
+    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient, mockBotApi);
+
+    // Call processor. It should catch the 'terkunci' error and NOT throw it to BullMQ
+    await expect(worker.processor({ data: { positionId: 'pos-lock', userId: 111, tokenMint: 'tokenA' } })).resolves.toBeUndefined();
     
-    // Should call closePosition this time
-    expect(mockTraderService.closePosition).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'pos-lock' }),
-      expect.any(Number),
-      100
-    );
+    // We can verify it was actually called
+    expect(mockTraderService.closePosition).toHaveBeenCalled();
   });
 
   it('allows TP2 for PARTIAL_EXIT but ignores TP1', async () => {
@@ -121,7 +141,7 @@ describe('MonitorWorker', () => {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '1200000000' }),
     };
 
-    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient);
+    const worker: any = createMonitorWorker(mockTradeRepo, mockTraderService, mockScannerService, mockAutopilotRepo, mockJupiterClient, mockBotApi);
 
     // Hit TP1 (+20%), but status is PARTIAL_EXIT -> shouldn't trigger
     await worker.processor({ data: { positionId: 'pos-3', userId: 111, tokenMint: 'tokenA' } });

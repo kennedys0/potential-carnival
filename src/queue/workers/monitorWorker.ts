@@ -7,13 +7,15 @@ import { ScannerService } from '../../modules/scanner/scannerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
 import { logger } from '../../utils/logger';
 import { JupiterClient } from '../../modules/trader/jupiterClient';
+import { appSettings } from '../../config/settings';
 
 export function createMonitorWorker(
   tradeRepo: TradeRepository,
   traderService: TraderService,
   scannerService: ScannerService,
   autopilotRepo: AutopilotRepository,
-  jupiterClient: JupiterClient
+  jupiterClient: JupiterClient,
+  botApi: any
 ) {
   const redis = getRedisConnection();
 
@@ -74,12 +76,24 @@ export function createMonitorWorker(
 
         // Take Profit & Stop Loss logic
         const exitParams = (config.exit_params as any) || {};
-        const tp1Percent = exitParams.tp1_percent ?? 15;
-        const tp2Percent = exitParams.tp2_percent ?? 30;
-        const slPercent = exitParams.sl_percent ?? 8;
+        const tp1Percent = exitParams.tp1_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP1_PERCENT;
+        const tp2Percent = exitParams.tp2_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP2_PERCENT;
+        const slPercent = exitParams.sl_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_SL_PERCENT;
         
         let percentageToClose = 0;
         let reason = '';
+
+        // Track highest PnL for trailing stop
+        const highestPnlKey = `monitor:highest_pnl:${positionId}`;
+        const savedHighest = await redis.get(highestPnlKey);
+        let highestPnl = savedHighest ? parseFloat(savedHighest) : pnlPercent;
+        if (pnlPercent > highestPnl) {
+            highestPnl = pnlPercent;
+            await redis.set(highestPnlKey, highestPnl.toString(), 'EX', 86400); // expire 1 day
+        }
+
+        const trailingStopPercent = exitParams.trailing_stop_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_STOP_PERCENT; // drop distance from highest
+        const trailingActivationPercent = exitParams.trailing_activation_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_ACTIVATION_PERCENT; // active only when highest > this
 
         if (trade.status === 'OPEN' && pnlPercent >= tp1Percent && pnlPercent < tp2Percent) {
            percentageToClose = 50;
@@ -87,6 +101,9 @@ export function createMonitorWorker(
         } else if (pnlPercent >= tp2Percent) {
            percentageToClose = 100;
            reason = `TP2 Reached (+${pnlPercent.toFixed(2)}%)`;
+        } else if (highestPnl >= trailingActivationPercent && (highestPnl - pnlPercent) >= trailingStopPercent) {
+           percentageToClose = 100;
+           reason = `Trailing Stop Triggered (Highest: ${highestPnl.toFixed(2)}%, Current: ${pnlPercent.toFixed(2)}%)`;
         } else if (pnlPercent <= -slPercent) {
            percentageToClose = 100;
            reason = `Stop Loss Reached (${pnlPercent.toFixed(2)}%)`;
@@ -101,7 +118,25 @@ export function createMonitorWorker(
           }
           
           logger.info({ positionId, reason, percentageToClose }, 'Exiting position');
-          await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
+          try {
+            await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
+            try {
+              await botApi.sendMessage(userId, 
+                `🔔 <b>Monitor Alert!</b>\n\n` +
+                `Posisi <b>${trade.token_symbol}</b> ditutup (${percentageToClose}%).\n` +
+                `Alasan: ${reason}`,
+                { parse_mode: 'HTML' }
+              );
+            } catch (e) {
+              logger.error({ err: e }, 'Gagal kirim notifikasi Monitor exit');
+            }
+          } catch (e: any) {
+            if (e.message && e.message.includes('terkunci')) {
+              logger.info({ positionId }, 'Position is currently being closed by another worker/request, skipping');
+              return;
+            }
+            throw e;
+          }
         }
 
       } catch (err) {
