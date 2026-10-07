@@ -102,7 +102,7 @@ const MUTATIONS = [
     find: 'if (cbCheck.isBreached) {', replace: 'if (false) {' },
 
   // ---------------- CELAH TEST YANG DIKETAHUI (dilaporkan, belum menggagalkan) ----------------
-  { id: 'W1-whitelist-fails-open', desc: 'Whitelist kosong membuka akses untuk semua orang (fail-open)', knownGap: true,
+  { id: 'W1-whitelist-fails-open', desc: 'Whitelist kosong membuka akses untuk semua orang (fail-open)',
     file: 'src/modules/telegram/bot.ts',
     find: 'whitelistedUsers.length === 0 || ', replace: '' },
 ];

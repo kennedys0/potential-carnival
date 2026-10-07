@@ -10,6 +10,6 @@
   "debt-hardcoded-nullish-default": 16,
   "debt-unbounded-limit": 2,
   "debt-bot-created-per-call": 0,
-  "debt-inline-dynamic-import": 9,
+  "debt-inline-dynamic-import": 1,
   "debt-paid-discovery-feed": 1
 }

@@ -2,6 +2,8 @@ import { Context, InlineKeyboard, InputFile } from 'grammy';
 import { WalletService } from '../../wallet/walletService';
 
 import { currencyService } from '../../../utils/currencyService';
+import { getRedisConnection } from '../../../queue/connection';
+import { v4 as uuidv4 } from 'uuid';
 
 export async function handleWalletMenu(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
@@ -119,11 +121,7 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
 export async function handleWalletWithdrawPrompt(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
 
-  const { getSupabaseClient } = await import('../../../database/client.js');
-  const { WalletRepository } = await import('../../../database/repositories/walletRepository.js');
-  const db = getSupabaseClient();
-  const walletRepo = new WalletRepository(db);
-  const wallet = await walletRepo.getWalletByUserId(ctx.from.id);
+  const wallet = await walletService.getWalletRecord(ctx.from.id);
 
   let text = '';
   if (!wallet || !wallet.owner_pubkey) {
@@ -283,6 +281,8 @@ export async function handleWalletWithdrawConfirm(
   amount: number | 'MAX',
   walletService: WalletService
 ): Promise<void> {
+  const redis = getRedisConnection();
+  
   const text = `
 🔒 <b>Konfirmasi Withdrawal SOL</b>
 
@@ -294,8 +294,12 @@ export async function handleWalletWithdrawConfirm(
 <i>Pastikan alamat tujuan valid di jaringan Solana. Transaksi yang sudah terkirim tidak dapat dibatalkan.</i>
 `.trim();
 
+  const payloadId = uuidv4().split('-')[0]; // short id is fine for 1 hour
+  const payloadKey = `cb:wd:${payloadId}`;
+  await redis.set(payloadKey, JSON.stringify({ address, amount }), 'EX', 3600);
+
   const keyboard = new InlineKeyboard()
-    .text('✅ Confirm Kirim', `withdraw_execute:${address}:${amount}`)
+    .text('✅ Confirm Kirim', `wd_exec:${payloadId}`)
     .text('❌ Cancel', 'withdraw_cancel');
 
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -310,7 +314,6 @@ export async function handleWalletWithdrawExecute(
   if (!ctx.from) return;
   
   try {
-    const { getRedisConnection } = await import('../../../queue/connection.js');
     const redis = getRedisConnection();
     const rateLimitKey = `withdraw_ratelimit:${ctx.from.id}`;
     const isLimited = await redis.get(rateLimitKey);

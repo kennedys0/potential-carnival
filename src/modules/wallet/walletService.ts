@@ -1,4 +1,4 @@
-import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import QRCode from 'qrcode';
 import bs58 from 'bs58';
 import { KeypairService } from './keypairService';
@@ -39,6 +39,14 @@ export class WalletService {
     });
 
     return { publicKey: keypair.publicKey.toBase58() };
+  }
+
+  async getWalletRecord(userId: number) {
+    return this.walletRepo.getWalletByUserId(userId);
+  }
+
+  async updateOwnerPubkey(userId: number, ownerPubkey: string) {
+    return this.walletRepo.updateOwnerPubkey(userId, ownerPubkey);
   }
 
   async getBalance(publicKeyString: string): Promise<{ sol: number; lamports: number }> {
@@ -131,7 +139,6 @@ export class WalletService {
     );
 
     try {
-      const { SystemProgram, TransactionMessage, VersionedTransaction } = await import('@solana/web3.js');
       const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
 
       // Calculate fee

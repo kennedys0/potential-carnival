@@ -134,18 +134,14 @@ export function registerBotRoutes(
       return;
     }
     
-    // We update the owner_pubkey directly using the supabase client via repo, or better via walletService.
-    // Let's import walletRepository here or call walletService if we add the method.
-    // I will use walletService.setOwnerPubkey if it existed, but we didn't add it to WalletService yet.
-    // Wait, let's inject walletRepo in BotRouteServices or use walletService.
-    const { getSupabaseClient } = await import('../../database/client.js');
-    const { WalletRepository } = await import('../../database/repositories/walletRepository.js');
-    const db = getSupabaseClient();
-    const walletRepo = new WalletRepository(db);
-    
-    const success = await walletRepo.updateOwnerPubkey(ctx.from.id, match);
+    const success = await services.walletService.updateOwnerPubkey(ctx.from.id, match);
     if (success) {
-      await ctx.reply(`✅ <b>Alamat Penarikan Tersimpan!</b>\n\nSemua withdrawal kini akan dikirim HANYA ke:\n<code>${match}</code>`, { parse_mode: 'HTML' });
+      const redis = getRedisConnection();
+      const cooldownKey = `withdraw_cooldown:${ctx.from.id}`;
+      // Set 24 hours cooldown for security
+      await redis.set(cooldownKey, '1', 'EX', 24 * 3600);
+      
+      await ctx.reply(`✅ <b>Alamat Penarikan Tersimpan!</b>\n\nSemua withdrawal kini akan dikirim HANYA ke:\n<code>${match}</code>\n\n⚠️ <i>Demi keamanan, penarikan ditangguhkan selama 24 jam setelah perubahan alamat.</i>`, { parse_mode: 'HTML' });
     } else {
       await ctx.reply('❌ Gagal menyimpan alamat penarikan. Pastikan Anda sudah membuat wallet (/wallet).');
     }
@@ -161,14 +157,21 @@ export function registerBotRoutes(
     }
     
     // Check if owner_pubkey exists
-    const { getSupabaseClient } = await import('../../database/client.js');
-    const { WalletRepository } = await import('../../database/repositories/walletRepository.js');
-    const db = getSupabaseClient();
-    const walletRepo = new WalletRepository(db);
-    const wallet = await walletRepo.getWalletByUserId(ctx.from.id);
+    const wallet = await services.walletService.getWalletRecord(ctx.from.id);
     
     if (!wallet || !wallet.owner_pubkey) {
       await ctx.reply('⚠️ <b>Alamat Penarikan Belum Diatur!</b>\n\nDemi keamanan, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahulu menggunakan perintah:\n<code>/set_withdraw_address &lt;ALAMAT_SOLANA_ANDA&gt;</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const redis = getRedisConnection();
+    const cooldownKey = `withdraw_cooldown:${ctx.from.id}`;
+    const inCooldown = await redis.get(cooldownKey);
+    if (inCooldown) {
+      const ttl = await redis.ttl(cooldownKey);
+      const hours = Math.floor(ttl / 3600);
+      const minutes = Math.floor((ttl % 3600) / 60);
+      await ctx.reply(`⚠️ <b>Penarikan Ditangguhkan!</b>\n\nAlamat penarikan Anda baru saja diubah. Demi keamanan, Anda harus menunggu <b>${hours} jam ${minutes} menit</b> lagi sebelum dapat melakukan penarikan.`, { parse_mode: 'HTML' });
       return;
     }
 
@@ -297,10 +300,19 @@ export function registerBotRoutes(
     } else if (data === 'wallet_withdraw') {
       await ctx.answerCallbackQuery();
       await handleWalletWithdrawPrompt(ctx, services.walletService);
-    } else if (data.startsWith('withdraw_execute:')) {
-      const [, address, amount] = data.split(':');
+    } else if (data.startsWith('wd_exec:')) {
+      const payloadId = data.split(':')[1];
+      const redis = getRedisConnection();
+      const payloadStr = await redis.get(`cb:wd:${payloadId}`);
+      if (!payloadStr) {
+        await ctx.answerCallbackQuery({ text: '❌ Sesi penarikan kedaluwarsa atau tidak valid.', show_alert: true });
+        return;
+      }
+      const { address, amount } = JSON.parse(payloadStr);
       await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
-      await handleWalletWithdrawExecute(ctx, address, amount, services.walletService);
+      await handleWalletWithdrawExecute(ctx, address, String(amount), services.walletService);
+      // Clean up payload
+      await redis.del(`cb:wd:${payloadId}`);
     } else if (data === 'withdraw_cancel') {
       await ctx.answerCallbackQuery({ text: '❌ Penarikan dibatalkan.' });
       await handleWalletMenu(ctx, services.walletService);
@@ -311,6 +323,14 @@ export function registerBotRoutes(
 
     // 3. Autopilot Actions
     else if (data === 'autopilot_toggle') {
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      if (!cfg.is_active && cfg.mode === 'LIVE' && !getEnv().LIVE_TRADING_ENABLED) {
+        await ctx.answerCallbackQuery({
+          text: '⚠️ LIVE TRADING saat ini dinonaktifkan secara global demi keamanan.',
+          show_alert: true,
+        });
+        return;
+      }
       await handleAutopilotToggle(ctx, services.autopilotRepo);
     } else if (data === 'preset_conservative') {
       await handleAutopilotPreset(ctx, 'CONSERVATIVE', services.autopilotRepo);
