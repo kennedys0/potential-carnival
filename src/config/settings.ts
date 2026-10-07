@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 export const AppSettingsSchema = z.object({
-  MOCK_SOL_PRICE_USD: z.number().default(150),
+  CURRENCY_CACHE_TTL_MS: z.number().default(300000), // 5 menit
+  CURRENCY_MAX_STALE_MS: z.number().default(1800000), // kurs lebih tua dari 30 menit dianggap TIDAK tersedia
+  CURRENCY_RETRY_MS: z.number().default(30000), // jeda minimal antar percobaan fetch yang gagal
+  CURRENCY_FETCH_TIMEOUT_MS: z.number().default(10000),
   PAPER_TRADE_FEE_LAMPORTS: z.number().default(50000),
   DEFAULT_SLIPPAGE_BPS: z.number().default(50),
   DAY_BOUNDARY_TZ: z.string().default('UTC'),

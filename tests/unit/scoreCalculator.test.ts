@@ -67,4 +67,24 @@ describe('ScoreCalculator', () => {
     // Usually missing critical things like sellSimulation or liquidity triggers a hard block too
     expect(result.score).toBeLessThan(50);
   });
+
+  it('hard-block ketika simulasi jual gagal (honeypot), walau faktor lain sempurna', () => {
+    const input: SecurityEvaluationInput = {
+      mintAuthorityActive: { value: false, status: 'OK', source: 'test' },
+      freezeAuthorityActive: { value: false, status: 'OK', source: 'test' },
+      dangerousExtensions: { value: [], status: 'OK', source: 'test' },
+      lpBurnedOrLocked: { value: true, status: 'OK', source: 'test' },
+      top10HolderPercent: { value: 10, status: 'OK', source: 'test' },
+      deployerHoldingPercent: { value: 1, status: 'OK', source: 'test' },
+      liquidityUsd: { value: 80000, status: 'OK', source: 'test' },
+      marketCapUsd: { value: 350000, status: 'OK', source: 'test' },
+      sellSimulationSuccess: { value: false, status: 'OK', source: 'test' },
+      effectiveTaxPercent: { value: 0, status: 'OK', source: 'test' },
+      deployerRugCount: { value: 0, status: 'OK', source: 'test' },
+    };
+    const result = ScoreCalculator.calculate(input);
+    expect(result.isHardBlocked).toBe(true);
+    expect(result.hardBlockReasons).toContain('Sell simulation failed (Honeypot risk)');
+    expect(result.level).not.toBe('SAFE');
+  });
 });

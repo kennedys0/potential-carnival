@@ -1,6 +1,5 @@
 # 🚀 Solana Scalping Telegram Bot & Autopilot
 
-[![Tests](https://img.shields.io/badge/tests-51%20passed-brightgreen.svg)](file:///e:/Coding/solana-scalping/tests)
 [![Node](https://img.shields.io/badge/node-v22%2B%20LTS-blue.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/typescript-v5.7-blue.svg)](https://www.typescriptlang.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](file:///e:/Coding/solana-scalping/docker-compose.yml)
@@ -395,11 +394,7 @@ Jalankan seluruh test suite:
 npm test
 ```
 
-Hasil pengujian saat ini (Vitest):
-```text
- Test Files  21 passed (21)
-      Tests  51 passed (51)
-```
+Jumlah test berubah seiring pengembangan, jadi README tidak menulis angka statis. Jalankan `npm run verify` (tsc + vitest + grep-guards) untuk status terkini, dan `npm run verify:full` untuk menambah mutation-check.
 
 Verifikasi type-safety TypeScript:
 ```bash

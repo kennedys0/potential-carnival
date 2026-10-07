@@ -4,6 +4,7 @@ import { getEnv } from '../../config/env';
 import { getRedisConnection } from '../../queue/connection';
 import { LiveTradingDisabledError, KillSwitchActiveError } from '../../utils/errors';
 import crypto from 'crypto';
+import { currencyService } from '../../utils/currencyService';
 
 export interface OrderRequest {
   userId: number;
@@ -37,8 +38,13 @@ export class TraderService {
     await this.assertTradingAllowed(req.userId, 'BUY', req.isDryRun);
 
     if (req.isDryRun) {
-      // Paper Trading: Simulate execution with market price and config fee
-      const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * appSettings.MOCK_SOL_PRICE_USD) / req.currentPriceUsd : 0;
+      // Paper Trading: kurs SOL/USD HARUS nyata. Tanpa data segar -> tolak (bukan memakai angka palsu).
+      await currencyService.fetchRates();
+      const usdPerSol = currencyService.getUsdPerSol();
+      if (usdPerSol === null) {
+        throw new Error('Kurs SOL/USD tidak tersedia; trade paper ditolak (bot tidak memakai harga palsu). Coba lagi sebentar lagi.');
+      }
+      const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * usdPerSol) / req.currentPriceUsd : 0;
       return this.tradeRepo.createTrade({
         user_id: req.userId,
         token_mint: req.tokenMint,
@@ -112,6 +118,9 @@ export class TraderService {
         req.userId, 
         transaction,
         async (sig) => {
+          // Tandai di memori SEBELUM apa pun yang bisa melempar: setelah signature ada, tx mungkin sudah terkirim,
+          // jadi blok catch di bawah TIDAK boleh menandai trade FAILED.
+          tradeRecord.pending_signature = sig;
           if (tradeRecord.id) {
             await this.tradeRepo.updateTradeStatus(tradeRecord.id, { pending_signature: sig });
           }

@@ -33,7 +33,6 @@ export async function handlePositionsMenu(
   } else {
     text = `📊 <b>Daftar Posisi Aktif (${openTrades.length})</b>\n\n`;
     await currencyService.fetchRates();
-    const idrPerSol = currencyService.getIdrPerSol();
 
     // Fetch live prices for all tokens concurrently
     const pricePromises = openTrades.map(t => scannerService.scanTokenByAddress(t.token_mint));
@@ -49,13 +48,13 @@ export async function handlePositionsMenu(
       
       let pnlPercent = 0;
       let pnlSol = 0;
-      let pnlIdr = 0;
+      let pnlIdr: number | null = null;
       let pnlIcon = '➖';
       
       if (currentPriceUsd > 0 && entryPrice > 0) {
         pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
         pnlSol = trade.sol_amount * (pnlPercent / 100);
-        pnlIdr = pnlSol * idrPerSol;
+        pnlIdr = currencyService.solToIdr(pnlSol);
         pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
       }
 
@@ -64,7 +63,7 @@ export async function handlePositionsMenu(
       text += `   • <b>Entry:</b> $${entryPrice.toFixed(6)}\n`;
       text += `   • <b>Current:</b> $${currentPriceUsd.toFixed(6)}\n`;
       text += `   • <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b> (${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n`;
-      text += `   • <b>Profit/Loss:</b> ${pnlIdr > 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n`;
+      text += `   • <b>Profit/Loss:</b> ${pnlIdr !== null && pnlIdr > 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n`;
       text += `   • <b>Status:</b> <code>${trade.status}</code>\n\n`;
       
       // Add a sell button for this trade

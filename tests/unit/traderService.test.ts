@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TraderService } from '../../src/modules/trader/traderService';
 import { LiveTradingDisabledError, KillSwitchActiveError } from '../../src/utils/errors';
+import { currencyService } from '../../src/utils/currencyService';
+import { getEnv } from '../../src/config/env';
 
 vi.mock('../../src/config/env', () => ({
   getEnv: vi.fn(() => ({
     LIVE_TRADING_ENABLED: true,
   })),
+}));
+
+// Kurs SOL/USD dimock supaya test tidak memanggil jaringan (default 150 hanya nilai test, bukan nilai kode produksi).
+vi.mock('../../src/utils/currencyService', () => ({
+  currencyService: {
+    fetchRates: vi.fn().mockResolvedValue(undefined),
+    getUsdPerSol: vi.fn(() => 150),
+  },
 }));
 
 const mockRedis = {
@@ -209,5 +219,142 @@ describe('TraderService', () => {
       isDryRun: false, // Live trade
       source: 'MANUAL',
     })).rejects.toThrow(LiveTradingDisabledError);
+  });
+
+  // ====================== GUARD TESTS (round 4 patch) ======================
+  const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+  it('paper: jumlah token memakai kurs SOL/USD nyata, bukan angka hardcoded', async () => {
+    vi.mocked(currencyService.getUsdPerSol).mockReturnValueOnce(200);
+    const mockTradeRepo: any = { createTrade: vi.fn().mockImplementation((t) => Promise.resolve({ id: 'p1', ...t })) };
+    const service = new TraderService(mockTradeRepo, {} as any, {} as any);
+    const result = await service.executeOrder({
+      userId: 1, tokenMint: MINT, tokenSymbol: 'T', solAmount: 1, currentPriceUsd: 2, isDryRun: true, source: 'MANUAL',
+    });
+    expect(result.token_amount).toBe(100); // 1 SOL * $200 / $2
+  });
+
+  it('paper: ditolak (tanpa membuat trade) bila kurs SOL/USD tidak tersedia', async () => {
+    vi.mocked(currencyService.getUsdPerSol).mockReturnValueOnce(null);
+    const mockTradeRepo: any = { createTrade: vi.fn() };
+    const service = new TraderService(mockTradeRepo, {} as any, {} as any);
+    await expect(service.executeOrder({
+      userId: 1, tokenMint: MINT, tokenSymbol: 'T', solAmount: 1, currentPriceUsd: 2, isDryRun: true, source: 'MANUAL',
+    })).rejects.toThrow(/Kurs SOL\/USD tidak tersedia/);
+    expect(mockTradeRepo.createTrade).not.toHaveBeenCalled();
+  });
+
+  const liveTrade = (over: any = {}) => ({
+    id: 'trade-live', user_id: 111, token_mint: MINT, status: 'OPEN', is_dry_run: false,
+    sol_amount: 0.5, token_amount: 10, entry_price_usd: 1.0,
+    token_amount_raw: 10_000_000, remaining_raw: 10_000_000, exit_attempts: 0, ...over,
+  });
+  const exitDeps = (sendResult: any) => {
+    const repo: any = { updateTradeStatus: vi.fn().mockResolvedValue(true) };
+    const wallet: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
+      getTokenBalance: vi.fn().mockResolvedValue(10_000_000),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue(sendResult),
+    };
+    const jup: any = {
+      getQuote: vi.fn().mockResolvedValue({ outAmount: '1000' }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ tx: true }),
+    };
+    return { repo, wallet, service: new TraderService(repo, wallet, jup) };
+  };
+  const updatesOf = (repo: any): any[] => repo.updateTradeStatus.mock.calls.map((c: any) => c[1]);
+
+  it('R2: exit LIVE tetap berjalan saat LIVE_TRADING_ENABLED=false DAN kill-switch aktif', async () => {
+    vi.mocked(getEnv).mockReturnValue({ LIVE_TRADING_ENABLED: false } as any);
+    mockRedis.get.mockResolvedValue('1');
+    try {
+      const { service, wallet } = exitDeps({ status: 'UNKNOWN', signature: 'sigX' });
+      await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBeUndefined();
+      expect(wallet.signAndSendVersionedTransaction).toHaveBeenCalled(); // benar-benar mencoba menjual
+    } finally {
+      vi.mocked(getEnv).mockReturnValue({ LIVE_TRADING_ENABLED: true } as any);
+    }
+  });
+
+  it('R3: exit FAILED_ONCHAIN -> posisi TIDAK jadi FAILED, exit_attempts naik', async () => {
+    const { service, repo } = exitDeps({ status: 'FAILED_ONCHAIN', signature: 's', err: { InstructionError: [0, 'Custom'] } });
+    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).rejects.toThrow('Exit transaction failed on-chain');
+    const ups = updatesOf(repo);
+    expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
+    expect(ups).toContainEqual(expect.objectContaining({ exit_attempts: 1 }));
+    expect(ups).toContainEqual(expect.objectContaining({ needs_attention: false }));
+  });
+
+  it('R3: exit UNKNOWN -> posisi tetap OPEN (tanpa FAILED) menunggu rekonsiliasi', async () => {
+    const { service, repo } = exitDeps({ status: 'UNKNOWN', signature: 's' });
+    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBeUndefined();
+    const ups = updatesOf(repo);
+    expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
+    expect(ups).toContainEqual(expect.objectContaining({ last_exit_error: 'Unknown status' }));
+  });
+
+  it('R3: percobaan exit ke-3 yang gagal menyalakan needs_attention', async () => {
+    const { service, repo } = exitDeps({ status: 'FAILED_ONCHAIN', signature: 's', err: 'x' });
+    await expect(service.closePosition(liveTrade({ exit_attempts: 2 }) as any, 1.5, 100)).rejects.toThrow();
+    expect(updatesOf(repo)).toContainEqual(expect.objectContaining({ needs_attention: true }));
+  });
+
+  // WalletService asli memanggil callback onSignature SEBELUM mengembalikan hasil; mock harus meniru alur itu,
+  // kalau tidak, blok catch menandai FAILED lewat jalur lain dan menutupi bug (ketahuan oleh mutation-check B2).
+  const sendWithSig = (result: any) =>
+    vi.fn().mockImplementation(async (_u: number, _tx: any, onSig: (s: string) => Promise<void>) => {
+      await onSig(result.signature);
+      return result;
+    });
+
+  const buyReq = { userId: 111, tokenMint: MINT, tokenSymbol: 'USDC', solAmount: 0.5, currentPriceUsd: 1.0, isDryRun: false, source: 'MANUAL' as const };
+  const buyDeps = (sendImpl: any, parsedImpl?: any) => {
+    const repo: any = {
+      createTrade: vi.fn().mockImplementation((t) => Promise.resolve({ id: 'buy-1', ...t })),
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+    };
+    const wallet: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
+      getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
+      signAndSendVersionedTransaction: sendImpl,
+      getParsedTransaction: parsedImpl ?? vi.fn().mockResolvedValue(null),
+    };
+    const jup: any = {
+      getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ tx: true }),
+    };
+    return { repo, wallet, service: new TraderService(repo, wallet, jup) };
+  };
+
+  it('beli: FAILED_ONCHAIN -> trade ditandai FAILED (pasti tidak ada token)', async () => {
+    const { service, repo } = buyDeps(sendWithSig({ status: 'FAILED_ONCHAIN', signature: 's', err: { InstructionError: [0, 'Custom'] } }));
+    await expect(service.executeOrder(buyReq)).rejects.toThrow('On-chain transaction failed');
+    expect(updatesOf(repo)).toContainEqual(expect.objectContaining({ status: 'FAILED' }));
+  });
+
+  it('beli: UNKNOWN -> trade tetap PENDING (jangan FAILED, jangan OPEN) untuk rekonsiliasi', async () => {
+    const { service, repo } = buyDeps(sendWithSig({ status: 'UNKNOWN', signature: 's' }));
+    const result = await service.executeOrder(buyReq);
+    expect(result.status).toBe('PENDING');
+    const ups = updatesOf(repo);
+    expect(ups.some((u) => u.status === 'FAILED' || u.status === 'OPEN')).toBe(false);
+  });
+
+  it('beli: error SEBELUM tx terkirim -> FAILED (aman karena tidak ada signature)', async () => {
+    const { service, repo } = buyDeps(vi.fn().mockRejectedValue(new Error('boom before send')));
+    await expect(service.executeOrder(buyReq)).rejects.toThrow('boom before send');
+    expect(updatesOf(repo)).toContainEqual(expect.objectContaining({ status: 'FAILED' }));
+  });
+
+  it('beli: error SETELAH signature diketahui -> JANGAN FAILED (tx mungkin sudah masuk, token ada di wallet)', async () => {
+    const send = vi.fn().mockImplementation(async (_u: number, _tx: any, onSig: (s: string) => Promise<void>) => {
+      await onSig('sigY');
+      return { status: 'SUCCESS', signature: 'sigY' };
+    });
+    const { service, repo } = buyDeps(send, vi.fn().mockRejectedValue(new Error('rpc down')));
+    await expect(service.executeOrder(buyReq)).rejects.toThrow('rpc down');
+    const ups = updatesOf(repo);
+    expect(ups).toContainEqual(expect.objectContaining({ pending_signature: 'sigY' }));
+    expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
   });
 });

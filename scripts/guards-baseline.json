@@ -1,0 +1,15 @@
+{
+  "coerce-boolean": 0,
+  "console-calls": 0,
+  "inline-require": 0,
+  "new-bot-instance": 0,
+  "fake-or-mock-prices": 0,
+  "ts-escape-hatch": 0,
+  "repo-db-exposed": 0,
+  "debt-hardcoded-or-default": 0,
+  "debt-hardcoded-nullish-default": 26,
+  "debt-unbounded-limit": 2,
+  "debt-bot-created-per-call": 3,
+  "debt-inline-dynamic-import": 12,
+  "debt-paid-discovery-feed": 1
+}

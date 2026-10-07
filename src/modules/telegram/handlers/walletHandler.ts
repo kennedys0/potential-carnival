@@ -10,8 +10,8 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
   const wallet = await walletService.getOrCreateWallet(ctx.from.id);
   const balance = await walletService.getBalance(wallet.publicKey);
 
-  const solValueIdr = balance.sol * currencyService.getIdrPerSol();
-  const solValueUsd = balance.sol * currencyService.getUsdPerSol();
+  const solValueIdr = currencyService.solToIdr(balance.sol);
+  const solValueUsd = currencyService.solToUsd(balance.sol);
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
@@ -21,7 +21,7 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 
 💰 <b>Saldo Saat Ini:</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code>
-• <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ $${solValueUsd.toFixed(2)})
+• <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ ${currencyService.formatUsd(solValueUsd)})
 • <i>Diperiksa: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 
 <i>Deposit terdeteksi otomatis via WebSocket RPC.</i>
@@ -71,8 +71,8 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
   const wallet = await walletService.getOrCreateWallet(ctx.from.id);
   const balance = await walletService.getBalance(wallet.publicKey);
 
-  const solValueIdr = balance.sol * currencyService.getIdrPerSol();
-  const solValueUsd = balance.sol * currencyService.getUsdPerSol();
+  const solValueIdr = currencyService.solToIdr(balance.sol);
+  const solValueUsd = currencyService.solToUsd(balance.sol);
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
@@ -82,7 +82,7 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
 
 💰 <b>Saldo Saat Ini (Terbaru):</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code>
-• <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ $${solValueUsd.toFixed(2)})
+• <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ ${currencyService.formatUsd(solValueUsd)})
 • <i>Diperbarui pada: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 `.trim();
 

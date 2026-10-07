@@ -8,7 +8,10 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
-    "verify": "tsc --noEmit && vitest run && \"C:\\Program Files\\Git\\bin\\bash.exe\" scripts/grep-guards.sh"
+    "verify": "tsc --noEmit && vitest run && node scripts/grep-guards.mjs",
+    "verify:full": "npm run verify && node scripts/mutation-check.mjs",
+    "guards": "node scripts/grep-guards.mjs",
+    "mutation": "node scripts/mutation-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

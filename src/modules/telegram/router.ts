@@ -416,7 +416,7 @@ export function registerBotRoutes(
         });
 
         await currencyService.fetchRates();
-        const amountIdr = amount * currencyService.getIdrPerSol();
+        const amountIdr = currencyService.solToIdr(amount);
 
         await ctx.reply(
           `✅ <b>Order Berhasil Dieksekusi!</b>\n\n` +
@@ -454,12 +454,10 @@ export function registerBotRoutes(
         await services.traderService.closePosition(trade, priceUsd, percent);
         
         await currencyService.fetchRates();
-        const idrPerSol = currencyService.getIdrPerSol();
-        
         const entryPrice = trade.entry_price_usd;
         const pnlPercent = ((priceUsd - entryPrice) / entryPrice) * 100;
         const pnlSol = trade.sol_amount * (pnlPercent / 100) * (percent / 100);
-        const pnlIdr = pnlSol * idrPerSol;
+        const pnlIdr = currencyService.solToIdr(pnlSol);
         const pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
 
         await ctx.reply(
@@ -468,7 +466,7 @@ export function registerBotRoutes(
           `• <b>Entry Price:</b> $${entryPrice.toFixed(6)}\n` +
           `• <b>Exit Price:</b> $${priceUsd.toFixed(6)}\n` +
           `• <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b> (${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
-          `• <b>Profit/Loss:</b> ${pnlIdr > 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n`,
+          `• <b>Profit/Loss:</b> ${pnlIdr !== null && pnlIdr > 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n`,
           {
             parse_mode: 'HTML',
             reply_markup: new InlineKeyboard()
