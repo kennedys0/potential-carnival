@@ -1,6 +1,6 @@
 # 🚀 Solana Scalping Telegram Bot & Autopilot
 
-[![Tests](https://img.shields.io/badge/tests-35%20passed-brightgreen.svg)](file:///e:/Coding/solana-scalping/tests)
+[![Tests](https://img.shields.io/badge/tests-51%20passed-brightgreen.svg)](file:///e:/Coding/solana-scalping/tests)
 [![Node](https://img.shields.io/badge/node-v22%2B%20LTS-blue.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/typescript-v5.7-blue.svg)](https://www.typescriptlang.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](file:///e:/Coding/solana-scalping/docker-compose.yml)
@@ -157,7 +157,8 @@ solana-scalping/
 ├── vitest.config.ts              # Konfigurasi pengujian Vitest
 ├── supabase/
 │   └── migrations/
-│       └── 001_initial_schema.sql # DDL lengkap tabel Supabase (PostgreSQL)
+│       ├── 001_initial_schema.sql # DDL lengkap tabel Supabase (PostgreSQL)
+│       └── 002_round2_fixes.sql   # Migrasi struktur lanjutan (Fase 2)
 ├── src/
 │   ├── index.ts                  # Bootstrapper utama & graceful shutdown
 │   ├── config/
@@ -243,9 +244,9 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 MASTER_ENCRYPTION_KEY=your_generated_64_hex_chars_key_here
 
 # Konfigurasi Gateway AI (OpenAI-Compatible: DeepSeek)
-AI_BASE_URL=https://bandelbanget.xyz/v1
-AI_API_KEY=your_ai_api_key_here
-AI_MODEL=deepseek-v4-flash
+AI_BASE_URL=
+AI_API_KEY=
+AI_MODEL=
 
 # Redis Connection URL
 REDIS_URL=redis://127.0.0.1:6379
@@ -254,8 +255,8 @@ REDIS_URL=redis://127.0.0.1:6379
 ### 4. Eksekusi Database Migration di Supabase
 1. Masuk ke Dashboard Supabase Anda.
 2. Buka menu **SQL Editor**.
-3. Buka file [`supabase/migrations/001_initial_schema.sql`](file:///e:/Coding/solana-scalping/supabase/migrations/001_initial_schema.sql), salin seluruh isinya, dan tempelkan ke SQL Editor Supabase.
-4. Klik tombol **Run** untuk membuat seluruh tabel, trigger, dan enum.
+3. Buka file [`supabase/migrations/001_initial_schema.sql`](file:///e:/Coding/solana-scalping/supabase/migrations/001_initial_schema.sql), salin isinya, dan jalankan (Run) di SQL Editor.
+4. Ulangi langkah yang sama untuk file [`supabase/migrations/002_round2_fixes.sql`](file:///e:/Coding/solana-scalping/supabase/migrations/002_round2_fixes.sql).
 
 ---
 
@@ -305,7 +306,8 @@ Bot mendukung perintah teks standar maupun interaksi tombol penuh:
 | `/settings` | Membuka konfigurasi bot: toggle Paper/Live, trade size, dan profil risiko. |
 | `/positions` | Memantau daftar posisi trading aktif, harga entry, alokasi SOL, dan estimasi token. |
 | `/help` | Menampilkan panduan komprehensif, fitur keamanan, dan daftar perintah. |
-| `/withdraw` | Panduan penarikan dana ke alamat eksternal. |
+| `/set_withdraw_address <CA>` | Mendaftarkan alamat Solana (Wallet Utama) untuk mencairkan dana secara eksklusif. |
+| `/withdraw` | Membuka panduan / mengeksekusi penarikan dana hanya ke alamat yang telah didaftarkan. |
 
 ---
 
@@ -382,10 +384,10 @@ Jalankan seluruh test suite:
 npm test
 ```
 
-Hasil pengujian saat ini:
+Hasil pengujian saat ini (Vitest):
 ```text
- Test Files  19 passed (19)
-      Tests  35 passed (35)
+ Test Files  21 passed (21)
+      Tests  51 passed (51)
 ```
 
 Verifikasi type-safety TypeScript:

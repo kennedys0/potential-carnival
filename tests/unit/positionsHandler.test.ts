@@ -11,8 +11,12 @@ describe('Positions Handler', () => {
     const mockTradeRepo: any = {
       getOpenTradesByUserId: vi.fn().mockResolvedValue([]),
     };
+    
+    const mockScannerService: any = {
+      scanTokenByAddress: vi.fn().mockResolvedValue(null)
+    };
 
-    await handlePositionsMenu(mockCtx, mockTradeRepo);
+    await handlePositionsMenu(mockCtx, mockTradeRepo, mockScannerService);
 
     expect(mockCtx.reply).toHaveBeenCalled();
     const text = mockCtx.reply.mock.calls[0][0];
@@ -37,8 +41,12 @@ describe('Positions Handler', () => {
         },
       ]),
     };
+    
+    const mockScannerService: any = {
+      scanTokenByAddress: vi.fn().mockResolvedValue({ priceUsd: '0.000030' })
+    };
 
-    await handlePositionsMenu(mockCtx, mockTradeRepo);
+    await handlePositionsMenu(mockCtx, mockTradeRepo, mockScannerService);
 
     expect(mockCtx.reply).toHaveBeenCalled();
     const text = mockCtx.reply.mock.calls[0][0];

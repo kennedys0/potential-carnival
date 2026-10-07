@@ -4,13 +4,14 @@ export const AppSettingsSchema = z.object({
   PAPER_TRADE_SOL_PRICE: z.number().default(150),
   PAPER_TRADE_FEE_LAMPORTS: z.number().default(50000),
   DEFAULT_SLIPPAGE_BPS: z.number().default(50),
+  DAY_BOUNDARY_TZ: z.string().default('UTC'),
   FALLBACK_AI_MODEL: z.string().default('claude-3-5-haiku-20241022'),
   RISK_MULTIPLIER_STOP_LOSS: z.number().default(1.5),
   RISK_MULTIPLIER_TP1: z.number().default(1.5),
   RISK_MULTIPLIER_TP2: z.number().default(3.0),
   MAX_LOSS_PERCENTAGE: z.number().default(0.9), // 10% max loss fallback
   ANALYZER_PARAMS: z.object({
-    MIN_CANDLES: z.number().default(3),
+    MIN_CANDLES: z.number().default(21),
     MAX_STALE_CANDLE_AGE_MS: z.number().default(300000), // 5 minutes
   }).default({}),
   SECURITY_PARAMS: z.object({

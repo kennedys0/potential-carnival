@@ -95,43 +95,68 @@ export class AnalyzerService {
       return null;
     }
 
-    try {
-      let analysis: AiAnalysis;
-      if (typeof this.llmClient.analyze === 'function') {
-        analysis = await this.llmClient.analyze({
-          tokenSymbol,
-          currentPrice,
-          indicators,
-          securityFlags,
-        });
-      } else {
+    const systemPrompt = `Anda adalah AI Scalper Profesional untuk Solana. Tugas Anda menganalisis data indikator dan mengembalikan keputusan BUY/WAIT/AVOID dalam format JSON.
+ATURAN MUTLAK JIKA VERDICT = BUY:
+1. Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk (currentPrice).
+2. Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
+Jangan sertakan teks apapun selain JSON yang valid.`;
+
+    let attempts = 0;
+    const maxAttempts = 2; // 1 initial + 1 retry
+
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        let analysis: AiAnalysis;
+        if (typeof this.llmClient.analyze === 'function') {
+          analysis = await this.llmClient.analyze({
+            tokenSymbol,
+            currentPrice,
+            indicators,
+            securityFlags,
+            systemPrompt,
+          });
+        } else {
         const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VWAP=${indicators.vwap}, VolumeSpike=${indicators.volumeSpikeRatio}x. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
         const response = await this.llmClient.messages.create({
           model: appSettings.FALLBACK_AI_MODEL,
           max_tokens: 1000,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt }
+          ],
         });
 
-        const parsed = JSON.parse(response.content[0].text);
+        // Strip backticks if the LLM wrapped it in markdown
+        let textResponse = response.content[0].text.trim();
+        if (textResponse.startsWith('```json')) textResponse = textResponse.replace(/```json\n?/, '');
+        if (textResponse.startsWith('```')) textResponse = textResponse.replace(/```\n?/, '');
+        if (textResponse.endsWith('```')) textResponse = textResponse.replace(/```$/, '');
+
+        const parsed = JSON.parse(textResponse);
         analysis = AiAnalysisSchema.parse(parsed);
       }
 
       // Validasi LLM output: SL < entry < TP
       if (analysis.verdict === 'BUY') {
         if (analysis.stop_loss_usd >= currentPrice) {
-          console.warn(`LLM validation failed: SL (${analysis.stop_loss_usd}) >= Entry (${currentPrice})`);
-          return null; // Reject inconsistency
+          throw new Error('Inconsistent LLM output: SL >= Entry');
         }
         const minTp = analysis.take_profit_levels.reduce((min, tp) => Math.min(min, tp.price_usd), Infinity);
         if (minTp <= currentPrice) {
-          console.warn(`LLM validation failed: TP (${minTp}) <= Entry (${currentPrice})`);
-          return null; // Reject inconsistency
+          throw new Error('Inconsistent LLM output: TP <= Entry');
         }
       }
 
       return analysis;
-    } catch {
-      return null; // Graceful fallback
+    } catch (err: any) {
+      console.warn(`LLM attempt ${attempts} failed: ${err.message}`);
+      if (attempts >= maxAttempts) {
+        return null;
+      }
     }
+  } // end while
+
+  return null;
   }
 }

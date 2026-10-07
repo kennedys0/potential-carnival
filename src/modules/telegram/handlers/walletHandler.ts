@@ -116,18 +116,46 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
   }
 }
 
-export async function handleWalletWithdrawPrompt(ctx: Context): Promise<void> {
-  const text = `
+export async function handleWalletWithdrawPrompt(ctx: Context, walletService: WalletService): Promise<void> {
+  if (!ctx.from) return;
+
+  const { getSupabaseClient } = require('../../../database/client');
+  const { WalletRepository } = require('../../../database/repositories/walletRepository');
+  const db = getSupabaseClient();
+  const walletRepo = new WalletRepository(db);
+  const wallet = await walletRepo.getWalletByUserId(ctx.from.id);
+
+  let text = '';
+  if (!wallet || !wallet.owner_pubkey) {
+    text = `
 💸 <b>Withdraw Saldo SOL</b>
 
-Untuk melakukan penarikan saldo ke wallet eksternal Anda, silakan ketik perintah dengan format berikut:
-<code>/withdraw &lt;ALAMAT_SOLANA&gt; &lt;JUMLAH_SOL&gt;</code>
+⚠️ <b>Alamat Penarikan Belum Diatur!</b>
+Demi keamanan, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahulu menggunakan perintah:
+
+<code>/set_withdraw_address &lt;ALAMAT_SOLANA_ANDA&gt;</code>
+
+<i>Contoh:</i>
+<code>/set_withdraw_address 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU</code>
+`.trim();
+  } else {
+    text = `
+💸 <b>Withdraw Saldo SOL</b>
+
+Alamat Penarikan Anda:
+<code>${wallet.owner_pubkey}</code>
+
+Untuk mencairkan dana ke alamat di atas, gunakan perintah:
+<code>/withdraw &lt;JUMLAH_SOL&gt;</code>
 
 <b>Contoh:</b>
-<code>/withdraw 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU 0.25</code>
+<code>/withdraw 0.25</code>
+atau
+<code>/withdraw MAX</code>
 
 <i>Catatan: Sisakan minimal 0.005 SOL untuk biaya gas jaringan.</i>
 `.trim();
+  }
 
   const keyboard = new InlineKeyboard()
     .text('💳 Cek Saldo', 'menu_wallet')

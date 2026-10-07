@@ -5,6 +5,35 @@ import { RuleEvaluator } from './ruleEvaluator';
 import { CircuitBreaker, CircuitBreakerState } from './circuitBreaker';
 import { RiskManager } from './riskManager';
 import { TraderService } from '../trader/traderService';
+import { getRedisConnection } from '../../queue/connection';
+import { z } from 'zod';
+
+const SafetyParamsSchema = z.object({
+  min_safety_score: z.number().default(75),
+  allowed_levels: z.array(z.string()).default(['SAFE']),
+  min_liquidity_usd: z.number().default(10000),
+});
+
+const AiParamsSchema = z.object({
+  min_confidence: z.number().default(70),
+  min_risk_reward: z.number().default(1.5),
+  allowed_setups: z.array(z.string()).default(['MOMENTUM', 'BREAKOUT']),
+});
+
+const SizingParamsSchema = z.object({
+  mode: z.enum(['FIXED_SOL', 'PERCENT_BALANCE', 'RISK_BASED']).default('FIXED_SOL'),
+  fixed_sol: z.number().optional(),
+  percent_balance: z.number().optional(),
+  risk_percent: z.number().optional(),
+  max_size_per_trade: z.number().optional(),
+  max_concurrent_positions: z.number().default(3),
+  min_reserve_sol: z.number().default(0.05),
+});
+
+const CircuitBreakerParamsSchema = z.object({
+  max_daily_loss_sol: z.number().default(1.0),
+  max_consecutive_losses: z.number().default(3),
+});
 
 export class AutopilotEngine {
   constructor(
@@ -25,7 +54,9 @@ export class AutopilotEngine {
       availableBalanceSol: number;
       dailyLossSol: number;
       consecutiveLosses: number;
-    }
+      heldMints?: string[];
+    },
+    rawSnapshot?: any
   ): Promise<{ executed: boolean; reason: string }> {
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
 
@@ -33,10 +64,43 @@ export class AutopilotEngine {
       return { executed: false, reason: 'Autopilot is inactive for user' };
     }
 
+    if (currentState.heldMints?.includes(tokenMint)) {
+      await this.logDecision(userId, tokenMint, tokenSymbol, 'SKIP', security, ai, ['Token is already held'], [], 'Skipped because already held', rawSnapshot);
+      return { executed: false, reason: 'Already holding this token' };
+    }
+
+    // Redis Lock to prevent double buy
+    const redis = getRedisConnection();
+    const lockKey = `lock:${userId}:${tokenMint}`;
+    const acquired = await redis.set(lockKey, '1', 'EX', 30, 'NX'); // 30 seconds lock
+    if (!acquired) {
+      return { executed: false, reason: 'Lock acquired by another process' };
+    }
+
+    try {
+      return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot);
+    } finally {
+      await redis.del(lockKey);
+    }
+  }
+
+  private async evaluateAndExecute(
+    userId: number,
+    tokenMint: string,
+    tokenSymbol: string,
+    currentPriceUsd: number,
+    liquidityUsd: number,
+    security: SecurityScoreResult,
+    ai: AiAnalysis | null,
+    currentState: any,
+    config: AutopilotConfigRecord,
+    rawSnapshot: any
+  ): Promise<{ executed: boolean; reason: string }> {
     // 1. Circuit Breaker Check
+    const cbConfig = CircuitBreakerParamsSchema.parse(config.circuit_breaker_params || {});
     const cbLimits = {
-      maxDailyLossSol: (config.circuit_breaker_params.max_daily_loss_sol as number) || 1.0,
-      maxConsecutiveLosses: (config.circuit_breaker_params.max_consecutive_losses as number) || 3,
+      maxDailyLossSol: cbConfig.max_daily_loss_sol,
+      maxConsecutiveLosses: cbConfig.max_consecutive_losses,
     };
     const cbState: CircuitBreakerState = {
       dailyLossSol: currentState.dailyLossSol,
@@ -44,48 +108,58 @@ export class AutopilotEngine {
     };
     const cbCheck = CircuitBreaker.isBreached(cbLimits, cbState);
     if (cbCheck.isBreached) {
+      await this.logDecision(userId, tokenMint, tokenSymbol, 'REJECT', security, ai, [], ['Circuit Breaker'], `Circuit breaker active: ${cbCheck.reason}`, rawSnapshot);
       return { executed: false, reason: `Circuit breaker active: ${cbCheck.reason}` };
     }
 
     // 2. Multi-stage Rule Evaluation
+    const safeConf = SafetyParamsSchema.parse(config.safety_params || {});
+    const aiConf = AiParamsSchema.parse(config.ai_params || {});
+
     const safetyParams = {
-      minSafetyScore: (config.safety_params.min_safety_score as number) || 75,
-      allowedLevels: (config.safety_params.allowed_levels as string[]) || ['SAFE'],
-      minLiquidityUsd: (config.safety_params.min_liquidity_usd as number) || 10000,
+      minSafetyScore: safeConf.min_safety_score,
+      allowedLevels: safeConf.allowed_levels,
+      minLiquidityUsd: safeConf.min_liquidity_usd,
     };
     const aiParams = {
-      minConfidence: (config.ai_params.min_confidence as number) || 70,
-      minRiskReward: (config.ai_params.min_risk_reward as number) || 1.5,
-      allowedSetups: (config.ai_params.allowed_setups as string[]) || ['MOMENTUM', 'BREAKOUT'],
+      minConfidence: aiConf.min_confidence,
+      minRiskReward: aiConf.min_risk_reward,
+      allowedSetups: aiConf.allowed_setups,
     };
 
     const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd);
 
-    // Save audit log
-    await this.autopilotRepo.saveDecisionLog({
-      user_id: userId,
-      token_mint: tokenMint,
-      token_symbol: tokenSymbol,
-      action: evalResult.action,
-      safety_score: security.score,
-      safety_flags: security.riskFlags,
-      ai_verdict: ai?.verdict,
-      ai_confidence: ai?.confidence,
-      rules_passed: evalResult.rulesPassed,
-      rules_failed: evalResult.rulesFailed,
-      reason_summary: evalResult.reason,
-    });
+    await this.logDecision(userId, tokenMint, tokenSymbol, evalResult.action, security, ai, evalResult.rulesPassed, evalResult.rulesFailed, evalResult.reason, rawSnapshot);
 
     if (!evalResult.passed) {
       return { executed: false, reason: evalResult.reason };
     }
 
     // 3. Risk Management & Position Sizing
-    const orderSol = (config.sizing_params.fixed_sol as number) || 0.1;
+    const sizingConf = SizingParamsSchema.parse(config.sizing_params || {});
+    let orderSol = 0;
+    
+    if (sizingConf.mode === 'FIXED_SOL') {
+      orderSol = sizingConf.fixed_sol ?? 0.1;
+    } else if (sizingConf.mode === 'PERCENT_BALANCE') {
+      orderSol = (currentState.availableBalanceSol * (sizingConf.percent_balance ?? 10)) / 100;
+    } else if (sizingConf.mode === 'RISK_BASED') {
+      if (ai && ai.stop_loss_usd > 0 && currentPriceUsd > ai.stop_loss_usd) {
+        const slDistance = (currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd;
+        orderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? 2)) / 100) / slDistance;
+      } else {
+        return { executed: false, reason: 'Risk based sizing failed: invalid SL' };
+      }
+    }
+    
+    if (sizingConf.max_size_per_trade && orderSol > sizingConf.max_size_per_trade) {
+      orderSol = sizingConf.max_size_per_trade;
+    }
+
     const riskCheck = RiskManager.canOpenNewPosition(
       {
-        maxConcurrentPositions: (config.sizing_params.max_concurrent_positions as number) || 3,
-        minReserveSol: (config.sizing_params.min_reserve_sol as number) || 0.05,
+        maxConcurrentPositions: sizingConf.max_concurrent_positions,
+        minReserveSol: sizingConf.min_reserve_sol,
       },
       currentState.openPositionsCount,
       currentState.availableBalanceSol,
@@ -110,4 +184,39 @@ export class AutopilotEngine {
 
     return { executed: true, reason: `Order placed successfully in ${config.mode} mode` };
   }
+
+  private async logDecision(
+    userId: number,
+    tokenMint: string,
+    tokenSymbol: string,
+    action: 'BUY' | 'SKIP' | 'REJECT',
+    security: SecurityScoreResult,
+    ai: AiAnalysis | null,
+    rulesPassed: string[],
+    rulesFailed: string[],
+    reason: string,
+    rawSnapshot: any
+  ) {
+    const fullSnapshot = {
+      ...rawSnapshot,
+      security,
+      ai,
+    };
+    
+    await this.autopilotRepo.saveDecisionLog({
+      user_id: userId,
+      token_mint: tokenMint,
+      token_symbol: tokenSymbol,
+      action,
+      safety_score: security.score,
+      safety_flags: security.riskFlags,
+      ai_verdict: ai?.verdict,
+      ai_confidence: ai?.confidence,
+      rules_passed: rulesPassed,
+      rules_failed: rulesFailed,
+      reason_summary: reason,
+      raw_snapshot: fullSnapshot,
+    });
+  }
 }
+

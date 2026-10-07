@@ -10,6 +10,7 @@ import { TraderService } from '../trader/traderService';
 import { getRedisConnection } from '../../queue/connection';
 import { handleStartCommand } from './handlers/startHandler';
 import { currencyService } from '../../utils/currencyService';
+import { getEnv } from '../../config/env';
 import {
   handleWalletMenu,
   handleWalletRefresh,
@@ -77,6 +78,34 @@ export function registerBotRoutes(
     await handleHelpMenu(ctx);
   });
 
+  // Command /killswitch
+  bot.command('killswitch', async (ctx) => {
+    if (!ctx.from) return;
+    const adminIds = getEnv().ADMIN_USER_IDS.split(',').map(id => id.trim());
+    if (!adminIds.includes(ctx.from.id.toString())) {
+      await ctx.reply('⚠️ Anda tidak memiliki akses untuk perintah ini.');
+      return;
+    }
+
+    const match = ctx.match?.trim().toLowerCase();
+    if (match !== 'on' && match !== 'off') {
+      await ctx.reply('⚠️ Gunakan format: <code>/killswitch on</code> atau <code>/killswitch off</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const redis = getRedisConnection();
+    // Use dynamic import or existing logger if available for audit log, for now console/logger
+    if (match === 'on') {
+      await redis.set('killswitch:global', '1');
+      console.warn(`[AUDIT] Admin ${ctx.from.id} activated global killswitch.`);
+      await ctx.reply('🛑 <b>KILL-SWITCH DIAKTIFKAN.</b> Semua entry baru ditolak.', { parse_mode: 'HTML' });
+    } else {
+      await redis.del('killswitch:global');
+      console.warn(`[AUDIT] Admin ${ctx.from.id} deactivated global killswitch.`);
+      await ctx.reply('🟢 <b>KILL-SWITCH DINONAKTIFKAN.</b> Trading berjalan normal.', { parse_mode: 'HTML' });
+    }
+  });
+
   // Command /scan <CA>
   bot.command('scan', async (ctx) => {
     const text = ctx.match?.trim();
@@ -90,22 +119,59 @@ export function registerBotRoutes(
     await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService);
   });
 
-  // Command /withdraw
-  bot.command('withdraw', async (ctx) => {
+  // Command /set_withdraw_address
+  bot.command('set_withdraw_address', async (ctx) => {
+    if (!ctx.from) return;
     const match = ctx.match?.trim();
     if (!match) {
-      await handleWalletWithdrawPrompt(ctx);
+      await ctx.reply('⚠️ Format salah. Gunakan: <code>/set_withdraw_address &lt;ALAMAT_SOLANA_ANDA&gt;</code>', { parse_mode: 'HTML' });
+      return;
+    }
+    const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    if (!solanaAddressRegex.test(match)) {
+      await ctx.reply('⚠️ Alamat Solana tidak valid.');
       return;
     }
     
-    const parts = match.split(/\s+/);
-    if (parts.length < 2) {
-      await ctx.reply('⚠️ Format salah. Gunakan: <code>/withdraw &lt;ALAMAT_SOLANA&gt; &lt;JUMLAH_SOL&gt;</code>', { parse_mode: 'HTML' });
+    // We update the owner_pubkey directly using the supabase client via repo, or better via walletService.
+    // Let's import walletRepository here or call walletService if we add the method.
+    // I will use walletService.setOwnerPubkey if it existed, but we didn't add it to WalletService yet.
+    // Wait, let's inject walletRepo in BotRouteServices or use walletService.
+    const { getSupabaseClient } = require('../../database/client');
+    const { WalletRepository } = require('../../database/repositories/walletRepository');
+    const db = getSupabaseClient();
+    const walletRepo = new WalletRepository(db);
+    
+    const success = await walletRepo.updateOwnerPubkey(ctx.from.id, match);
+    if (success) {
+      await ctx.reply(`✅ <b>Alamat Penarikan Tersimpan!</b>\n\nSemua withdrawal kini akan dikirim HANYA ke:\n<code>${match}</code>`, { parse_mode: 'HTML' });
+    } else {
+      await ctx.reply('❌ Gagal menyimpan alamat penarikan. Pastikan Anda sudah membuat wallet (/wallet).');
+    }
+  });
+
+  // Command /withdraw
+  bot.command('withdraw', async (ctx) => {
+    if (!ctx.from) return;
+    const match = ctx.match?.trim();
+    if (!match) {
+      await handleWalletWithdrawPrompt(ctx, services.walletService);
+      return;
+    }
+    
+    // Check if owner_pubkey exists
+    const { getSupabaseClient } = require('../../database/client');
+    const { WalletRepository } = require('../../database/repositories/walletRepository');
+    const db = getSupabaseClient();
+    const walletRepo = new WalletRepository(db);
+    const wallet = await walletRepo.getWalletByUserId(ctx.from.id);
+    
+    if (!wallet || !wallet.owner_pubkey) {
+      await ctx.reply('⚠️ <b>Alamat Penarikan Belum Diatur!</b>\n\nDemi keamanan, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahulu menggunakan perintah:\n<code>/set_withdraw_address &lt;ALAMAT_SOLANA_ANDA&gt;</code>', { parse_mode: 'HTML' });
       return;
     }
 
-    const address = parts[0];
-    const amountStr = parts[1].toUpperCase();
+    const amountStr = match.toUpperCase();
     
     const amount = amountStr === 'MAX' ? 'MAX' : parseFloat(amountStr);
     if (amount !== 'MAX' && (isNaN(amount) || amount <= 0)) {
@@ -113,7 +179,7 @@ export function registerBotRoutes(
       return;
     }
 
-    await handleWalletWithdrawConfirm(ctx, address, amount, services.walletService);
+    await handleWalletWithdrawConfirm(ctx, wallet.owner_pubkey, amount, services.walletService);
   });
 
   // Command /export_key
@@ -229,7 +295,7 @@ export function registerBotRoutes(
       await handleWalletRefresh(ctx, services.walletService);
     } else if (data === 'wallet_withdraw') {
       await ctx.answerCallbackQuery();
-      await handleWalletWithdrawPrompt(ctx);
+      await handleWalletWithdrawPrompt(ctx, services.walletService);
     } else if (data.startsWith('withdraw_execute:')) {
       const [, address, amount] = data.split(':');
       await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
@@ -264,6 +330,15 @@ export function registerBotRoutes(
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
       const newMode = cfg.mode === 'PAPER' ? 'LIVE' : 'PAPER';
+
+      if (newMode === 'LIVE' && !getEnv().LIVE_TRADING_ENABLED) {
+        await ctx.answerCallbackQuery({
+          text: '⚠️ LIVE TRADING saat ini dinonaktifkan secara global demi keamanan.',
+          show_alert: true,
+        });
+        return;
+      }
+
       await services.autopilotRepo.updateConfig(ctx.from.id, { mode: newMode });
       await ctx.answerCallbackQuery({
         text: `Mode diubah ke: ${newMode === 'PAPER' ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}`,

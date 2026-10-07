@@ -6,12 +6,14 @@ import { TraderService } from '../../modules/trader/traderService';
 import { ScannerService } from '../../modules/scanner/scannerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
 import { logger } from '../../utils/logger';
+import { JupiterClient } from '../../modules/trader/jupiterClient';
 
 export function createMonitorWorker(
   tradeRepo: TradeRepository,
   traderService: TraderService,
   scannerService: ScannerService,
-  autopilotRepo: AutopilotRepository
+  autopilotRepo: AutopilotRepository,
+  jupiterClient: JupiterClient
 ) {
   const redis = getRedisConnection();
 
@@ -32,41 +34,68 @@ export function createMonitorWorker(
         if (!config.is_active) return; // don't monitor if autopilot is paused? Actually we should always monitor open positions.
         
         // Get current price
-        const pair = await scannerService.scanTokenByAddress(tokenMint);
-        if (!pair) return;
-        const currentPriceUsd = parseFloat(pair.priceUsd || '0');
-        if (currentPriceUsd <= 0) return;
+        let pnlPercent = 0;
+        let currentPriceUsd = 0;
 
-        const entryPrice = trade.entry_price_usd;
-        const pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
+        if (trade.is_dry_run) {
+           const pair = await scannerService.scanTokenByAddress(tokenMint);
+           if (!pair) return;
+           currentPriceUsd = parseFloat(pair.priceUsd || '0');
+           if (currentPriceUsd <= 0) return;
+           const entryPrice = trade.entry_price_usd;
+           pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
+        } else {
+           // Live trading: use Jupiter Quote
+           if (!trade.token_amount_raw) {
+              logger.warn({ positionId }, 'Missing token_amount_raw on live trade');
+              return;
+           }
+
+           const amountLamports = trade.token_amount_raw;
+           const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+           const slippageBps = 100; // default for monitoring estimation
+           
+           try {
+             const quote = await jupiterClient.getQuote(trade.token_mint, WSOL_MINT, amountLamports, slippageBps);
+             const solToReceive = parseInt(quote.outAmount) / 1e9;
+             const solSpent = (trade.sol_spent_lamports || 0) / 1e9;
+             
+             if (solSpent <= 0) {
+                logger.warn({ positionId }, 'solSpent is 0, cannot calculate PNL');
+                return;
+             }
+
+             pnlPercent = ((solToReceive - solSpent) / solSpent) * 100;
+             currentPriceUsd = trade.entry_price_usd * (solToReceive / solSpent);
+           } catch (e) {
+             logger.error({ e, positionId }, 'Failed to quote for position monitoring');
+             return; // try again next time
+           }
+        }
 
         // Take Profit & Stop Loss logic
         const exitParams = (config.exit_params as any) || {};
-        const tpPercent = exitParams.tp1_percent || 15;
+        const tp1Percent = exitParams.tp1_percent || 15;
+        const tp2Percent = exitParams.tp2_percent || 30;
         const slPercent = exitParams.sl_percent || 8;
-        // Trailing stop would require saving the highest price reached per trade, 
-        // which could be added in a future update to trade repository.
-        // For now, basic TP/SL:
         
-        let shouldExit = false;
+        let percentageToClose = 0;
         let reason = '';
 
-        if (pnlPercent >= tpPercent) {
-          shouldExit = true;
-          reason = `Take Profit reached (+${pnlPercent.toFixed(2)}%)`;
+        if (trade.status === 'OPEN' && pnlPercent >= tp1Percent && pnlPercent < tp2Percent) {
+           percentageToClose = 50;
+           reason = `TP1 Reached (+${pnlPercent.toFixed(2)}%)`;
+        } else if (pnlPercent >= tp2Percent) {
+           percentageToClose = 100;
+           reason = `TP2 Reached (+${pnlPercent.toFixed(2)}%)`;
         } else if (pnlPercent <= -slPercent) {
-          shouldExit = true;
-          reason = `Stop Loss reached (${pnlPercent.toFixed(2)}%)`;
+           percentageToClose = 100;
+           reason = `Stop Loss Reached (${pnlPercent.toFixed(2)}%)`;
         }
 
-        if (shouldExit) {
-          logger.info({ positionId, reason }, 'Exiting position');
-          await traderService.closePosition(trade, currentPriceUsd, 100);
-          
-          // Send notification via another queue or event
-        } else {
-          // Re-queue for monitoring if not exited
-          // We can just rely on a cron that pushes all open positions to MONITOR queue every minute
+        if (percentageToClose > 0) {
+          logger.info({ positionId, reason, percentageToClose }, 'Exiting position');
+          await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
         }
 
       } catch (err) {

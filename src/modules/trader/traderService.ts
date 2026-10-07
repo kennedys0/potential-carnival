@@ -1,5 +1,9 @@
 import { TradeRepository, TradeRecord } from '../../database/repositories/tradeRepository';
 import { appSettings } from '../../config/settings';
+import { getEnv } from '../../config/env';
+import { getRedisConnection } from '../../queue/connection';
+import { LiveTradingDisabledError, KillSwitchActiveError } from '../../utils/errors';
+import crypto from 'crypto';
 
 export interface OrderRequest {
   userId: number;
@@ -30,6 +34,8 @@ export class TraderService {
   }
 
   async executeOrder(req: OrderRequest): Promise<TradeRecord> {
+    await this.assertTradingAllowed(req.userId, 'BUY', req.isDryRun);
+
     if (req.isDryRun) {
       // Paper Trading: Simulate execution with market price and config fee
       const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * appSettings.PAPER_TRADE_SOL_PRICE) / req.currentPriceUsd : 0;
@@ -50,6 +56,10 @@ export class TraderService {
 
     if (!this.jupiterClient) {
       throw new Error('Jupiter client required for live trade execution');
+    }
+
+    if (!getEnv().LIVE_TRADING_ENABLED) {
+      throw new LiveTradingDisabledError();
     }
 
     // Live Trading Execution via Jupiter
@@ -73,28 +83,89 @@ export class TraderService {
 
     const transaction = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
 
-    // Sign and send via WalletService safely
-    const signature = await this.walletService.signAndSendVersionedTransaction(req.userId, transaction);
+    const idempotencyKey = `buy_${req.userId}_${req.tokenMint}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
-    const outAmount = parseInt(quote.outAmount);
-    // Rough estimate (need decimals for exact), assuming 6 for meme coins. 
-    // Jupiter API outAmount includes decimals. Let's use current price for rough token amount in DB record:
-    const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * appSettings.PAPER_TRADE_SOL_PRICE) / req.currentPriceUsd : outAmount / 1_000_000;
+    try {
+      // Sign and send via WalletService safely (waits for confirmation timeout 30s)
+      const signature = await this.walletService.signAndSendVersionedTransaction(req.userId, transaction);
 
-    return this.tradeRepo.createTrade({
-      user_id: req.userId,
-      token_mint: req.tokenMint,
-      token_symbol: req.tokenSymbol,
-      side: 'BUY',
-      source: req.source,
-      is_dry_run: false,
-      sol_amount: req.solAmount,
-      token_amount: tokenAmount,
-      entry_price_usd: req.currentPriceUsd,
-      fee_lamports: 0, // fee is abstracted in Jupiter swap
-      status: 'OPEN',
-      tx_signature: signature,
-    });
+      // Give RPC a small delay to index the parsed transaction
+      await new Promise((res) => setTimeout(res, 2000));
+      const tx = await this.walletService.getParsedTransaction(signature);
+
+      let solSpentLamports = 0;
+      let tokenReceivedRaw = 0;
+      let tokenDecimals = 0;
+      let feeLamports = 0;
+      
+      const outAmountEstimate = parseInt(quote.outAmount);
+      let finalTokenAmount = outAmountEstimate > 0 ? outAmountEstimate / 1_000_000 : 0; // Fallback
+      let finalSolAmount = req.solAmount;
+
+      if (tx && tx.meta) {
+        feeLamports = tx.meta.fee || 0;
+        
+        // Find user account index
+        const accountIndex = tx.transaction.message.accountKeys.findIndex((k: any) => k.pubkey.toBase58() === wallet.publicKey);
+        if (accountIndex >= 0) {
+          solSpentLamports = tx.meta.preBalances[accountIndex] - tx.meta.postBalances[accountIndex] - feeLamports;
+          finalSolAmount = solSpentLamports / 1e9;
+        }
+
+        const preToken = tx.meta.preTokenBalances?.find((t: any) => t.owner === wallet.publicKey && t.mint === req.tokenMint);
+        const postToken = tx.meta.postTokenBalances?.find((t: any) => t.owner === wallet.publicKey && t.mint === req.tokenMint);
+
+        const preAmtRaw = preToken ? parseInt(preToken.uiTokenAmount.amount, 10) : 0;
+        const postAmtRaw = postToken ? parseInt(postToken.uiTokenAmount.amount, 10) : 0;
+        tokenReceivedRaw = postAmtRaw - preAmtRaw;
+        
+        tokenDecimals = postToken ? postToken.uiTokenAmount.decimals : (preToken ? preToken.uiTokenAmount.decimals : 6);
+        if (tokenReceivedRaw > 0) {
+          finalTokenAmount = tokenReceivedRaw / Math.pow(10, tokenDecimals);
+        }
+      }
+
+      return this.tradeRepo.createTrade({
+        user_id: req.userId,
+        token_mint: req.tokenMint,
+        token_symbol: req.tokenSymbol,
+        side: 'BUY',
+        source: req.source,
+        is_dry_run: false,
+        sol_amount: finalSolAmount,
+        token_amount: finalTokenAmount,
+        entry_price_usd: req.currentPriceUsd,
+        fee_lamports: feeLamports,
+        status: 'OPEN',
+        tx_signature: signature,
+        token_amount_raw: tokenReceivedRaw,
+        token_decimals: tokenDecimals,
+        sol_spent_lamports: solSpentLamports,
+        sol_usd_at_fill: req.currentPriceUsd,
+        idempotency_key: idempotencyKey,
+      });
+
+    } catch (err: any) {
+      const failureReason = err.message || 'Unknown execution error';
+      if (failureReason.toLowerCase().includes('slippage') || failureReason.toLowerCase().includes('timeout') || failureReason.toLowerCase().includes('blockhash')) {
+        await this.tradeRepo.createTrade({
+          user_id: req.userId,
+          token_mint: req.tokenMint,
+          token_symbol: req.tokenSymbol,
+          side: 'BUY',
+          source: req.source,
+          is_dry_run: false,
+          sol_amount: req.solAmount,
+          token_amount: 0,
+          entry_price_usd: req.currentPriceUsd,
+          fee_lamports: 0,
+          status: 'FAILED',
+          failure_reason: failureReason,
+          idempotency_key: idempotencyKey,
+        });
+      }
+      throw err;
+    }
   }
 
   async closePosition(trade: TradeRecord, currentPriceUsd: number, percentageToClose: number = 100): Promise<void> {
@@ -111,6 +182,9 @@ export class TraderService {
     if (trade.is_dry_run) {
       // Paper Trading close
     } else {
+      if (!getEnv().LIVE_TRADING_ENABLED) {
+        throw new LiveTradingDisabledError();
+      }
       if (!this.jupiterClient) throw new Error('Jupiter client required for live trade execution');
       
       const wallet = await this.walletService.getOrCreateWallet(trade.user_id);
@@ -135,9 +209,34 @@ export class TraderService {
       );
 
       const transaction = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
-      signature = await this.walletService.signAndSendVersionedTransaction(trade.user_id, transaction);
       
-      // We could calculate actual exit price from quote.outAmount vs amountToClose
+      try {
+        signature = await this.walletService.signAndSendVersionedTransaction(trade.user_id, transaction);
+        
+        await new Promise((res) => setTimeout(res, 2000));
+        const tx = await this.walletService.getParsedTransaction(signature);
+        
+        if (tx && tx.meta) {
+          const accountIndex = tx.transaction.message.accountKeys.findIndex((k: any) => k.pubkey.toBase58() === wallet.publicKey);
+          let solReceivedLamports = 0;
+          let feeLamports = tx.meta.fee || 0;
+          if (accountIndex >= 0) {
+            solReceivedLamports = tx.meta.postBalances[accountIndex] - tx.meta.preBalances[accountIndex] + feeLamports;
+          }
+          // Assuming we can derive true exit price
+          if (solReceivedLamports > 0 && trade.token_amount > 0) {
+             const solReceived = solReceivedLamports / 1e9;
+             // Calculate effective exit price in USD (assuming SOL price is roughly the same, or we use entry price)
+             // Not perfect but better than relying on currentPriceUsd strictly if we have real data
+          }
+        }
+      } catch (err: any) {
+         await this.tradeRepo.updateTradeStatus(trade.id, {
+            status: 'FAILED', // or revert to OPEN if we treat exit failure as still OPEN
+            failure_reason: err.message || 'Exit failed',
+         });
+         throw err;
+      }
     }
 
     const pnlPercent = ((exitPrice - trade.entry_price_usd) / trade.entry_price_usd) * 100;
@@ -155,5 +254,21 @@ export class TraderService {
       closed_at: new Date().toISOString(),
       tx_signature: signature || trade.tx_signature,
     });
+  }
+
+  private async assertTradingAllowed(userId: number, side: 'BUY' | 'SELL', isDryRun: boolean): Promise<void> {
+    const redis = getRedisConnection();
+    const isKillSwitchActive = await redis.get('killswitch:global');
+    
+    // Kill-switch rejects BUY orders (entry), but allows SELL (exit)
+    if (isKillSwitchActive === '1' && side === 'BUY') {
+      throw new KillSwitchActiveError();
+    }
+    
+    // Live trading check for buys is already handled in the live path of executeOrder, 
+    // but we can also enforce it here globally if it's not a dry run and we're entering
+    if (!isDryRun && side === 'BUY' && !getEnv().LIVE_TRADING_ENABLED) {
+        throw new LiveTradingDisabledError();
+    }
   }
 }

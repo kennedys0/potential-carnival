@@ -11,6 +11,14 @@ export class WalletService {
     private readonly connection: Connection
   ) {}
 
+  public getConnection(): Connection {
+    return this.connection;
+  }
+
+  async getParsedTransaction(signature: string) {
+    return this.connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  }
+
   async getOrCreateWallet(userId: number): Promise<{ publicKey: string }> {
     const existing = await this.walletRepo.getWalletByUserId(userId);
     if (existing) {
@@ -207,10 +215,17 @@ export class WalletService {
         preflightCommitment: 'confirmed',
       });
 
-      await this.connection.confirmTransaction(
+      // Create a promise that rejects after 30 seconds
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Transaction confirmation timeout (30s)')), 30000);
+      });
+
+      const confirmPromise = this.connection.confirmTransaction(
         { signature, blockhash, lastValidBlockHeight },
         'confirmed'
       );
+
+      await Promise.race([confirmPromise, timeoutPromise]);
 
       return signature;
     } finally {

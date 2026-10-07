@@ -18,26 +18,49 @@ export class HoneypotSimulator {
       if (!this.jupiterClient) {
         throw new Error('Jupiter client not initialized');
       }
+      // 1. Dapatkan quote beli dari WSOL ke Token (0.01 SOL = 10,000,000 lamports)
+      const amountInSolLamports = 10_000_000;
+      const wsolMint = 'So11111111111111111111111111111111111111112';
       
-      // 1. Dapatkan quote jual untuk token ke WSOL
-      const quote = await this.jupiterClient.getQuote(tokenMint, 'So11111111111111111111111111111111111111112', 1000000, 200);
+      const buyQuote = await this.jupiterClient.getQuote(wsolMint, tokenMint, amountInSolLamports, 200);
 
-      if (!quote || !quote.outAmount) {
+      if (!buyQuote || !buyQuote.outAmount) {
         return {
           canSell: { value: false, status: 'OK', source: 'Jupiter Quote API' },
-          effectiveTaxPercent: { value: null, status: 'UNAVAILABLE', source: 'Jupiter Quote API' },
+          effectiveTaxPercent: { value: null, status: 'UNAVAILABLE', source: 'No buy route found' },
           priceImpactPct: { value: null, status: 'UNAVAILABLE', source: 'Jupiter Quote API' },
         };
       }
 
-      const priceImpact = parseFloat(quote.priceImpactPct || '0');
+      const tokenReceived = parseInt(buyQuote.outAmount);
+
+      // 2. Dapatkan quote jual dari Token ke WSOL
+      const sellQuote = await this.jupiterClient.getQuote(tokenMint, wsolMint, tokenReceived, 200);
+
+      if (!sellQuote || !sellQuote.outAmount) {
+        return {
+          canSell: { value: false, status: 'OK', source: 'Jupiter Quote API' },
+          effectiveTaxPercent: { value: null, status: 'UNAVAILABLE', source: 'No sell route found' },
+          priceImpactPct: { value: null, status: 'UNAVAILABLE', source: 'Jupiter Quote API' },
+        };
+      }
+
+      const solReturned = parseInt(sellQuote.outAmount);
       
-      // Since dummy wallets fail on-chain simulation due to missing SOL/Token balances,
-      // we rely on Jupiter's routing engine. If Jupiter finds a valid route with outAmount > 0, 
-      // it means there is liquidity and a sell path exists.
+      // Hitung rugi fee (tax)
+      let effectiveTaxPercent = 0;
+      if (solReturned < amountInSolLamports) {
+         effectiveTaxPercent = ((amountInSolLamports - solReturned) / amountInSolLamports) * 100;
+      }
+
+      const priceImpact = parseFloat(sellQuote.priceImpactPct || '0');
+      
+      // Jika rugi > 30%, asumsikan honeypot ekstrim
+      const canSell = effectiveTaxPercent < 30;
+
       return {
-        canSell: { value: true, status: 'OK', source: 'Jupiter Route Validation' },
-        effectiveTaxPercent: { value: 0, status: 'OK', source: 'Est. 0% (Sim Skipped)' },
+        canSell: { value: canSell, status: 'OK', source: 'Jupiter Roundtrip Validation' },
+        effectiveTaxPercent: { value: effectiveTaxPercent, status: 'OK', source: 'Jupiter Roundtrip Validation' },
         priceImpactPct: { value: priceImpact, status: 'OK', source: 'Jupiter Quote API' },
       };
     } catch (err: any) {

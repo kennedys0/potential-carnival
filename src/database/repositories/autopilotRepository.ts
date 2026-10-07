@@ -13,6 +13,18 @@ export interface AutopilotConfigRecord {
   updated_at?: string;
 }
 
+export interface AutopilotStateRecord {
+  user_id: number;
+  is_circuit_broken: boolean;
+  circuit_break_reason?: string | null;
+  consecutive_losses: number;
+  daily_realized_pnl_sol: number;
+  daily_trades_count: number;
+  last_trade_at?: string | null;
+  max_drawdown?: number;
+  updated_at?: string;
+}
+
 export interface DecisionLogRecord {
   id?: string;
   user_id: number;
@@ -103,6 +115,33 @@ export class AutopilotRepository {
 
     if (error) throw new Error(`Failed to update autopilot config: ${error.message}`);
     return data as AutopilotConfigRecord;
+  }
+
+  async getAutopilotState(userId: number): Promise<AutopilotStateRecord | null> {
+    const { data, error } = await this.db
+      .from('autopilot_states')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      throw new Error(`Failed to getAutopilotState: ${error.message}`);
+    }
+    return data as AutopilotStateRecord | null;
+  }
+
+  async updateAutopilotState(userId: number, updates: Partial<AutopilotStateRecord>): Promise<void> {
+    // Upsert equivalent since we might not have a state yet
+    const { error } = await this.db
+      .from('autopilot_states')
+      .upsert({ user_id: userId, ...updates, updated_at: new Date().toISOString() });
+    
+    if (error) throw new Error(`Failed to updateAutopilotState: ${error.message}`);
+  }
+
+  async saveCircuitBreakerEvent(event: { user_id: number; trigger_type: string; description: string }): Promise<void> {
+    const { error } = await this.db.from('circuit_breaker_events').insert(event);
+    if (error) throw new Error(`Failed to saveCircuitBreakerEvent: ${error.message}`);
   }
 
   async saveDecisionLog(log: DecisionLogRecord): Promise<void> {

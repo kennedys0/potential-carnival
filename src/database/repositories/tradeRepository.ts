@@ -19,6 +19,13 @@ export interface TradeRecord {
   status: 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
   created_at?: string;
   closed_at?: string | null;
+  token_amount_raw?: number | null;
+  token_decimals?: number | null;
+  sol_spent_lamports?: number | null;
+  sol_received_lamports?: number | null;
+  sol_usd_at_fill?: number | null;
+  failure_reason?: string | null;
+  idempotency_key?: string | null;
 }
 
 export class TradeRepository {
@@ -36,13 +43,42 @@ export class TradeRepository {
   }
 
   async getOpenTradesByUserId(userId: number): Promise<TradeRecord[]> {
+    return this.getTradesByStatuses(userId, ['OPEN']);
+  }
+
+  async getTradesByStatuses(userId: number, statuses: string[]): Promise<TradeRecord[]> {
     const { data, error } = await this.db
       .from('trades')
       .select('*')
       .eq('user_id', userId)
-      .eq('status', 'OPEN');
+      .in('status', statuses);
 
-    if (error) throw new Error(`Failed to getOpenTradesByUserId: ${error.message}`);
+    if (error) throw new Error(`Failed to getTradesByStatuses: ${error.message}`);
+    return (data || []) as TradeRecord[];
+  }
+
+  async getClosedTradesSince(userId: number, sinceStr: string): Promise<TradeRecord[]> {
+    const { data, error } = await this.db
+      .from('trades')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'CLOSED')
+      .gte('closed_at', sinceStr);
+
+    if (error) throw new Error(`Failed to getClosedTradesSince: ${error.message}`);
+    return (data || []) as TradeRecord[];
+  }
+
+  async getRecentClosedTrades(userId: number, limit: number = 10): Promise<TradeRecord[]> {
+    const { data, error } = await this.db
+      .from('trades')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'CLOSED')
+      .order('closed_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw new Error(`Failed to getRecentClosedTrades: ${error.message}`);
     return (data || []) as TradeRecord[];
   }
 

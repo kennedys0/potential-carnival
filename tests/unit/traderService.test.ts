@@ -1,7 +1,29 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TraderService } from '../../src/modules/trader/traderService';
+import { LiveTradingDisabledError, KillSwitchActiveError } from '../../src/utils/errors';
+
+vi.mock('../../src/config/env', () => ({
+  getEnv: vi.fn(() => ({
+    LIVE_TRADING_ENABLED: true,
+  })),
+}));
+
+const mockRedis = {
+  get: vi.fn(),
+  set: vi.fn(),
+  del: vi.fn(),
+};
+
+vi.mock('../../src/queue/connection', () => ({
+  getRedisConnection: vi.fn(() => mockRedis),
+}));
 
 describe('TraderService', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRedis.get.mockResolvedValue(null); // Kill switch off by default
+  });
+
   it('calculates dynamic slippage capped at maxSlippageBps', () => {
     const service = new TraderService({} as any);
     const slippage = service.calculateDynamicSlippage(100, 1.5, 300); // 100 + 1.5*120 = 280 <= 300
@@ -58,6 +80,10 @@ describe('TraderService', () => {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
       getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
       signAndSendVersionedTransaction: vi.fn().mockResolvedValue('mock-tx-sig-123'),
+      getParsedTransaction: vi.fn().mockResolvedValue({
+        meta: { fee: 5000, preBalances: [2_000_000_000], postBalances: [1_500_000_000] },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }] } }
+      }),
     };
     const mockJupiterClient: any = {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
@@ -79,7 +105,62 @@ describe('TraderService', () => {
     expect(mockJupiterClient.getQuote).toHaveBeenCalled();
     expect(mockJupiterClient.getSwapTransaction).toHaveBeenCalled();
     expect(mockWalletService.signAndSendVersionedTransaction).toHaveBeenCalled();
+    expect(mockWalletService.getParsedTransaction).toHaveBeenCalledWith('mock-tx-sig-123');
     expect(result.tx_signature).toBe('mock-tx-sig-123');
     expect(result.is_dry_run).toBe(false);
+    expect(result.idempotency_key).toMatch(/^buy_111_EPj/);
+    expect(result.sol_spent_lamports).toBeDefined();
+  });
+
+  it('rejects BUY order if kill-switch is active', async () => {
+    mockRedis.get.mockResolvedValue('1'); // Kill switch active
+    
+    const service = new TraderService({} as any, {} as any, {} as any);
+    await expect(service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 0.5,
+      currentPriceUsd: 1.0,
+      isDryRun: false,
+      source: 'MANUAL',
+    })).rejects.toThrow(KillSwitchActiveError);
+  });
+
+  it('allows SELL (closePosition) even if kill-switch is active', async () => {
+    mockRedis.get.mockResolvedValue('1'); // Kill switch active
+    
+    const mockTradeRepo: any = {
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+    };
+    const service = new TraderService(mockTradeRepo, {} as any, {} as any);
+    
+    // Test that closePosition doesn't throw KillSwitchActiveError
+    await expect(service.closePosition({
+      id: 'trade-uuid',
+      user_id: 111,
+      token_mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      status: 'OPEN',
+      is_dry_run: true,
+      sol_amount: 0.5,
+      token_amount: 10,
+      entry_price_usd: 1.0,
+    } as any, 1.5, 100)).resolves.not.toThrow();
+  });
+
+  it('rejects live trade if LIVE_TRADING_ENABLED is false', async () => {
+    const { getEnv } = await import('../../src/config/env');
+    vi.mocked(getEnv).mockReturnValueOnce({ LIVE_TRADING_ENABLED: false } as any);
+    
+    const service = new TraderService({} as any, {} as any, {} as any);
+    await expect(service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 0.5,
+      currentPriceUsd: 1.0,
+      isDryRun: false, // Live trade
+      source: 'MANUAL',
+    })).rejects.toThrow(LiveTradingDisabledError);
   });
 });

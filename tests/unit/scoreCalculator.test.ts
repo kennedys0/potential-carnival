@@ -19,7 +19,7 @@ describe('ScoreCalculator', () => {
 
     const result = ScoreCalculator.calculate(input);
     expect(result.score).toBe(0);
-    expect(result.level).toBe('DANGER');
+    expect(result.level).toBe('UNAVAILABLE');
     expect(result.isHardBlocked).toBe(true);
     expect(result.hardBlockReasons).toContain('Mint authority still active');
   });

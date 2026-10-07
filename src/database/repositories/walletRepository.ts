@@ -7,6 +7,7 @@ export interface WalletRecord {
   encrypted_private_key: string;
   iv: string;
   auth_tag: string;
+  owner_pubkey?: string | null;
   created_at?: string;
 }
 
@@ -41,5 +42,19 @@ export class WalletRepository {
       .select('*');
     if (error) throw new Error(`Failed to getAllWallets: ${error.message}`);
     return data as WalletRecord[];
+  }
+
+  async updateOwnerPubkey(userId: number, pubkey: string): Promise<boolean> {
+    const { data, error } = await this.db
+      .from('user_wallets')
+      .update({ owner_pubkey: pubkey })
+      .eq('user_id', userId)
+      .select()
+      .single();
+    if (error || !data) {
+       console.error('Failed to update owner_pubkey:', error);
+       return false;
+    }
+    return true;
   }
 }

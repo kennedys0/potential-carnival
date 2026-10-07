@@ -32,6 +32,8 @@ export const EnvSchema = z.object({
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   JITO_TIP_LAMPORTS: z.coerce.number().default(100000),
   WHITELISTED_USERS: z.string().default(''), // comma-separated user IDs
+  ADMIN_USER_IDS: z.string().default(''), // comma-separated user IDs for admin roles
+  LIVE_TRADING_ENABLED: z.coerce.boolean().default(false),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

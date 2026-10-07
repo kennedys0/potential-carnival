@@ -23,6 +23,7 @@ import { AutopilotEngine } from './modules/autopilot/autopilotEngine';
 import { createTelegramBot } from './modules/telegram/bot';
 import { registerBotRoutes } from './modules/telegram/router';
 import { TrendScanner } from './modules/scanner/trendScanner';
+import { UserStateService } from './modules/user/userStateService';
 
 async function main() {
   logger.info('Initializing Solana Scalping Bot services...');
@@ -63,17 +64,19 @@ async function main() {
   const queues = createQueues();
 
   const scannerService = new ScannerService(dexScreenerClient, geckoTerminalClient, redis);
+  const userStateService = new UserStateService(tradeRepo, autopilotRepo, walletService);
   
   const trendScanner = new TrendScanner(
     scannerService,
     autopilotEngine,
     securityService,
     analyzerService,
-    autopilotRepo
+    autopilotRepo,
+    userStateService
   );
 
   // BullMQ Workers
-  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo);
+  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient);
 
   // Position Monitoring Scheduler (runs every minute)
   if (process.env.NODE_ENV !== 'test') {

@@ -4,6 +4,7 @@ import { AutopilotEngine } from '../autopilot/autopilotEngine';
 import { SecurityFilterService } from '../security/securityFilterService';
 import { AnalyzerService } from '../analyzer/analyzerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
+import { UserStateService } from '../user/userStateService';
 
 export const liveFeedSubscribers = new Set<number>();
 
@@ -18,7 +19,8 @@ export class TrendScanner {
     private readonly autopilotEngine: AutopilotEngine,
     private readonly securityService: SecurityFilterService,
     private readonly analyzerService: AnalyzerService,
-    private readonly autopilotRepo: AutopilotRepository
+    private readonly autopilotRepo: AutopilotRepository,
+    private readonly userStateService: UserStateService
   ) {}
 
   start() {
@@ -63,18 +65,46 @@ export class TrendScanner {
 
       const solanaTokens = tokens.filter((t: any) => t.chainId === 'solana' && !scannedTokensCache.has(t.tokenAddress));
       
-      // Take top 3 to avoid rate limits
-      const topTokens = solanaTokens.slice(0, 3);
-      logger.info(`TrendScanner: Found ${topTokens.length} NEW trending Solana tokens.`);
+      // Ambil top 15 token trending untuk di-scan ringan
+      const tokensToScan = solanaTokens.slice(0, 15);
+      logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW trending Solana tokens.`);
 
-      for (const token of topTokens) {
-        const tokenAddress = token.tokenAddress;
+      // Ambil profile/pair DexScreener secara concurrent max 3 sekaligus (Chunking manual)
+      const fetchedPairs = [];
+      const chunkSize = 3;
+      for (let i = 0; i < tokensToScan.length; i += chunkSize) {
+        const chunk = tokensToScan.slice(i, i + chunkSize);
+        const chunkPromises = chunk.map(async (t) => {
+          try {
+            return await this.scannerService.scanTokenByAddress(t.tokenAddress);
+          } catch (e) {
+            return null;
+          }
+        });
+        const results = await Promise.all(chunkPromises);
+        fetchedPairs.push(...results.filter((p) => p !== null));
+        
+        // Kasih nafas ke API DexScreener
+        if (i + chunkSize < tokensToScan.length) {
+          await new Promise((res) => setTimeout(res, 500));
+        }
+      }
+
+      // Sort by 24h volume (highest first)
+      const sortedPairs = fetchedPairs.sort((a: any, b: any) => {
+        const volA = a.volume?.h24 || 0;
+        const volB = b.volume?.h24 || 0;
+        return volB - volA;
+      });
+
+      // Ambil top 3 pair paling likuid/bervolume tinggi untuk analisis mendalam (RPC calls)
+      const topPairs = sortedPairs.slice(0, 3);
+      logger.info(`TrendScanner: Selected top ${topPairs.length} pairs by volume for deep analysis.`);
+
+      for (const pair of topPairs) {
+        const tokenAddress = pair.baseToken.address;
         scannedTokensCache.set(tokenAddress, now);
         
-        // 3. Scan the token
-        const pair = await this.scannerService.scanTokenByAddress(tokenAddress);
-        if (!pair) continue;
-
         const priceUsd = parseFloat(pair.priceUsd || '0');
         if (priceUsd === 0) continue;
 
@@ -96,13 +126,22 @@ export class TrendScanner {
         // 4. Evaluate for all active users
         for (const config of activeConfigs) {
           try {
-            // Need to calculate current state for user (open positions, daily loss, etc)
-            // Simplified for now
-            const currentState = {
-              openPositionsCount: 0, // Should be fetched from tradeRepo
-              availableBalanceSol: 10, // Should be fetched from walletService
-              dailyLossSol: 0,
-              consecutiveLosses: 0,
+            const currentState = await this.userStateService.getAutopilotState(config.user_id);
+            
+            // Circuit Breaker Check
+            if (currentState.isCircuitBroken) {
+              logger.debug(`Autopilot circuit broken for user ${config.user_id}, skipping.`);
+              continue;
+            }
+
+            const rawSnapshot = {
+              tokenAddress,
+              priceUsd,
+              liquidityUsd: pair.liquidity?.usd,
+              marketCap: pair.marketCap || pair.fdv,
+              currentVolume,
+              indicators,
+              currentState
             };
 
             const result = await this.autopilotEngine.processCandidate(
@@ -113,7 +152,8 @@ export class TrendScanner {
               pair.liquidity?.usd || 0,
               security,
               aiAnalysis,
-              currentState
+              currentState,
+              rawSnapshot
             );
 
             if (result.executed) {
@@ -156,8 +196,11 @@ export class TrendScanner {
           } catch (err) {
             logger.error({ err, userId: config.user_id }, 'Error evaluating candidate for user');
           }
-        }
-      }
+        } // end loop over users
+
+        // Jeda minimal antar koin agar RPC tidak di-spam beruntun
+        await new Promise((res) => setTimeout(res, 2000));
+      } // end loop over pairs
       
       // Notify live feed subscribers that a cycle finished
       for (const userId of liveFeedSubscribers) {
@@ -166,7 +209,7 @@ export class TrendScanner {
           const envMod = await import('../../config/env.js');
           const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
           const bot = new grammy.Bot(botToken);
-          await bot.api.sendMessage(userId, `✅ <b>[Live Feed]</b> Selesai memindai ${topTokens.length} token trending. Siklus berikutnya dalam 2 menit.`, { parse_mode: 'HTML' });
+          await bot.api.sendMessage(userId, `✅ <b>[Live Feed]</b> Selesai memindai ${topPairs.length} token trending. Siklus berikutnya dalam 2 menit.`, { parse_mode: 'HTML' });
         } catch (e) {
           // ignore
         }
