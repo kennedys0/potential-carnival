@@ -1,0 +1,8 @@
+-- Round 3 Migration
+ALTER TABLE trades 
+ADD COLUMN IF NOT EXISTS pending_signature TEXT,
+ADD COLUMN IF NOT EXISTS exit_attempts INT DEFAULT 0,
+ADD COLUMN IF NOT EXISTS last_exit_error TEXT,
+ADD COLUMN IF NOT EXISTS needs_attention BOOLEAN DEFAULT false,
+ADD COLUMN IF NOT EXISTS remaining_raw NUMERIC,
+ADD COLUMN IF NOT EXISTS realized_pnl_sol NUMERIC DEFAULT 0;

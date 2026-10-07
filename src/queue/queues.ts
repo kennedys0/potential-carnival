@@ -6,6 +6,7 @@ export const QUEUE_NAMES = {
   EVAL: 'eval-queue',
   EXEC: 'exec-queue',
   MONITOR: 'monitor-queue',
+  RECONCILE: 'reconcile-queue',
 } as const;
 
 export interface ScanJobPayload {
@@ -44,5 +45,6 @@ export function createQueues() {
     evalQueue: new Queue<EvalJobPayload>(QUEUE_NAMES.EVAL, { connection: redis }),
     execQueue: new Queue<ExecJobPayload>(QUEUE_NAMES.EXEC, { connection: redis }),
     monitorQueue: new Queue<MonitorJobPayload>(QUEUE_NAMES.MONITOR, { connection: redis }),
+    reconcileQueue: new Queue<void>(QUEUE_NAMES.RECONCILE, { connection: redis }),
   };
 }

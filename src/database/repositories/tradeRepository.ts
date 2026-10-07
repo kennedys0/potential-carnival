@@ -26,6 +26,12 @@ export interface TradeRecord {
   sol_usd_at_fill?: number | null;
   failure_reason?: string | null;
   idempotency_key?: string | null;
+  pending_signature?: string | null;
+  exit_attempts?: number;
+  last_exit_error?: string | null;
+  needs_attention?: boolean;
+  remaining_raw?: number | null;
+  realized_pnl_sol?: number | null;
 }
 
 export class TradeRepository {

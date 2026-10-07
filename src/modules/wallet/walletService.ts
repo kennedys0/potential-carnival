@@ -4,6 +4,7 @@ import bs58 from 'bs58';
 import { KeypairService } from './keypairService';
 import { WalletRepository } from '../../database/repositories/walletRepository';
 import { getEnv } from '../../config/env';
+import { TxSender, TxSendResult } from './txSender';
 
 export class WalletService {
   constructor(
@@ -174,25 +175,24 @@ export class WalletService {
       }).compileToV0Message();
 
       const transaction = new VersionedTransaction(finalMessage);
-      transaction.sign([keypair]);
 
-      const signature = await this.connection.sendTransaction(transaction, {
-        maxRetries: 3,
-        preflightCommitment: 'confirmed',
-      });
+      const result = await TxSender.sendAndConfirm(this.connection, transaction, [keypair]);
+      
+      if (result.status === 'FAILED_ONCHAIN') {
+        throw new Error(`Withdrawal gagal di on-chain: ${JSON.stringify(result.err)}`);
+      }
+      
+      if (result.status === 'UNKNOWN') {
+        throw new Error('Status transaksi tidak diketahui (mungkin expired/timeout), cek explorer.');
+      }
 
-      await this.connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        'confirmed'
-      );
-
-      return signature;
+      return result.signature;
     } finally {
       KeypairService.clearKeypair(keypair); // zero out memory per transaction
     }
   }
 
-  async signAndSendVersionedTransaction(userId: number, transaction: any): Promise<string> {
+  async signAndSendVersionedTransaction(userId: number, transaction: any, onSignature?: (sig: string) => Promise<void>): Promise<TxSendResult> {
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar.');
 
@@ -207,27 +207,9 @@ export class WalletService {
     );
 
     try {
-      transaction.sign([keypair]);
-
-      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
-      const signature = await this.connection.sendTransaction(transaction, {
-        maxRetries: 3,
-        preflightCommitment: 'confirmed',
+      return await TxSender.sendAndConfirm(this.connection, transaction, [keypair], {
+        onSignature,
       });
-
-      // Create a promise that rejects after 30 seconds
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Transaction confirmation timeout (30s)')), 30000);
-      });
-
-      const confirmPromise = this.connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        'confirmed'
-      );
-
-      await Promise.race([confirmPromise, timeoutPromise]);
-
-      return signature;
     } finally {
       KeypairService.clearKeypair(keypair); // zero out memory per transaction
     }

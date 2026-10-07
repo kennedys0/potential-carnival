@@ -10,6 +10,7 @@ import { AutopilotRepository } from './database/repositories/autopilotRepository
 import { getRedisConnection } from './queue/connection';
 import { createQueues } from './queue/queues';
 import { createMonitorWorker } from './queue/workers/monitorWorker';
+import { createReconcileWorker } from './queue/workers/reconcileWorker';
 import { WalletService } from './modules/wallet/walletService';
 import { ScannerService } from './modules/scanner/scannerService';
 import { DexScreenerClient } from './modules/scanner/dexScreenerClient';
@@ -84,6 +85,7 @@ async function main() {
 
   // BullMQ Workers
   const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient);
+  const reconcileWorker = createReconcileWorker(tradeRepo, walletService);
 
   // Position Monitoring Scheduler (runs every minute)
   if (process.env.NODE_ENV !== 'test') {
@@ -106,6 +108,11 @@ async function main() {
 
     // Start Autopilot Trend Scanner
     trendScanner.start();
+
+    // Schedule Reconciliation Job (every 5 minutes)
+    queues.reconcileQueue.add('reconcile-job', undefined, {
+      repeat: { pattern: '*/5 * * * *' }
+    });
   }
 
   // Telegram Bot
@@ -152,10 +159,12 @@ async function main() {
       await bot.stop();
       trendScanner.stop();
       await monitorWorker.close();
+      await reconcileWorker.close();
       await queues.scanQueue.close();
       await queues.evalQueue.close();
       await queues.execQueue.close();
       await queues.monitorQueue.close();
+      await queues.reconcileQueue.close();
       await redis.quit();
       logger.info('Graceful shutdown completed successfully');
       process.exit(0);

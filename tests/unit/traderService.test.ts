@@ -75,11 +75,12 @@ describe('TraderService', () => {
   it('executes live trade and returns tx_signature on success', async () => {
     const mockTradeRepo: any = {
       createTrade: vi.fn().mockImplementation((trade) => Promise.resolve({ id: 'trade-uuid', ...trade })),
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
     };
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
       getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
-      signAndSendVersionedTransaction: vi.fn().mockResolvedValue('mock-tx-sig-123'),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'mock-tx-sig-123' }),
       getParsedTransaction: vi.fn().mockResolvedValue({
         meta: { fee: 5000, preBalances: [2_000_000_000], postBalances: [1_500_000_000] },
         transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }] } }
@@ -108,7 +109,7 @@ describe('TraderService', () => {
     expect(mockWalletService.getParsedTransaction).toHaveBeenCalledWith('mock-tx-sig-123');
     expect(result.tx_signature).toBe('mock-tx-sig-123');
     expect(result.is_dry_run).toBe(false);
-    expect(result.idempotency_key).toMatch(/^buy_111_EPj/);
+    expect(result.idempotency_key).toMatch(/^[0-9a-f]{64}$/);
     expect(result.sol_spent_lamports).toBeDefined();
   });
 
@@ -146,6 +147,51 @@ describe('TraderService', () => {
       token_amount: 10,
       entry_price_usd: 1.0,
     } as any, 1.5, 100)).resolves.not.toThrow();
+  });
+
+  it('keeps status OPEN/PARTIAL_EXIT on closePosition failure and increments exit_attempts (R3 Mutation)', async () => {
+    const mockTradeRepo: any = {
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+    };
+    const mockWalletService: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
+      getTokenBalance: vi.fn().mockResolvedValue(10_000_000), // 10 tokens
+      signAndSendVersionedTransaction: vi.fn().mockRejectedValue(new Error('RPC Timeout')),
+    };
+    const mockJupiterClient: any = {
+      getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ mockTx: true }),
+    };
+
+    const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
+
+    const trade = {
+      id: 'trade-123',
+      user_id: 111,
+      token_mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      status: 'OPEN',
+      is_dry_run: false,
+      sol_amount: 0.5,
+      token_amount: 10,
+      entry_price_usd: 1.0,
+      exit_attempts: 1,
+    };
+
+    await expect(service.closePosition(trade as any, 1.5, 100)).rejects.toThrow('RPC Timeout');
+
+    // It should have incremented exit_attempts to 2, and needs_attention should be false (since < 3)
+    // Status MUST NOT be FAILED. It remains whatever it was (we don't pass status in this update).
+    expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-123', expect.objectContaining({
+      exit_attempts: 2,
+    }));
+    expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-123', expect.objectContaining({
+      last_exit_error: 'RPC Timeout',
+      needs_attention: false,
+    }));
+    
+    // Check that it doesn't set status: 'FAILED' anywhere
+    const failedCalls = mockTradeRepo.updateTradeStatus.mock.calls.filter((c: any) => c[1].status === 'FAILED');
+    expect(failedCalls.length).toBe(0);
   });
 
   it('rejects live trade if LIVE_TRADING_ENABLED is false', async () => {
