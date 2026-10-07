@@ -29,6 +29,13 @@ async function main() {
   logger.info('Initializing Solana Scalping Bot services...');
 
   const env = getEnv();
+  
+  if (env.LIVE_TRADING_ENABLED) {
+    logger.warn('⚠️ WARNING: LIVE TRADING IS ENABLED ⚠️');
+  } else {
+    logger.info('🛡️ System is running in PAPER TRADING ONLY mode.');
+  }
+
   const solanaConnection = new Connection(env.SOLANA_RPC_URL, {
     commitment: 'confirmed',
     wsEndpoint: env.SOLANA_WSS_URL,

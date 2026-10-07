@@ -122,7 +122,7 @@ flowchart TD
 | **Solana RPC** | Query on-chain, getBalance, simulasi tx, WebSocket | `https://api.mainnet-beta.solana.com` | Helius / QuickNode direkomendasikan untuk produksi |
 | **DexScreener API** | Data candle, harga live, likuiditas, volume | `https://api.dexscreener.com/latest/dex/tokens` | Endpoint publik (~300 req/menit) |
 | **Jupiter API** | Quote swap, routing rute terbaik, serialisasi swap | `@jup-ag/api` / `https://quote-api.jup.ag` | Bebas kuota publik, dynamic rate limit |
-| **DeepSeek Gateway** | Evaluasi konfluensi setup scalping | `https://bandelbanget.xyz/v1/chat/completions` | Menggunakan model `deepseek-v4-flash` |
+| **DeepSeek Gateway** | Evaluasi konfluensi setup scalping | `https://api.deepseek.com/v1/chat/completions` | Menggunakan model `deepseek-v4-flash` |
 | **Supabase** | Database PostgreSQL relational untuk data user & log | `@supabase/supabase-js` | Tabel terstruktur dengan RLS dan foreign keys |
 | **Redis 7** | Broker antrean BullMQ & distributed locks | `redis://127.0.0.1:6379` | Self-hosted via Docker container |
 
@@ -250,6 +250,17 @@ AI_MODEL=
 
 # Redis Connection URL
 REDIS_URL=redis://127.0.0.1:6379
+
+# Security & Access Control
+# Daftar ID Telegram pengguna yang diizinkan menggunakan bot (pisahkan dengan koma)
+WHITELISTED_USERS=
+# Daftar ID Telegram admin untuk akses kill-switch (pisahkan dengan koma)
+ADMIN_USER_IDS=
+
+# Trading Mode
+# "false" = PAPER TRADING ONLY (Standar aman). "true" = LIVE ON-CHAIN TRADING (Risiko uang nyata)
+LIVE_TRADING_ENABLED=false
+
 ```
 
 ### 4. Eksekusi Database Migration di Supabase
@@ -377,7 +388,7 @@ Keamanan private key pengguna adalah prioritas tertinggi sistem:
 
 ## 🧪 Pengujian (Testing)
 
-Proyek ini dibangun menggunakan metodologi **Test-Driven Development (TDD)** dengan 100% test coverage pada komponen kritis:
+Proyek ini dibangun menggunakan metodologi **Test-Driven Development (TDD)**:
 
 Jalankan seluruh test suite:
 ```bash

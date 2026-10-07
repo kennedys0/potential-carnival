@@ -33,7 +33,10 @@ export const EnvSchema = z.object({
   JITO_TIP_LAMPORTS: z.coerce.number().default(100000),
   WHITELISTED_USERS: z.string().default(''), // comma-separated user IDs
   ADMIN_USER_IDS: z.string().default(''), // comma-separated user IDs for admin roles
-  LIVE_TRADING_ENABLED: z.coerce.boolean().default(false),
+  LIVE_TRADING_ENABLED: z
+    .enum(['true', 'false'], { errorMap: () => ({ message: 'LIVE_TRADING_ENABLED must be exactly "true" or "false"' }) })
+    .default('false')
+    .transform((v) => v === 'true'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

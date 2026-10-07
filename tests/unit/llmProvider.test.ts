@@ -35,8 +35,8 @@ describe('OpenAiCompatibleProvider', () => {
     global.fetch = mockFetch;
 
     const provider = new OpenAiCompatibleProvider({
-      baseUrl: 'https://bandelbanget.xyz/v1',
-      apiKey: 'sk-qwen-aa2a54d96046e0b2579a779f76f1dc0c701fb89b18f36068',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'sk-qwen-dummy1234567890abcdef',
       model: 'deepseek-v4-flash',
     });
 
@@ -60,11 +60,11 @@ describe('OpenAiCompatibleProvider', () => {
     expect(result?.verdict).toBe('BUY');
     expect(result?.confidence).toBe(88);
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://bandelbanget.xyz/v1/chat/completions',
+      'https://api.deepseek.com/v1/chat/completions',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
-          Authorization: 'Bearer sk-qwen-aa2a54d96046e0b2579a779f76f1dc0c701fb89b18f36068',
+          Authorization: 'Bearer sk-qwen-dummy1234567890abcdef',
         }),
       })
     );

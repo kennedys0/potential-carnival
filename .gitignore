@@ -9,3 +9,6 @@ yarn-error.log*
 .DS_Store
 PROMPT.md
 CHANGES_SUMMARY.md
+test-jup.ts
+test-sim.ts
+test-*.ts
