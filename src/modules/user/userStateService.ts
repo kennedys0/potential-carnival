@@ -129,6 +129,9 @@ export class UserStateService {
     }
 
     if (reason) {
+      logger.error({ userId, reason }, `DANGER: Circuit Breaker triggered for user ${userId}. Reason: ${reason}`);
+      await redis.set(`killswitch:user:${userId}`, '1', 'EX', 86400); // Lock for 24h
+
       await this.autopilotRepo.updateAutopilotState(userId, {
         is_circuit_broken: true,
         circuit_break_reason: reason,
@@ -136,7 +139,7 @@ export class UserStateService {
       await this.autopilotRepo.updateConfig(userId, {
         is_active: false,
       });
-      // In a real app we'd trigger a notification here or write to circuit_breaker_events
+      
       await this.autopilotRepo.saveCircuitBreakerEvent({
         user_id: userId,
         trigger_type: 'CIRCUIT_BREAKER',

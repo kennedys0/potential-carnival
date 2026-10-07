@@ -310,10 +310,23 @@ export async function handleWalletWithdrawExecute(
   if (!ctx.from) return;
   
   try {
+    const { getRedisConnection } = require('../../../queue/connection');
+    const redis = getRedisConnection();
+    const rateLimitKey = `withdraw_ratelimit:${ctx.from.id}`;
+    const isLimited = await redis.get(rateLimitKey);
+    
+    if (isLimited) {
+      const ttl = await redis.ttl(rateLimitKey);
+      throw new Error(`Anda baru saja melakukan withdrawal. Silakan coba lagi dalam ${Math.ceil(ttl / 60)} menit.`);
+    }
+
     const amount = amountStr === 'MAX' ? 'MAX' : parseFloat(amountStr);
     
     // Attempt withdrawal
     const signature = await walletService.withdrawSol(ctx.from.id, address, amount);
+    
+    // Set rate limit (1 hour)
+    await redis.set(rateLimitKey, '1', 'EX', 3600);
     
     const text = `
 ✅ <b>Withdrawal Berhasil Terkirim!</b>

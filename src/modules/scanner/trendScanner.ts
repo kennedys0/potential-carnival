@@ -102,101 +102,106 @@ export class TrendScanner {
       logger.info(`TrendScanner: Selected top ${topPairs.length} pairs by volume for deep analysis.`);
 
       for (const pair of topPairs) {
-        const tokenAddress = pair.baseToken.address;
-        scannedTokensCache.set(tokenAddress, now);
-        
-        const priceUsd = parseFloat(pair.priceUsd || '0');
-        if (priceUsd === 0) continue;
+        try {
+          const tokenAddress = pair.baseToken.address;
+          scannedTokensCache.set(tokenAddress, now);
+          
+          const priceUsd = parseFloat(pair.priceUsd || '0');
+          if (priceUsd === 0) continue;
 
-        const security = await this.securityService.evaluateToken(tokenAddress, {
-          liquidityUsd: pair.liquidity?.usd || null,
-          marketCapUsd: pair.marketCap || pair.fdv || null,
-        });
+          const security = await this.securityService.evaluateToken(tokenAddress, {
+            liquidityUsd: pair.liquidity?.usd || null,
+            marketCapUsd: pair.marketCap || pair.fdv || null,
+          });
 
-        const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
-        const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
-        const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
-        
-        const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
-        let aiAnalysis = null;
-        if (indicators) {
-          aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
-        }
+          const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
+          const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
+          const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
+          
+          const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
+          let aiAnalysis = null;
+          if (indicators) {
+            aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
+          }
 
-        // 4. Evaluate for all active users
-        for (const config of activeConfigs) {
-          try {
-            const currentState = await this.userStateService.getAutopilotState(config.user_id);
-            
-            // Circuit Breaker Check
-            if (currentState.isCircuitBroken) {
-              logger.debug(`Autopilot circuit broken for user ${config.user_id}, skipping.`);
-              continue;
-            }
-
-            const rawSnapshot = {
-              tokenAddress,
-              priceUsd,
-              liquidityUsd: pair.liquidity?.usd,
-              marketCap: pair.marketCap || pair.fdv,
-              currentVolume,
-              indicators,
-              currentState
-            };
-
-            const result = await this.autopilotEngine.processCandidate(
-              config.user_id,
-              tokenAddress,
-              pair.baseToken.symbol,
-              priceUsd,
-              pair.liquidity?.usd || 0,
-              security,
-              aiAnalysis,
-              currentState,
-              rawSnapshot
-            );
-
-            if (result.executed) {
-              logger.info(`Autopilot executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
+          // 4. Evaluate for all active users
+          for (const config of activeConfigs) {
+            try {
+              const currentState = await this.userStateService.getAutopilotState(config.user_id);
               
-              // Notify user
-              try {
-                const grammy = await import('grammy');
-                const envMod = await import('../../config/env.js');
-                const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
-                const bot = new grammy.Bot(botToken);
-                await bot.api.sendMessage(config.user_id, 
-                  `🤖 <b>Autopilot Alert!</b>\n\n` +
-                  `Sistem baru saja mengeksekusi order <b>BUY</b> untuk token <b>${pair.baseToken.symbol}</b> secara otomatis!\n` +
-                  `Alasan: ${result.reason}\n\n` +
-                  `Cek /positions untuk melihat performa posisimu sekarang.`,
-                  { parse_mode: 'HTML' }
-                );
-              } catch (e) {
-                logger.error({ err: e }, 'Gagal mengirim notifikasi Autopilot ke user');
+              // Circuit Breaker Check
+              if (currentState.isCircuitBroken) {
+                logger.debug(`Autopilot circuit broken for user ${config.user_id}, skipping.`);
+                continue;
               }
-            } else {
-              logger.debug(`Autopilot skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
-              if (liveFeedSubscribers.has(config.user_id)) {
+
+              const rawSnapshot = {
+                tokenAddress,
+                priceUsd,
+                liquidityUsd: pair.liquidity?.usd,
+                marketCap: pair.marketCap || pair.fdv,
+                currentVolume,
+                indicators,
+                currentState
+              };
+
+              const result = await this.autopilotEngine.processCandidate(
+                config.user_id,
+                tokenAddress,
+                pair.baseToken.symbol,
+                priceUsd,
+                pair.liquidity?.usd || 0,
+                security,
+                aiAnalysis,
+                currentState,
+                rawSnapshot
+              );
+
+              if (result.executed) {
+                logger.info(`Autopilot executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
+                
+                // Notify user
                 try {
                   const grammy = await import('grammy');
                   const envMod = await import('../../config/env.js');
                   const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
                   const bot = new grammy.Bot(botToken);
                   await bot.api.sendMessage(config.user_id, 
-                    `🔍 <b>[Live Feed]</b> Token <b>${pair.baseToken.symbol}</b> di-skip.\n` +
-                    `Alasan: ${result.reason}`,
+                    `🤖 <b>Autopilot Alert!</b>\n\n` +
+                    `Sistem baru saja mengeksekusi order <b>BUY</b> untuk token <b>${pair.baseToken.symbol}</b> secara otomatis!\n` +
+                    `Alasan: ${result.reason}\n\n` +
+                    `Cek /positions untuk melihat performa posisimu sekarang.`,
                     { parse_mode: 'HTML' }
                   );
                 } catch (e) {
-                  // ignore live feed errors
+                  logger.error({ err: e }, 'Gagal mengirim notifikasi Autopilot ke user');
+                }
+              } else {
+                logger.debug(`Autopilot skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
+                if (liveFeedSubscribers.has(config.user_id)) {
+                  try {
+                    const grammy = await import('grammy');
+                    const envMod = await import('../../config/env.js');
+                    const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
+                    const bot = new grammy.Bot(botToken);
+                    await bot.api.sendMessage(config.user_id, 
+                      `🔍 <b>[Live Feed]</b> Token <b>${pair.baseToken.symbol}</b> di-skip.\n` +
+                      `Alasan: ${result.reason}`,
+                      { parse_mode: 'HTML' }
+                    );
+                  } catch (e) {
+                    // ignore live feed errors
+                  }
                 }
               }
+            } catch (err) {
+              logger.error({ err, userId: config.user_id }, 'Error evaluating candidate for user');
             }
-          } catch (err) {
-            logger.error({ err, userId: config.user_id }, 'Error evaluating candidate for user');
-          }
-        } // end loop over users
+          } // end loop over users
+        } catch (err) {
+          logger.error({ err, tokenAddress: pair.baseToken.address }, 'Error evaluating token candidate, skipping to next token');
+          continue;
+        }
 
         // Jeda minimal antar koin agar RPC tidak di-spam beruntun
         await new Promise((res) => setTimeout(res, 2000));

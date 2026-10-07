@@ -150,10 +150,22 @@ export class WalletService {
       const estimatedFee = fee.value || 5000;
       
       let transferLamports = 0;
+      const rentReserve = 0.01 * LAMPORTS_PER_SOL;
+      const maxAllowed = Math.floor(balance * 0.9); // Max 90% of balance
+      const absoluteMax = balance - rentReserve - estimatedFee; // Or keep 0.01 SOL rent
+      const safeMaxLamports = Math.min(maxAllowed, absoluteMax);
+
+      if (safeMaxLamports <= 0) {
+        throw new Error('Saldo terlalu kecil (minimal butuh 0.01 SOL sisa untuk rent).');
+      }
+
       if (amountSol === 'MAX') {
-        transferLamports = balance - estimatedFee;
+        transferLamports = safeMaxLamports;
       } else {
         transferLamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+        if (transferLamports > safeMaxLamports) {
+           throw new Error(`Jumlah terlalu besar. Maksimum yang diizinkan (safe limit): ${(safeMaxLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+        }
       }
 
       if (transferLamports <= 0 || transferLamports + estimatedFee > balance) {
