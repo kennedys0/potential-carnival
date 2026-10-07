@@ -31,7 +31,6 @@ export function createMonitorWorker(
         }
 
         const config = await autopilotRepo.getOrCreateConfig(userId);
-        if (!config.is_active) return; // don't monitor if autopilot is paused? Actually we should always monitor open positions.
         
         // Get current price
         let pnlPercent = 0;

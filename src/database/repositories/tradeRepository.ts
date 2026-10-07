@@ -49,7 +49,7 @@ export class TradeRepository {
   }
 
   async getOpenTradesByUserId(userId: number): Promise<TradeRecord[]> {
-    return this.getTradesByStatuses(userId, ['OPEN']);
+    return this.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT']);
   }
 
   async getTradesByStatuses(userId: number, statuses: string[]): Promise<TradeRecord[]> {

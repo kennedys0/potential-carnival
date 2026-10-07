@@ -1,9 +1,9 @@
 import { logger } from './logger';
 
 class CurrencyService {
-  private idrPerUsd: number = 15500; // Fallback
-  private idrPerSol: number = 2300000; // Fallback
-  private usdPerSol: number = 150; // Fallback
+  private idrPerUsd: number = 0;
+  private idrPerSol: number = 0;
+  private usdPerSol: number = 0;
   private lastFetchTime: number = 0;
   private readonly CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -36,7 +36,11 @@ class CurrencyService {
       this.lastFetchTime = now;
       logger.info({ idrPerUsd: this.idrPerUsd, idrPerSol: this.idrPerSol }, 'Currency rates updated from CoinGecko');
     } catch (err: any) {
-      logger.error({ err }, 'Failed to fetch currency rates from CoinGecko, using fallback/stale cache');
+      logger.error({ err }, 'Failed to fetch currency rates from CoinGecko');
+      // If we don't have a cache at all (still 0), we don't fallback to magic numbers
+      if (this.idrPerUsd === 0) {
+        logger.warn('Currency service could not initialize on first run. Will retry on next call.');
+      }
     }
   }
 
@@ -49,15 +53,24 @@ class CurrencyService {
     }).format(amount);
   }
 
+  private assertInitialized() {
+    if (this.idrPerUsd === 0 || this.idrPerSol === 0 || this.usdPerSol === 0) {
+      throw new Error('Currency rates not yet initialized. CoinGecko API might be down.');
+    }
+  }
+
   getIdrPerUsd(): number {
+    this.assertInitialized();
     return this.idrPerUsd;
   }
 
   getIdrPerSol(): number {
+    this.assertInitialized();
     return this.idrPerSol;
   }
 
   getUsdPerSol(): number {
+    this.assertInitialized();
     return this.usdPerSol;
   }
 }
