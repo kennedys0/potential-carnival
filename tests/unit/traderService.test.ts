@@ -175,6 +175,7 @@ describe('TraderService', () => {
       token_amount: 10,
       entry_price_usd: 1.0,
       exit_attempts: 1,
+      remaining_raw: 10_000_000,
     };
 
     await expect(service.closePosition(trade as any, 1.5, 100)).rejects.toThrow('RPC Timeout');

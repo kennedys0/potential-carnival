@@ -53,25 +53,58 @@ export function createReconcileWorker(
       const { data: openTrades, error: err2 } = await tradeRepo.db
         .from('trades')
         .select('*')
-        .in('status', ['OPEN', 'PARTIAL_EXIT']);
+        .in('status', ['OPEN', 'PARTIAL_EXIT'])
+        .order('created_at', { ascending: true }); // older trades first (FIFO)
 
       if (!err2 && openTrades) {
-        for (const trade of openTrades) {
-           const wallet = await walletService.getOrCreateWallet(trade.user_id);
-           const tokenBalanceRaw = await walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
-           const dbRemainingRaw = trade.remaining_raw || 0;
-           
-           if (tokenBalanceRaw !== dbRemainingRaw) {
-             logger.warn({ tradeId: trade.id, onChain: tokenBalanceRaw, db: dbRemainingRaw }, 'Token balance mismatch found during reconciliation');
-             await tradeRepo.updateTradeStatus(trade.id, { remaining_raw: tokenBalanceRaw });
-           }
+        // Group by user_id and token_mint
+        const groups = new Map<string, typeof openTrades>();
+        for (const t of openTrades) {
+          const key = `${t.user_id}:${t.token_mint}`;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(t);
+        }
+
+        for (const [key, trades] of groups.entries()) {
+          const [userIdStr, tokenMint] = key.split(':');
+          const userId = parseInt(userIdStr, 10);
+          
+          const wallet = await walletService.getOrCreateWallet(userId);
+          const tokenBalanceRaw = await walletService.getTokenBalance(wallet.publicKey, tokenMint);
+          
+          let sumDbRaw = 0;
+          for (const t of trades) {
+            sumDbRaw += (t.remaining_raw || 0);
+          }
+
+          if (sumDbRaw > tokenBalanceRaw) {
+             logger.warn({ userId, tokenMint, onChain: tokenBalanceRaw, dbSum: sumDbRaw }, 'Token balance deficit found. Reconciling trades (FIFO)...');
+             
+             let deficit = sumDbRaw - tokenBalanceRaw;
+             
+             for (const t of trades) {
+               if (deficit <= 0) break;
+               
+               const currentRemaining = t.remaining_raw || 0;
+               if (currentRemaining > 0) {
+                 const toDeduct = Math.min(currentRemaining, deficit);
+                 const newRemaining = currentRemaining - toDeduct;
+                 deficit -= toDeduct;
+                 
+                 const updates: any = { remaining_raw: newRemaining, needs_attention: true };
+                 if (newRemaining <= 0) {
+                   updates.status = 'CLOSED';
+                   updates.closed_at = new Date().toISOString();
+                 }
+                 await tradeRepo.updateTradeStatus(t.id, updates);
+                 logger.info({ tradeId: t.id, deducted: toDeduct, newRemaining }, 'Reconciled missing tokens for trade');
+               }
+             }
+          } else if (sumDbRaw < tokenBalanceRaw) {
+             logger.info({ userId, tokenMint, onChain: tokenBalanceRaw, dbSum: sumDbRaw }, 'User has extra tokens (not tied to open trades). Ignored by reconciler.');
+          }
         }
       }
-
-      // 3. Find orphan tokens (tokens in wallet but no OPEN trade)
-      // This is a bit heavy, maybe we just query all wallets and all token accounts?
-      // Since it's a scalping bot, they shouldn't have many tokens.
-      // Let's just do a basic scan if possible, or skip for now to save RPC calls.
       
     } catch (e) {
        logger.error({ err: e }, 'Reconciliation job failed');

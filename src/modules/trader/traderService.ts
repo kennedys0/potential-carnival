@@ -237,7 +237,14 @@ export class TraderService {
       return;
     }
 
-    const amountLamports = Math.floor(totalTokenBalance * (percentageToClose / 100));
+    const tradeBalanceRaw = trade.remaining_raw || 0;
+    if (tradeBalanceRaw <= 0) {
+       throw new Error('Trade has no remaining raw tokens to close.');
+    }
+
+    const calculatedAmount = Math.floor(tradeBalanceRaw * (percentageToClose / 100));
+    const amountLamports = Math.min(calculatedAmount, totalTokenBalance);
+
     if (amountLamports <= 0) {
       throw new Error('Calculated token amount to close is 0.');
     }
@@ -307,10 +314,11 @@ export class TraderService {
 
     const solReceived = solReceivedLamports > 0 ? solReceivedLamports / 1e9 : 0;
     
-    // Remaining token balance on chain after tx
-    const remainingTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
+    // Fallback if tokenSpentRaw is 0 (failed to parse), use amountLamports
+    const actualTokensSpent = tokenSpentRaw > 0 ? tokenSpentRaw : amountLamports;
+    const newTradeRemainingRaw = Math.max(0, tradeBalanceRaw - actualTokensSpent);
     
-    const newStatus = remainingTokenBalance <= 0 ? 'CLOSED' : 'PARTIAL_EXIT';
+    const newStatus = newTradeRemainingRaw <= 0 ? 'CLOSED' : 'PARTIAL_EXIT';
     const realizedPnlSol = (trade.realized_pnl_sol || 0) + solReceived - (trade.sol_amount * (percentageToClose / 100)); // Simplistic PNL 
 
     const pnlPercent = ((currentPriceUsd - trade.entry_price_usd) / trade.entry_price_usd) * 100;
@@ -321,12 +329,22 @@ export class TraderService {
       pnl_sol: realizedPnlSol,
       realized_pnl_sol: realizedPnlSol,
       tx_signature: signature,
-      remaining_raw: remainingTokenBalance > 0 ? remainingTokenBalance : 0,
+      remaining_raw: newTradeRemainingRaw,
     };
 
     if (newStatus === 'CLOSED') {
       updates.closed_at = new Date().toISOString();
       updates.exit_price_usd = currentPriceUsd;
+    }
+
+    // Edge case: if wallet is completely empty, ensure we close
+    const totalRemainingTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
+    if (totalRemainingTokenBalance === 0 && newStatus !== 'CLOSED') {
+      updates.status = 'CLOSED';
+      updates.remaining_raw = 0;
+      updates.closed_at = new Date().toISOString();
+      updates.exit_price_usd = currentPriceUsd;
+      updates.needs_attention = true;
     }
 
     await this.tradeRepo.updateTradeStatus(trade.id, updates);
