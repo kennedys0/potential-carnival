@@ -30,12 +30,19 @@ export async function handleAutopilotMenu(
   const sizing = DisplaySizingParamsSchema.parse(config.sizing_params);
   const exit = DisplayExitParamsSchema.parse(config.exit_params);
 
+  const trendingEnabled = (config.safety_params as any)?.enable_trending !== false;
+  const sniperEnabled = (config.safety_params as any)?.enable_sniper !== false;
+
   const text = `
 🤖 <b>Dashboard Autopilot Scalping</b>
 
 • <b>Status:</b> ${statusEmoji}
 • <b>Mode Eksekusi:</b> ${modeTag}
 • <b>Profil Risiko:</b> ⚖️ ${config.risk_profile}
+
+📡 <b>Radar Aktif:</b>
+• <b>Trending:</b> ${trendingEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}
+• <b>Sniper:</b> ${sniperEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}
 
 ⚙️ <b>Parameter Aktif:</b>
 • <b>Min Safety Score:</b> ${safety.min_safety_score}/100
@@ -48,6 +55,9 @@ export async function handleAutopilotMenu(
 
   const keyboard = new InlineKeyboard()
     .text(config.is_active ? '⏸ Jeda Autopilot' : '▶️ Aktifkan Autopilot', 'autopilot_toggle')
+    .row()
+    .text(`📡 Trending: ${trendingEnabled ? 'ON' : 'OFF'}`, 'autopilot_toggle_trending')
+    .text(`⚡ Sniper: ${sniperEnabled ? 'ON' : 'OFF'}`, 'autopilot_toggle_sniper')
     .row()
     .text('🛡️ Konservatif', 'preset_conservative')
     .text('⚖️ Moderat', 'preset_moderate')

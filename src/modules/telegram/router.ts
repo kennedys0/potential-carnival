@@ -357,6 +357,24 @@ export function registerBotRoutes(
         return;
       }
       await handleAutopilotToggle(ctx, services.autopilotRepo);
+    } else if (data === 'autopilot_toggle_trending') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const trendingEnabled = (cfg.safety_params as any)?.enable_trending !== false;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        safety_params: { ...cfg.safety_params, enable_trending: !trendingEnabled },
+      });
+      await ctx.answerCallbackQuery({ text: `Trending Scanner ${!trendingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
+      await handleAutopilotMenu(ctx, services.autopilotRepo);
+    } else if (data === 'autopilot_toggle_sniper') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const sniperEnabled = (cfg.safety_params as any)?.enable_sniper !== false;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        safety_params: { ...cfg.safety_params, enable_sniper: !sniperEnabled },
+      });
+      await ctx.answerCallbackQuery({ text: `Sniper Scanner ${!sniperEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
+      await handleAutopilotMenu(ctx, services.autopilotRepo);
     } else if (data === 'preset_conservative') {
       await handleAutopilotPreset(ctx, 'CONSERVATIVE', services.autopilotRepo);
     } else if (data === 'preset_moderate') {
