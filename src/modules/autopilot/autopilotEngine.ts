@@ -57,7 +57,8 @@ export class AutopilotEngine {
       consecutiveLosses: number;
       heldMints?: string[];
     },
-    rawSnapshot?: any
+    rawSnapshot?: any,
+    source: 'TRENDING' | 'SNIPER' = 'TRENDING'
   ): Promise<{ executed: boolean; reason: string }> {
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
 
@@ -79,7 +80,7 @@ export class AutopilotEngine {
     }
 
     try {
-      return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot);
+      return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot, source);
     } finally {
       await redis.del(lockKey);
     }
@@ -95,7 +96,8 @@ export class AutopilotEngine {
     ai: AiAnalysis | null,
     currentState: any,
     config: AutopilotConfigRecord,
-    rawSnapshot: any
+    rawSnapshot: any,
+    source: 'TRENDING' | 'SNIPER'
   ): Promise<{ executed: boolean; reason: string }> {
     // 1. Circuit Breaker Check
     const cbConfig = CircuitBreakerParamsSchema.parse(config.circuit_breaker_params || {});
@@ -117,16 +119,26 @@ export class AutopilotEngine {
     const safeConf = SafetyParamsSchema.parse(config.safety_params || {});
     const aiConf = AiParamsSchema.parse(config.ai_params || {});
 
-    const safetyParams = {
+    let safetyParams = {
       minSafetyScore: safeConf.min_safety_score,
       allowedLevels: safeConf.allowed_levels,
       minLiquidityUsd: safeConf.min_liquidity_usd,
     };
-    const aiParams = {
+    let aiParams = {
       minConfidence: aiConf.min_confidence,
       minRiskReward: aiConf.min_risk_reward,
       allowedSetups: aiConf.allowed_setups,
+      requireAi: true,
     };
+
+    if (source === 'SNIPER') {
+      safetyParams = {
+        minSafetyScore: appSettings.SNIPER_PARAMS.MIN_SAFETY_SCORE,
+        allowedLevels: appSettings.SNIPER_PARAMS.ALLOWED_LEVELS,
+        minLiquidityUsd: appSettings.SNIPER_PARAMS.MIN_LIQUIDITY_USD,
+      };
+      aiParams.requireAi = appSettings.SNIPER_PARAMS.REQUIRE_AI;
+    }
 
     const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd);
 

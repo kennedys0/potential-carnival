@@ -37,5 +37,14 @@ Gunakan tombol di bawah untuk navigasi cepat atau ketik /scan &lt;CA&gt; untuk m
     .text('⚙️ Settings', 'menu_settings')
     .text('❓ Bantuan', 'menu_help');
 
+  // Import Keyboard dynamically or from grammy if not imported
+  const { Keyboard } = await import('grammy');
+  const persistentKeyboard = new Keyboard()
+    .text('/scan').text('/autopilot').text('/positions').text('/livefeed')
+    .row()
+    .text('/wallet').text('/settings').text('/report').text('/help')
+    .resized();
+
+  await ctx.reply('Menu cepat tersedia di bawah:', { reply_markup: persistentKeyboard });
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }

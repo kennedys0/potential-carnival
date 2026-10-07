@@ -47,6 +47,9 @@ export async function handleSettingsMenu(
     .text(`📈 Set TP (${tp1Percent}%)`, 'settings_cycle_tp')
     .text(`Trailing: ${trailingEnabled ? 'ON' : 'OFF'}`, 'settings_toggle_trailing')
     .row()
+    .text(`📡 Trending: ${config.safety_params?.enable_trending !== false ? 'ON' : 'OFF'}`, 'settings_toggle_trending')
+    .text(`⚡ Sniper: ${config.safety_params?.enable_sniper !== false ? 'ON' : 'OFF'}`, 'settings_toggle_sniper')
+    .row()
     .text('🏠 Menu Utama', 'menu_main');
 
   if (ctx.callbackQuery) {

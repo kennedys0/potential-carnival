@@ -15,6 +15,10 @@ export class ScannerService {
     return this.dexScreener.getTokenData(tokenAddress);
   }
 
+  async fetchNewPairs(): Promise<any[]> {
+    return this.dexScreener.getLatestTokenProfiles();
+  }
+
   async getCandles(
     network: string,
     poolAddress: string,

@@ -39,6 +39,12 @@ export const AppSettingsSchema = z.object({
     DEFAULT_PERCENT_BALANCE: z.number().default(10),
     DEFAULT_RISK_PERCENT: z.number().default(2),
   }).default({}),
+  SNIPER_PARAMS: z.object({
+    MIN_SAFETY_SCORE: z.number().default(50),
+    ALLOWED_LEVELS: z.array(z.string()).default(['SAFE', 'CAUTION']),
+    MIN_LIQUIDITY_USD: z.number().default(1000), // Lower liquidity for new pairs
+    REQUIRE_AI: z.boolean().default(false), // Disable AI requirement for new pairs
+  }).default({}),
   ANALYZER_PARAMS: z.object({
     MIN_CANDLES: z.number().default(21),
     MAX_STALE_CANDLE_AGE_MS: z.number().default(300000), // 5 minutes
@@ -46,7 +52,7 @@ export const AppSettingsSchema = z.object({
   SECURITY_PARAMS: z.object({
     MIN_LIQUIDITY_USD: z.number().default(2000),
     MAX_TAX_PERCENT: z.number().default(5.0),
-    MIN_COVERAGE_PERCENT: z.number().default(60), // min coverage required
+    MIN_COVERAGE_PERCENT: z.number().default(40), // min coverage required
     WEIGHTS: z.object({
       LP_STATUS: z.number().default(25),
       TOP10_HOLDER: z.number().default(20),

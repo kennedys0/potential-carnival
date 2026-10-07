@@ -6,10 +6,9 @@ import { AnalyzerService } from '../analyzer/analyzerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
+import { liveFeedSubscribers } from './trendScanner';
 
-export const liveFeedSubscribers = new Set<number>();
-
-export class TrendScanner {
+export class SniperScanner {
   private intervalId?: NodeJS.Timeout;
 
   constructor(
@@ -24,11 +23,11 @@ export class TrendScanner {
 
   start() {
     if (this.intervalId) return;
-    logger.info('Starting TrendScanner for Autopilot...');
-    // Scan every 2 minutes
-    this.intervalId = setInterval(() => this.scanTrending(), 2 * 60 * 1000);
-    // Trigger first scan after 10 seconds
-    setTimeout(() => this.scanTrending(), 10000);
+    logger.info('Starting SniperScanner for Autopilot...');
+    // Scan every 1 minute for new pairs (faster than trending)
+    this.intervalId = setInterval(() => this.scanSniper(), 1 * 60 * 1000);
+    // Trigger first scan after 15 seconds
+    setTimeout(() => this.scanSniper(), 15000);
   }
 
   stop() {
@@ -38,74 +37,34 @@ export class TrendScanner {
     }
   }
 
-  private async fetchOrganicTrendingTokens(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
-    // Primary source: GeckoTerminal — organic trending pools sorted by volume (no paid promotions)
-    try {
-      const url = 'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=1';
-      const res = await fetch(url, { headers: { 'Accept': 'application/json;version=20230302' } });
-      if (!res.ok) throw new Error(`GeckoTerminal responded ${res.status}`);
-      const data: any = await res.json();
-      const pools: any[] = data?.data ?? [];
-      const included: any[] = data?.included ?? [];
-      
-      const result: { tokenAddress: string; pairAddress: string; symbol: string }[] = [];
-      for (const pool of pools) {
-        const poolAddr = pool.attributes?.address;
-        const relBaseToken = pool.relationships?.base_token?.data;
-        if (!poolAddr || !relBaseToken) continue;
-        const baseToken = included.find((i: any) => i.type === relBaseToken.type && i.id === relBaseToken.id);
-        const tokenAddress = baseToken?.attributes?.address ?? relBaseToken.id?.split('_')[1];
-        const symbol = baseToken?.attributes?.symbol ?? '???';
-        if (!tokenAddress) continue;
-        result.push({ tokenAddress, pairAddress: poolAddr, symbol });
-      }
-      logger.info(`TrendScanner: GeckoTerminal returned ${result.length} organic trending tokens.`);
-      return result;
-    } catch (err) {
-      logger.warn({ err }, 'TrendScanner: GeckoTerminal trending failed, falling back to DexScreener boosted');
-      // Fallback: DexScreener latest boosted (known-paid, flagged)
-      try {
-        const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
-        if (!res.ok) return [];
-        const tokens = (await res.json()) as any[];
-        return tokens
-          .filter((t: any) => t.chainId === 'solana' && t.tokenAddress)
-          .slice(0, 20)
-          .map((t: any) => ({ tokenAddress: t.tokenAddress, pairAddress: '', symbol: '' }));
-      } catch {
-        return [];
-      }
-    }
-  }
-
-  private async scanTrending() {
+  private async scanSniper() {
     try {
       // 1. Get active autopilot users
       const activeConfigs = await this.autopilotRepo.getAllActiveConfigs();
       if (!activeConfigs || activeConfigs.length === 0) {
-        logger.info('TrendScanner: No active autopilot users, skipping scan.');
         return;
       }
 
-      logger.info(`TrendScanner: Fetching trending tokens for ${activeConfigs.length} active users...`);
+      logger.info(`SniperScanner: Fetching new token profiles...`);
 
-      // 2. Fetch organic trending tokens (GeckoTerminal primary, DexScreener fallback)
-      const trendingList = await this.fetchOrganicTrendingTokens();
+      // 2. Fetch new tokens
+      const newProfiles = await this.scannerService.fetchNewPairs();
       const redis = getRedisConnection();
 
-      const newTokens: typeof trendingList = [];
-      for (const t of trendingList) {
-        const isScanned = await redis.get(`scanned_token:${t.tokenAddress}`);
+      const newTokens: typeof newProfiles = [];
+      for (const t of newProfiles) {
+        const isScanned = await redis.get(`scanned_token_sniper:${t.tokenAddress}`);
         if (!isScanned) {
           newTokens.push(t);
         }
       }
       
-      // Ambil top 30 token trending untuk di-scan ringan
-      const tokensToScan = newTokens.slice(0, 30);
-      logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW organic trending Solana tokens.`);
+      const tokensToScan = newTokens.slice(0, 15);
+      if (tokensToScan.length === 0) return;
+      
+      logger.info(`SniperScanner: Found ${tokensToScan.length} NEW unseen token profiles.`);
 
-      // Ambil profile/pair DexScreener secara concurrent max 3 sekaligus (Chunking manual)
+      // Ambil profile/pair DexScreener secara concurrent
       const fetchedPairs = [];
       const chunkSize = 3;
       for (let i = 0; i < tokensToScan.length; i += chunkSize) {
@@ -120,27 +79,24 @@ export class TrendScanner {
         const results = await Promise.all(chunkPromises);
         fetchedPairs.push(...results.filter((p) => p !== null));
         
-        // Kasih nafas ke API DexScreener
         if (i + chunkSize < tokensToScan.length) {
           await new Promise((res) => setTimeout(res, 500));
         }
       }
 
-      // Sort by 24h volume (highest first)
+      // Sort by pairCreatedAt (newest first) instead of volume, because it's sniper
       const sortedPairs = fetchedPairs.sort((a: any, b: any) => {
-        const volA = a.volume?.h24 ?? 0;
-        const volB = b.volume?.h24 ?? 0;
-        return volB - volA;
+        const timeA = a.pairCreatedAt ?? 0;
+        const timeB = b.pairCreatedAt ?? 0;
+        return timeB - timeA;
       });
 
-      // Ambil top 10 pair paling likuid/bervolume tinggi untuk analisis mendalam (RPC calls)
-      const topPairs = sortedPairs.slice(0, 10);
-      logger.info(`TrendScanner: Selected top ${topPairs.length} pairs by volume for deep analysis.`);
-
+      const topPairs = sortedPairs.slice(0, 5);
+      
       for (const pair of topPairs) {
         try {
           const tokenAddress = pair.baseToken.address;
-          await redis.set(`scanned_token:${tokenAddress}`, '1', 'EX', 15 * 60);
+          await redis.set(`scanned_token_sniper:${tokenAddress}`, '1', 'EX', 60 * 60); // 1 hour cache
           
           const priceUsd = parseFloat(pair.priceUsd || '0');
           if (priceUsd === 0) continue;
@@ -150,12 +106,14 @@ export class TrendScanner {
             marketCapUsd: pair.marketCap || pair.fdv || null,
           });
 
-          const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
+          // Fetch candles (might be empty for very new pairs)
+          const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 1);
           const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
           const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
           
           const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
           let aiAnalysis = null;
+          // Only analyze with LLM if indicators exist and LLM is enabled in Sniper mode
           if (indicators) {
             aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
           }
@@ -165,11 +123,7 @@ export class TrendScanner {
             try {
               const currentState = await this.userStateService.getAutopilotState(config.user_id);
               
-              // Circuit Breaker Check
-              if (currentState.isCircuitBroken) {
-                logger.debug(`Autopilot circuit broken for user ${config.user_id}, skipping.`);
-                continue;
-              }
+              if (currentState.isCircuitBroken) continue;
 
               const rawSnapshot = {
                 tokenAddress,
@@ -178,11 +132,12 @@ export class TrendScanner {
                 marketCap: pair.marketCap || pair.fdv,
                 currentVolume,
                 indicators,
-                currentState
+                currentState,
+                isSniper: true
               };
 
               const safetyParams = config.safety_params as any;
-              if (safetyParams?.enable_trending === false) continue;
+              if (safetyParams?.enable_sniper === false) continue;
 
               const result = await this.autopilotEngine.processCandidate(
                 config.user_id,
@@ -194,17 +149,16 @@ export class TrendScanner {
                 aiAnalysis,
                 currentState,
                 rawSnapshot,
-                'TRENDING'
+                'SNIPER'
               );
 
               if (result.executed) {
-                logger.info(`Autopilot executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
+                logger.info(`Sniper executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
                 
-                // Notify user
                 try {
                   await this.botApi.sendMessage(config.user_id, 
-                    `🚨 <b>AUTOPILOT EXECUTION</b> 🚨\n\n` +
-                    `Sistem mendeteksi setup yang valid dan baru saja mengeksekusi <b>BUY</b>!\n\n` +
+                    `⚡ <b>SNIPER EXECUTION</b> ⚡\n\n` +
+                    `Sistem mendeteksi token baru yang aman dan baru saja mengeksekusi <b>BUY</b>!\n\n` +
                     `🎯 <b>Target:</b> <code>${pair.baseToken.symbol}</code>\n` +
                     `📄 <b>CA:</b> <code>${tokenAddress}</code>\n` +
                     `🛡️ <b>Safety:</b> ${security.score}/100\n` +
@@ -214,14 +168,14 @@ export class TrendScanner {
                     { parse_mode: 'HTML' }
                   );
                 } catch (e) {
-                  logger.error({ err: e }, 'Gagal mengirim notifikasi Autopilot ke user');
+                  // ignore
                 }
               } else {
-                logger.debug(`Autopilot skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
+                logger.debug(`Sniper skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
                 if (liveFeedSubscribers.has(config.user_id)) {
                   try {
                     await this.botApi.sendMessage(config.user_id, 
-                      `📡 <b>AUTOPILOT RADAR</b>\n` +
+                      `⚡ <b>SNIPER RADAR</b>\n` +
                       `├ <b>Token:</b> <code>${pair.baseToken.symbol}</code>\n` +
                       `├ <b>CA:</b> <code>${tokenAddress}</code>\n` +
                       `├ <b>Safety:</b> ${security.score}/100 🛡️\n` +
@@ -236,28 +190,18 @@ export class TrendScanner {
                 }
               }
             } catch (err) {
-              logger.error({ err, userId: config.user_id }, 'Error evaluating candidate for user');
+              logger.error({ err, userId: config.user_id }, 'Error evaluating sniper candidate for user');
             }
-          } // end loop over users
+          }
         } catch (err) {
-          logger.error({ err, tokenAddress: pair.baseToken.address }, 'Error evaluating token candidate, skipping to next token');
+          logger.error({ err }, 'Error evaluating sniper token candidate, skipping to next token');
           continue;
         }
 
-        // Jeda minimal antar koin agar RPC tidak di-spam beruntun
         await new Promise((res) => setTimeout(res, 2000));
-      } // end loop over pairs
-      
-      // Notify live feed subscribers that a cycle finished
-      for (const userId of liveFeedSubscribers) {
-        try {
-          await this.botApi.sendMessage(userId, `🔄 <b>RADAR CYCLE COMPLETE</b>\n└ Memindai <b>${topPairs.length}</b> token teratas. Standby untuk siklus berikutnya...`, { parse_mode: 'HTML' });
-        } catch (e) {
-          // ignore
-        }
       }
     } catch (err) {
-      logger.error({ err }, 'TrendScanner Error');
+      logger.error({ err }, 'SniperScanner Error');
     }
   }
 }

@@ -30,4 +30,17 @@ export class DexScreenerClient {
       return null;
     }
   }
+
+  async getLatestTokenProfiles(): Promise<any[]> {
+    try {
+      // Endpoint returns latest added tokens across chains
+      const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+      if (!res.ok) return [];
+      const data = (await res.json()) as any[];
+      // Filter for solana chain only
+      return data.filter((t: any) => t.chainId === 'solana' && t.tokenAddress);
+    } catch {
+      return [];
+    }
+  }
 }

@@ -97,9 +97,9 @@ export class AnalyzerService {
     }
 
     const systemPrompt = `Anda adalah AI Scalper Profesional untuk Solana. Tugas Anda menganalisis data indikator dan mengembalikan keputusan BUY/WAIT/AVOID dalam format JSON.
-ATURAN MUTLAK JIKA VERDICT = BUY:
-1. Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk (currentPrice).
-2. Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
+ATURAN MUTLAK:
+1. JIKA VERDICT = BUY, Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk (currentPrice), dan Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
+2. key_reasons WAJIB ditulis dalam bahasa Indonesia, maksimal 5-7 kata per alasan agar singkat, padat, dan mudah dimengerti.
 Jangan sertakan teks apapun selain JSON yang valid.`;
 
     let attempts = 0;
@@ -110,13 +110,15 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
       try {
         let analysis: AiAnalysis;
         if (typeof this.llmClient.analyze === 'function') {
-          analysis = await this.llmClient.analyze({
+          const result = await this.llmClient.analyze({
             tokenSymbol,
             currentPrice,
             indicators,
             securityFlags,
             systemPrompt,
           });
+          if (!result) throw new Error('LLM analysis returned null');
+          analysis = result;
         } else {
         const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VWAP=${indicators.vwap}, VolumeSpike=${indicators.volumeSpikeRatio}x. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
         const response = await this.llmClient.messages.create({

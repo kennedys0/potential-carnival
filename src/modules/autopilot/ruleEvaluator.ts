@@ -11,6 +11,7 @@ export interface AutopilotAiCriteriaParams {
   minConfidence: number;
   minRiskReward: number;
   allowedSetups: string[];
+  requireAi?: boolean;
 }
 
 export class RuleEvaluator {
@@ -65,10 +66,15 @@ export class RuleEvaluator {
 
     // 5. AI Verdict & Criteria
     if (!ai) {
-      rulesFailed.push('AI analysis unavailable');
+      if (aiParams.requireAi !== false) {
+        rulesFailed.push('AI analysis unavailable');
+      } else {
+        rulesPassed.push('AI skipped (not required)');
+      }
     } else {
       if (ai.verdict !== 'BUY') {
-        rulesFailed.push(`AI verdict was ${ai.verdict}, expected BUY`);
+        const aiReasons = ai.key_reasons && ai.key_reasons.length > 0 ? ` karena ${ai.key_reasons.join(', ')}` : '';
+        rulesFailed.push(`AI verdict was ${ai.verdict}${aiReasons}`);
       } else {
         rulesPassed.push('AI verdict BUY');
       }

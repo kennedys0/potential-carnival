@@ -79,6 +79,13 @@ export async function handleAutopilotToggle(
   const newActive = !config.is_active;
   await autopilotRepo.updateConfig(ctx.from.id, { is_active: newActive });
 
+  const { liveFeedSubscribers } = await import('../../scanner/trendScanner.js');
+  if (newActive) {
+    liveFeedSubscribers.add(ctx.from.id);
+  } else {
+    liveFeedSubscribers.delete(ctx.from.id);
+  }
+
   await ctx.answerCallbackQuery({
     text: newActive ? '✅ Autopilot Diaktifkan!' : '⏸ Autopilot Dijeda.',
   });
@@ -146,9 +153,15 @@ export async function handleAutopilotLogs(
   } else {
     for (const log of logs) {
       const icon = log.action === 'BUY' ? '🟢' : log.action === 'SKIP' ? '⚪' : '🔴';
-      text += `${icon} <b>[${log.action}]</b> ${log.token_symbol || log.token_mint.slice(0, 8)}...\n`;
-      text += `• Score: ${log.safety_score}/100 | Verdict: ${log.ai_verdict || 'N/A'}\n`;
-      text += `• Catatan: ${log.reason_summary}\n\n`;
+      text += `${icon} <b>${log.action}</b> <code>${log.token_symbol || log.token_mint.slice(0, 8)}</code>\n`;
+      text += `├ <b>Score:</b> ${log.safety_score}/100 🛡️\n`;
+      
+      if (log.safety_flags && log.safety_flags.length > 0) {
+        text += `├ <b>Flags:</b> ${log.safety_flags.length > 2 ? log.safety_flags.slice(0, 2).join(', ') + ', dll' : log.safety_flags.join(', ')}\n`;
+      }
+      
+      text += `├ <b>AI Verdict:</b> ${log.ai_verdict || 'N/A'}\n`;
+      text += `└ <b>Catatan:</b> <i>${log.reason_summary}</i>\n\n`;
     }
   }
 

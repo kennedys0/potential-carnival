@@ -24,6 +24,7 @@ import { AutopilotEngine } from './modules/autopilot/autopilotEngine';
 import { createTelegramBot } from './modules/telegram/bot';
 import { registerBotRoutes } from './modules/telegram/router';
 import { TrendScanner } from './modules/scanner/trendScanner';
+import { SniperScanner } from './modules/scanner/sniperScanner';
 import { UserStateService } from './modules/user/userStateService';
 
 async function main() {
@@ -86,6 +87,16 @@ async function main() {
     bot.api
   );
 
+  const sniperScanner = new SniperScanner(
+    scannerService,
+    autopilotEngine,
+    securityService,
+    analyzerService,
+    autopilotRepo,
+    userStateService,
+    bot.api
+  );
+
   // BullMQ Workers
   const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api);
   const reconcileWorker = createReconcileWorker(tradeRepo, walletService);
@@ -111,11 +122,17 @@ async function main() {
 
     // Start Autopilot Trend Scanner
     trendScanner.start();
+    sniperScanner.start();
 
     // Schedule Reconciliation Job (every 5 minutes)
     queues.reconcileQueue.add('reconcile-job', undefined, {
       repeat: { pattern: '*/5 * * * *' }
     });
+
+    // Auto-subscribe all active autopilot users to live feed on startup
+    const activeConfigs = await autopilotRepo.getAllActiveConfigs();
+    const { liveFeedSubscribers } = await import('./modules/scanner/trendScanner.js');
+    activeConfigs.forEach(c => liveFeedSubscribers.add(c.user_id));
   }
 
   // Telegram Bot routes

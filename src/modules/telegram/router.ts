@@ -32,6 +32,7 @@ import {
 import { handleSettingsMenu } from './handlers/settingsHandler';
 import { handlePositionsMenu } from './handlers/positionsHandler';
 import { handleHelpMenu } from './handlers/helpHandler';
+import { handleReportCommand } from './handlers/reportHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
 
 export interface BotRouteServices {
@@ -77,6 +78,11 @@ export function registerBotRoutes(
   // Command /help
   bot.command('help', async (ctx) => {
     await handleHelpMenu(ctx);
+  });
+
+  // Command /report
+  bot.command('report', async (ctx) => {
+    await handleReportCommand(ctx, services.tradeRepo);
   });
 
   // Command /killswitch
@@ -214,9 +220,28 @@ export function registerBotRoutes(
     }
   });
 
-  // Auto-detect Contract Address sent directly in text chat (Solana Base58 address format: 32-44 characters)
   bot.on('message:text', async (ctx, next) => {
+    if (!ctx.from) {
+      await next();
+      return;
+    }
     const text = ctx.message.text.trim();
+
+    const redis = getRedisConnection();
+    const customBuyMint = await redis.get(`custom_buy_mint:${ctx.from.id}`);
+    
+    if (customBuyMint) {
+      const amount = parseFloat(text);
+      if (isNaN(amount) || amount <= 0) {
+        await ctx.reply('⚠️ Harap masukkan angka yang valid (contoh: 0.1 atau 2). Transaksi Custom Buy dibatalkan.');
+      } else {
+        await ctx.reply(`⏳ Memproses order Custom Buy ${amount} SOL...`);
+        await executeManualBuy(ctx, customBuyMint, amount, services);
+      }
+      await redis.del(`custom_buy_mint:${ctx.from.id}`);
+      return;
+    }
+
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
     if (solanaAddressRegex.test(text) && !text.startsWith('/')) {
       await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService);
@@ -404,58 +429,48 @@ export function registerBotRoutes(
       });
       await ctx.answerCallbackQuery({ text: `Trailing Stop ${!trailingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
       await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_toggle_trending') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const trendingEnabled = (cfg.safety_params as any)?.enable_trending !== false;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        safety_params: { ...cfg.safety_params, enable_trending: !trendingEnabled },
+      });
+      await ctx.answerCallbackQuery({ text: `Trending Scanner ${!trendingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_toggle_sniper') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const sniperEnabled = (cfg.safety_params as any)?.enable_sniper !== false;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        safety_params: { ...cfg.safety_params, enable_sniper: !sniperEnabled },
+      });
+      await ctx.answerCallbackQuery({ text: `Sniper Scanner ${!sniperEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
     }
 
     // 5. Token Scan Actions
     else if (data.startsWith('refresh:')) {
       const tokenMint = data.split(':')[1];
       await handleScanCommand(ctx, tokenMint, services.scannerService, services.securityService, services.analyzerService);
+    } else if (data.startsWith('buy_custom:')) {
+      if (!ctx.from) return;
+      const mint = data.split(':')[1];
+      const redis = getRedisConnection();
+      await redis.set(`custom_buy_mint:${ctx.from.id}`, mint, 'EX', 300); // 5 mins expiry
+      
+      await ctx.answerCallbackQuery();
+      await ctx.reply(`✍️ <b>Custom Buy</b>\n\nBerapa SOL yang ingin dialokasikan untuk membeli CA: <code>${mint}</code>?\n\n<i>(Ketik angka saja, contoh: 1.5 atau 0.02)</i>`, {
+        parse_mode: 'HTML',
+        reply_markup: { force_reply: true }
+      });
     } else if (data.startsWith('buy:')) {
       if (!ctx.from) return;
       const [, mint, amountStr] = data.split(':');
       const amount = parseFloat(amountStr) ?? 0.1;
 
       await ctx.answerCallbackQuery({ text: `⏳ Memproses order ${amount} SOL...` });
-
-      try {
-        const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-        const isDryRun = cfg.mode === 'PAPER';
-
-        const pair = await services.scannerService.scanTokenByAddress(mint);
-        const priceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0.0001;
-        const symbol = pair?.baseToken?.symbol || 'UNKNOWN';
-
-        const trade = await services.traderService.executeOrder({
-          userId: ctx.from.id,
-          tokenMint: mint,
-          tokenSymbol: symbol,
-          solAmount: amount,
-          currentPriceUsd: priceUsd,
-          isDryRun,
-          source: 'MANUAL',
-        });
-
-        await currencyService.fetchRates();
-        const amountIdr = currencyService.solToIdr(amount);
-
-        await ctx.reply(
-          `✅ <b>Order Berhasil Dieksekusi!</b>\n\n` +
-          `• <b>Mode:</b> ${isDryRun ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}\n` +
-          `• <b>Token:</b> ${symbol} (<code>${mint.slice(0, 8)}...</code>)\n` +
-          `• <b>Alokasi:</b> <code>${amount} SOL</code> (${currencyService.formatIdr(amountIdr)})\n` +
-          `• <b>Estimasi Token:</b> <code>${trade.token_amount.toFixed(2)}</code>\n` +
-          `• <b>Entry Price:</b> $${priceUsd.toFixed(6)}\n` +
-          `• <b>Status:</b> <code>${trade.status}</code>`,
-          {
-            parse_mode: 'HTML',
-            reply_markup: new InlineKeyboard()
-              .text('📊 Cek Posisi', 'menu_positions')
-              .text('🏠 Menu Utama', 'menu_main'),
-          }
-        );
-      } catch (err: any) {
-        await ctx.reply(`❌ <b>Gagal eksekusi order:</b> ${err.message}`, { parse_mode: 'HTML' });
-      }
+      await executeManualBuy(ctx, mint, amount, services);
     } else if (data.startsWith('sell:')) {
       if (!ctx.from) return;
       const [, tradeId, percentStr] = data.split(':');
@@ -503,4 +518,46 @@ export function registerBotRoutes(
       await ctx.answerCallbackQuery();
     }
   });
+}
+
+async function executeManualBuy(ctx: any, mint: string, amount: number, services: BotRouteServices) {
+  try {
+    const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+    const isDryRun = cfg.mode === 'PAPER';
+
+    const pair = await services.scannerService.scanTokenByAddress(mint);
+    const priceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0.0001;
+    const symbol = pair?.baseToken?.symbol || 'UNKNOWN';
+
+    const trade = await services.traderService.executeOrder({
+      userId: ctx.from.id,
+      tokenMint: mint,
+      tokenSymbol: symbol,
+      solAmount: amount,
+      currentPriceUsd: priceUsd,
+      isDryRun,
+      source: 'MANUAL',
+    });
+
+    await currencyService.fetchRates();
+    const amountIdr = currencyService.solToIdr(amount);
+
+    await ctx.reply(
+      `✅ <b>Order Berhasil Dieksekusi!</b>\n\n` +
+      `• <b>Mode:</b> ${isDryRun ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}\n` +
+      `• <b>Token:</b> ${symbol} (<code>${mint.slice(0, 8)}...</code>)\n` +
+      `• <b>Alokasi:</b> <code>${amount} SOL</code> (${currencyService.formatIdr(amountIdr)})\n` +
+      `• <b>Estimasi Token:</b> <code>${trade.token_amount.toFixed(2)}</code>\n` +
+      `• <b>Entry Price:</b> $${priceUsd.toFixed(6)}\n` +
+      `• <b>Status:</b> <code>${trade.status}</code>`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard()
+          .text('📊 Cek Posisi', 'menu_positions')
+          .text('🏠 Menu Utama', 'menu_main'),
+      }
+    );
+  } catch (err: any) {
+    await ctx.reply(`❌ <b>Gagal eksekusi order:</b> ${err.message}`, { parse_mode: 'HTML' });
+  }
 }
