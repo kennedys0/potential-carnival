@@ -119,8 +119,8 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
 export async function handleWalletWithdrawPrompt(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
 
-  const { getSupabaseClient } = require('../../../database/client');
-  const { WalletRepository } = require('../../../database/repositories/walletRepository');
+  const { getSupabaseClient } = await import('../../../database/client.js');
+  const { WalletRepository } = await import('../../../database/repositories/walletRepository.js');
   const db = getSupabaseClient();
   const walletRepo = new WalletRepository(db);
   const wallet = await walletRepo.getWalletByUserId(ctx.from.id);
@@ -310,7 +310,7 @@ export async function handleWalletWithdrawExecute(
   if (!ctx.from) return;
   
   try {
-    const { getRedisConnection } = require('../../../queue/connection');
+    const { getRedisConnection } = await import('../../../queue/connection.js');
     const redis = getRedisConnection();
     const rateLimitKey = `withdraw_ratelimit:${ctx.from.id}`;
     const isLimited = await redis.get(rateLimitKey);

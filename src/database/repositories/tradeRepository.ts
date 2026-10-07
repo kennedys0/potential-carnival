@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { logger } from '../../utils/logger';
 
 export interface TradeRecord {
   id?: string;
@@ -61,6 +62,34 @@ export class TradeRepository {
 
     if (error) throw new Error(`Failed to getTradesByStatuses: ${error.message}`);
     return (data || []) as TradeRecord[];
+  }
+
+  async getPendingTradesWithSignature(): Promise<any[]> {
+    const { data, error } = await this.db
+      .from('trades')
+      .select('*')
+      .eq('status', 'PENDING')
+      .not('pending_signature', 'is', null);
+    
+    if (error) {
+      logger.error({ error }, 'Failed to get pending trades with signature');
+      return [];
+    }
+    return data || [];
+  }
+
+  async getOpenTradesOrderedFIFO(): Promise<any[]> {
+    const { data, error } = await this.db
+      .from('trades')
+      .select('*')
+      .in('status', ['OPEN', 'PARTIAL_EXIT'])
+      .order('created_at', { ascending: true });
+      
+    if (error) {
+      logger.error({ error }, 'Failed to get open trades ordered FIFO');
+      return [];
+    }
+    return data || [];
   }
 
   async getClosedTradesSince(userId: number, sinceStr: string): Promise<TradeRecord[]> {

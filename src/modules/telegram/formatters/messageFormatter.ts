@@ -64,9 +64,9 @@ ${ai.key_reasons.map((r) => `  - ${escapeHtml(r)}`).join('\n')}
 🚀 <b>${pair.baseToken.name} (${pair.baseToken.symbol})</b>
 <code>${pair.baseToken.address}</code> <i>(Tap to copy)</i>
 
-💵 <b>Harga:</b> ${formatPrice(priceNum)} <code>(${pair.priceChange?.m5 >= 0 ? '+' : ''}${pair.priceChange?.m5 || 0}% 5m | ${pair.priceChange?.h1 >= 0 ? '+' : ''}${pair.priceChange?.h1 || 0}% 1h)</code>
-💧 <b>Likuiditas:</b> ${formatUsd(pair.liquidity?.usd || 0)}
-📊 <b>Volume 5m:</b> ${formatUsd(pair.volume?.m5 || 0)}
+💵 <b>Harga:</b> ${formatPrice(priceNum)} <code>(${pair.priceChange?.m5 >= 0 ? '+' : ''}${pair.priceChange?.m5 ?? 0}% 5m | ${pair.priceChange?.h1 >= 0 ? '+' : ''}${pair.priceChange?.h1 ?? 0}% 1h)</code>
+💧 <b>Likuiditas:</b> ${formatUsd(pair.liquidity?.usd ?? 0)}
+📊 <b>Volume 5m:</b> ${formatUsd(pair.volume?.m5 ?? 0)}
 
 🛡️ <b>Safety Score:</b> ${levelEmoji} <b>${security.score}/100</b> [${security.level}]
 ${progressBar}

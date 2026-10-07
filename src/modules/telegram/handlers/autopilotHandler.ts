@@ -19,10 +19,10 @@ export async function handleAutopilotMenu(
 • <b>Profil Risiko:</b> ⚖️ ${config.risk_profile}
 
 ⚙️ <b>Parameter Aktif:</b>
-• <b>Min Safety Score:</b> ${(config.safety_params as any)?.min_safety_score || 75}/100
-• <b>Min Likuiditas:</b> $${(config.safety_params as any)?.min_liquidity_usd || 10000}
-• <b>Ukuran Trade:</b> ${(config.sizing_params as any)?.fixed_sol || 0.1} SOL
-• <b>Target TP / SL:</b> +${(config.exit_params as any)?.tp1_percent || 15}% / -${(config.exit_params as any)?.sl_percent || 8}%
+• <b>Min Safety Score:</b> ${(config.safety_params as any)?.min_safety_score ?? 75}/100
+• <b>Min Likuiditas:</b> $${(config.safety_params as any)?.min_liquidity_usd ?? 10000}
+• <b>Ukuran Trade:</b> ${(config.sizing_params as any)?.fixed_sol ?? 0.1} SOL
+• <b>Target TP / SL:</b> +${(config.exit_params as any)?.tp1_percent ?? 15}% / -${(config.exit_params as any)?.sl_percent ?? 8}%
 
 <i>Gunakan tombol di bawah untuk mengontrol autopilot secara real-time:</i>
 `.trim();

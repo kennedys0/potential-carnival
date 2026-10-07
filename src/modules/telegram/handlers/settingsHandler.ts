@@ -10,11 +10,11 @@ export async function handleSettingsMenu(
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
   const isPaper = config.mode === 'PAPER';
   const modeBadge = isPaper ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN';
-  const fixedSol = (config.sizing_params as any)?.fixed_sol || 0.1;
-  const minScore = (config.safety_params as any)?.min_safety_score || 75;
+  const fixedSol = (config.sizing_params as any)?.fixed_sol ?? 0.1;
+  const minScore = (config.safety_params as any)?.min_safety_score ?? 75;
 
-  const slPercent = (config.exit_params as any)?.sl_percent || 8;
-  const tp1Percent = (config.exit_params as any)?.tp1_percent || 15;
+  const slPercent = (config.exit_params as any)?.sl_percent ?? 8;
+  const tp1Percent = (config.exit_params as any)?.tp1_percent ?? 15;
   const trailingEnabled = (config.exit_params as any)?.trailing_stop_enabled || false;
 
   const text = `

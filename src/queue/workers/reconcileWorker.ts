@@ -16,13 +16,9 @@ export function createReconcileWorker(
 
     try {
       // 1. Reconcile PENDING trades
-      const { data: pendingTrades, error } = await tradeRepo.db
-        .from('trades')
-        .select('*')
-        .eq('status', 'PENDING')
-        .not('pending_signature', 'is', null);
-      
-      if (!error && pendingTrades) {
+      try {
+        const pendingTrades = await tradeRepo.getPendingTradesWithSignature();
+        if (pendingTrades && pendingTrades.length > 0) {
         for (const trade of pendingTrades) {
            const signature = trade.pending_signature;
            const connection = walletService.getConnection();
@@ -47,16 +43,15 @@ export function createReconcileWorker(
              }
            }
         }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Failed to fetch pending trades');
       }
 
       // 2. Compare token balance for OPEN trades
-      const { data: openTrades, error: err2 } = await tradeRepo.db
-        .from('trades')
-        .select('*')
-        .in('status', ['OPEN', 'PARTIAL_EXIT'])
-        .order('created_at', { ascending: true }); // older trades first (FIFO)
-
-      if (!err2 && openTrades) {
+      try {
+        const openTrades = await tradeRepo.getOpenTradesOrderedFIFO();
+        if (openTrades && openTrades.length > 0) {
         // Group by user_id and token_mint
         const groups = new Map<string, typeof openTrades>();
         for (const t of openTrades) {
@@ -74,7 +69,7 @@ export function createReconcileWorker(
           
           let sumDbRaw = 0;
           for (const t of trades) {
-            sumDbRaw += (t.remaining_raw || 0);
+            sumDbRaw += (t.remaining_raw ?? 0);
           }
 
           if (sumDbRaw > tokenBalanceRaw) {
@@ -85,7 +80,7 @@ export function createReconcileWorker(
              for (const t of trades) {
                if (deficit <= 0) break;
                
-               const currentRemaining = t.remaining_raw || 0;
+               const currentRemaining = t.remaining_raw ?? 0;
                if (currentRemaining > 0) {
                  const toDeduct = Math.min(currentRemaining, deficit);
                  const newRemaining = currentRemaining - toDeduct;
@@ -104,6 +99,9 @@ export function createReconcileWorker(
              logger.info({ userId, tokenMint, onChain: tokenBalanceRaw, dbSum: sumDbRaw }, 'User has extra tokens (not tied to open trades). Ignored by reconciler.');
           }
         }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Failed to fetch open trades');
       }
       
     } catch (e) {

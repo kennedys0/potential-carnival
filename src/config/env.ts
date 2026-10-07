@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import { logger } from '../utils/logger';
 dotenv.config();
 
 const hex64Regex = /^[0-9a-f]{64}$/i;
@@ -47,7 +48,7 @@ export function validateEnv(raw: Record<string, unknown> = process.env): Env {
     return EnvSchema.parse(raw);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error('❌ Environment validation failed:', JSON.stringify(error.errors, null, 2));
+      logger.error({ errors: error.errors }, '❌ Environment validation failed');
     }
     if (raw.NODE_ENV === 'test' || process.env.NODE_ENV === 'test') throw error;
     process.exit(1);

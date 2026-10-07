@@ -52,7 +52,7 @@ export class WalletRepository {
       .select()
       .single();
     if (error || !data) {
-       console.error('Failed to update owner_pubkey:', error);
+       throw error;
        return false;
     }
     return true;

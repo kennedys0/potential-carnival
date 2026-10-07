@@ -147,7 +147,7 @@ export class WalletService {
       }).compileToV0Message();
       
       const fee = await this.connection.getFeeForMessage(message, 'confirmed');
-      const estimatedFee = fee.value || 5000;
+      const estimatedFee = fee.value ?? 5000;
       
       let transferLamports = 0;
       const rentReserve = 0.01 * LAMPORTS_PER_SOL;

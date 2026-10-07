@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { z } from 'zod';
 import { calculateEMA } from './indicators/ema';
 import { calculateRSI } from './indicators/rsi';
@@ -91,7 +92,7 @@ export class AnalyzerService {
     securityFlags: string[]
   ): Promise<AiAnalysis | null> {
     if (!this.llmClient) {
-      console.warn('AI unavailable: llmClient not configured');
+      logger.warn('AI unavailable: llmClient not configured');
       return null;
     }
 
@@ -150,7 +151,7 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
 
       return analysis;
     } catch (err: any) {
-      console.warn(`LLM attempt ${attempts} failed: ${err.message}`);
+      logger.warn(`LLM attempt ${attempts} failed: ${err.message}`);
       if (attempts >= maxAttempts) {
         return null;
       }

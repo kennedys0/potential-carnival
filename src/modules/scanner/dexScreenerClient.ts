@@ -24,7 +24,7 @@ export class DexScreenerClient {
       // Filter pairs for solana chain and sort by liquidity descending
       const solanaPairs = data.pairs
         .filter((p: any) => p.chainId === 'solana')
-        .sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        .sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
       return solanaPairs[0] || null;
     } catch {
       return null;

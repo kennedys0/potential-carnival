@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { Bot, InlineKeyboard } from 'grammy';
 import { UserRepository } from '../../database/repositories/userRepository';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
@@ -97,11 +98,11 @@ export function registerBotRoutes(
     // Use dynamic import or existing logger if available for audit log, for now console/logger
     if (match === 'on') {
       await redis.set('killswitch:global', '1');
-      console.warn(`[AUDIT] Admin ${ctx.from.id} activated global killswitch.`);
+      logger.warn(`[AUDIT] Admin ${ctx.from.id} activated global killswitch.`);
       await ctx.reply('🛑 <b>KILL-SWITCH DIAKTIFKAN.</b> Semua entry baru ditolak.', { parse_mode: 'HTML' });
     } else {
       await redis.del('killswitch:global');
-      console.warn(`[AUDIT] Admin ${ctx.from.id} deactivated global killswitch.`);
+      logger.warn(`[AUDIT] Admin ${ctx.from.id} deactivated global killswitch.`);
       await ctx.reply('🟢 <b>KILL-SWITCH DINONAKTIFKAN.</b> Trading berjalan normal.', { parse_mode: 'HTML' });
     }
   });
@@ -137,8 +138,8 @@ export function registerBotRoutes(
     // Let's import walletRepository here or call walletService if we add the method.
     // I will use walletService.setOwnerPubkey if it existed, but we didn't add it to WalletService yet.
     // Wait, let's inject walletRepo in BotRouteServices or use walletService.
-    const { getSupabaseClient } = require('../../database/client');
-    const { WalletRepository } = require('../../database/repositories/walletRepository');
+    const { getSupabaseClient } = await import('../../database/client.js');
+    const { WalletRepository } = await import('../../database/repositories/walletRepository.js');
     const db = getSupabaseClient();
     const walletRepo = new WalletRepository(db);
     
@@ -160,8 +161,8 @@ export function registerBotRoutes(
     }
     
     // Check if owner_pubkey exists
-    const { getSupabaseClient } = require('../../database/client');
-    const { WalletRepository } = require('../../database/repositories/walletRepository');
+    const { getSupabaseClient } = await import('../../database/client.js');
+    const { WalletRepository } = await import('../../database/repositories/walletRepository.js');
     const db = getSupabaseClient();
     const walletRepo = new WalletRepository(db);
     const wallet = await walletRepo.getWalletByUserId(ctx.from.id);
@@ -199,7 +200,7 @@ export function registerBotRoutes(
     
     // We import liveFeedSubscribers dynamically because router.ts is imported in index.ts which imports trendScanner.ts.
     // To avoid circular dependency issues, we can just require it
-    const { liveFeedSubscribers } = require('../scanner/trendScanner');
+    const { liveFeedSubscribers } = await import('../scanner/trendScanner.js');
     
     if (liveFeedSubscribers.has(ctx.from.id)) {
       liveFeedSubscribers.delete(ctx.from.id);
@@ -346,7 +347,7 @@ export function registerBotRoutes(
       await handleSettingsMenu(ctx, services.autopilotRepo);
     } else if (data.startsWith('settings_size_')) {
       if (!ctx.from) return;
-      const size = parseFloat(data.replace('settings_size_', '')) || 0.1;
+      const size = parseFloat(data.replace('settings_size_', '')) ?? 0.1;
       await services.autopilotRepo.updateConfig(ctx.from.id, {
         sizing_params: { fixed_sol: size },
       });
@@ -355,7 +356,7 @@ export function registerBotRoutes(
     } else if (data === 'settings_cycle_sl') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-      const currentSl = (cfg.exit_params as any)?.sl_percent || 8;
+      const currentSl = (cfg.exit_params as any)?.sl_percent ?? 8;
       // Cycle: 5 -> 8 -> 10 -> 15 -> 20 -> 5
       const nextSl = currentSl === 5 ? 8 : currentSl === 8 ? 10 : currentSl === 10 ? 15 : currentSl === 15 ? 20 : 5;
       await services.autopilotRepo.updateConfig(ctx.from.id, {
@@ -366,7 +367,7 @@ export function registerBotRoutes(
     } else if (data === 'settings_cycle_tp') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-      const currentTp = (cfg.exit_params as any)?.tp1_percent || 15;
+      const currentTp = (cfg.exit_params as any)?.tp1_percent ?? 15;
       // Cycle: 10 -> 15 -> 20 -> 30 -> 50 -> 100 -> 10
       const nextTp = currentTp === 10 ? 15 : currentTp === 15 ? 20 : currentTp === 20 ? 30 : currentTp === 30 ? 50 : currentTp === 50 ? 100 : 10;
       await services.autopilotRepo.updateConfig(ctx.from.id, {
@@ -392,7 +393,7 @@ export function registerBotRoutes(
     } else if (data.startsWith('buy:')) {
       if (!ctx.from) return;
       const [, mint, amountStr] = data.split(':');
-      const amount = parseFloat(amountStr) || 0.1;
+      const amount = parseFloat(amountStr) ?? 0.1;
 
       await ctx.answerCallbackQuery({ text: `⏳ Memproses order ${amount} SOL...` });
 
@@ -438,7 +439,7 @@ export function registerBotRoutes(
     } else if (data.startsWith('sell:')) {
       if (!ctx.from) return;
       const [, tradeId, percentStr] = data.split(':');
-      const percent = parseFloat(percentStr) || 100;
+      const percent = parseFloat(percentStr) ?? 100;
       
       await ctx.answerCallbackQuery({ text: `⏳ Memproses penutupan posisi ${percent}%...` });
       

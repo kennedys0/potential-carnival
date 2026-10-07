@@ -57,7 +57,7 @@ ATURAN WAJIB:
     try {
       const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs || 8000);
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 8000);
 
       const res = await fetch(url, {
         method: 'POST',

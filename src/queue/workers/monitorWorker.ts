@@ -25,8 +25,8 @@ export function createMonitorWorker(
       try {
         const trades = await tradeRepo.getOpenTradesByUserId(userId);
         const trade = trades.find(t => t.id === positionId);
-        if (!trade) {
-          // Trade already closed or doesn't exist
+        if (!trade || !['OPEN', 'PARTIAL_EXIT'].includes(trade.status)) {
+          // Trade already closed, pending, or doesn't exist
           return;
         }
 
@@ -57,7 +57,7 @@ export function createMonitorWorker(
            try {
              const quote = await jupiterClient.getQuote(trade.token_mint, WSOL_MINT, amountLamports, slippageBps);
              const solToReceive = parseInt(quote.outAmount) / 1e9;
-             const solSpent = (trade.sol_spent_lamports || 0) / 1e9;
+             const solSpent = (trade.sol_spent_lamports ?? 0) / 1e9;
              
              if (solSpent <= 0) {
                 logger.warn({ positionId }, 'solSpent is 0, cannot calculate PNL');
@@ -74,9 +74,9 @@ export function createMonitorWorker(
 
         // Take Profit & Stop Loss logic
         const exitParams = (config.exit_params as any) || {};
-        const tp1Percent = exitParams.tp1_percent || 15;
-        const tp2Percent = exitParams.tp2_percent || 30;
-        const slPercent = exitParams.sl_percent || 8;
+        const tp1Percent = exitParams.tp1_percent ?? 15;
+        const tp2Percent = exitParams.tp2_percent ?? 30;
+        const slPercent = exitParams.sl_percent ?? 8;
         
         let percentageToClose = 0;
         let reason = '';
@@ -93,6 +93,13 @@ export function createMonitorWorker(
         }
 
         if (percentageToClose > 0) {
+          const lockKey = `lock:monitor:close:${positionId}`;
+          const locked = await redis.set(lockKey, 'locked', 'EX', 30, 'NX');
+          if (!locked) {
+            logger.info({ positionId }, 'Position is currently being closed by another worker, skipping');
+            return;
+          }
+          
           logger.info({ positionId, reason, percentageToClose }, 'Exiting position');
           await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
         }

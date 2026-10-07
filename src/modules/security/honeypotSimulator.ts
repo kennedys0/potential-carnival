@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { Connection } from '@solana/web3.js';
 import { FactorResult } from './scoreCalculator';
 
@@ -64,7 +65,7 @@ export class HoneypotSimulator {
         priceImpactPct: { value: priceImpact, status: 'OK', source: 'Jupiter Quote API' },
       };
     } catch (err: any) {
-      console.error('Simulation Error details:', err);
+      logger.error({ err }, 'Simulation Error details:');
       return {
         canSell: { value: null, status: 'UNAVAILABLE', source: `Simulation Error: ${err.message}` },
         effectiveTaxPercent: { value: null, status: 'UNAVAILABLE', source: `Simulation Error: ${err.message}` },

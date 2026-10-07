@@ -37,8 +37,8 @@ export class UserStateService {
     // 2. Get Balance
     const wallet = await this.walletService.getOrCreateWallet(userId);
     const balance = await this.walletService.getBalance(wallet.publicKey);
-    const minReserve = sizingParams.min_reserve_sol || 0.05;
-    const autopilotBudget = sizingParams.autopilot_budget_sol || Infinity;
+    const minReserve = sizingParams.min_reserve_sol ?? 0.05;
+    const autopilotBudget = sizingParams.autopilot_budget_sol ?? Number.MAX_SAFE_INTEGER;
     
     const availableBalanceSol = Math.max(0, Math.min(balance.sol - minReserve, autopilotBudget));
 
@@ -91,7 +91,7 @@ export class UserStateService {
     // 5. Max Drawdown
     // To calculate max drawdown, we need the equity curve. We can simplify by just tracking peak equity in autopilot_states
     const state = await this.autopilotRepo.getAutopilotState(userId);
-    let maxDrawdown = state?.max_drawdown || 0;
+    let maxDrawdown = state?.max_drawdown ?? 0;
 
     return {
       openPositionsCount,
@@ -110,9 +110,9 @@ export class UserStateService {
 
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
     const cbParams = config.circuit_breaker_params as any;
-    const maxDailyLoss = cbParams.max_daily_loss_sol || 1.0;
-    const maxConsecutiveLosses = cbParams.max_consecutive_losses || 3;
-    const maxDrawdownLimit = cbParams.max_drawdown_percent || 20;
+    const maxDailyLoss = cbParams.max_daily_loss_sol ?? 1.0;
+    const maxConsecutiveLosses = cbParams.max_consecutive_losses ?? 3;
+    const maxDrawdownLimit = cbParams.max_drawdown_percent ?? 20;
 
     let reason = '';
     if (metrics.dailyLossSol >= maxDailyLoss) {

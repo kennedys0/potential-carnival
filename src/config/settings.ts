@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const AppSettingsSchema = z.object({
-  PAPER_TRADE_SOL_PRICE: z.number().default(150),
+  MOCK_SOL_PRICE_USD: z.number().default(150),
   PAPER_TRADE_FEE_LAMPORTS: z.number().default(50000),
   DEFAULT_SLIPPAGE_BPS: z.number().default(50),
   DAY_BOUNDARY_TZ: z.string().default('UTC'),

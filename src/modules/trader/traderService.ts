@@ -38,7 +38,7 @@ export class TraderService {
 
     if (req.isDryRun) {
       // Paper Trading: Simulate execution with market price and config fee
-      const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * appSettings.PAPER_TRADE_SOL_PRICE) / req.currentPriceUsd : 0;
+      const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * appSettings.MOCK_SOL_PRICE_USD) / req.currentPriceUsd : 0;
       return this.tradeRepo.createTrade({
         user_id: req.userId,
         token_mint: req.tokenMint,
@@ -146,7 +146,7 @@ export class TraderService {
       let finalSolAmount = req.solAmount;
 
       if (tx && tx.meta) {
-        feeLamports = tx.meta.fee || 0;
+        feeLamports = tx.meta.fee ?? 0;
         
         // Find user account index
         const accountIndex = tx.transaction.message.accountKeys.findIndex((k: any) => k.pubkey.toBase58() === wallet.publicKey);
@@ -237,7 +237,7 @@ export class TraderService {
       return;
     }
 
-    const tradeBalanceRaw = trade.remaining_raw || 0;
+    const tradeBalanceRaw = trade.remaining_raw ?? 0;
     if (tradeBalanceRaw <= 0) {
        throw new Error('Trade has no remaining raw tokens to close.');
     }
@@ -250,7 +250,7 @@ export class TraderService {
     }
 
     // Increment exit attempts immediately
-    const currentAttempts = (trade.exit_attempts || 0) + 1;
+    const currentAttempts = (trade.exit_attempts ?? 0) + 1;
     await this.tradeRepo.updateTradeStatus(trade.id, { exit_attempts: currentAttempts });
 
     const quote = await this.jupiterClient.getQuote(
@@ -299,7 +299,7 @@ export class TraderService {
     let tokenSpentRaw = 0;
 
     if (tx && tx.meta) {
-      feeLamports = tx.meta.fee || 0;
+      feeLamports = tx.meta.fee ?? 0;
       const accountIndex = tx.transaction.message.accountKeys.findIndex((k: any) => k.pubkey.toBase58() === wallet.publicKey);
       if (accountIndex >= 0) {
         solReceivedLamports = tx.meta.postBalances[accountIndex] - tx.meta.preBalances[accountIndex] + feeLamports;
@@ -319,7 +319,7 @@ export class TraderService {
     const newTradeRemainingRaw = Math.max(0, tradeBalanceRaw - actualTokensSpent);
     
     const newStatus = newTradeRemainingRaw <= 0 ? 'CLOSED' : 'PARTIAL_EXIT';
-    const realizedPnlSol = (trade.realized_pnl_sol || 0) + solReceived - (trade.sol_amount * (percentageToClose / 100)); // Simplistic PNL 
+    const realizedPnlSol = (trade.realized_pnl_sol ?? 0) + solReceived - (trade.sol_amount * (percentageToClose / 100)); // Simplistic PNL 
 
     const pnlPercent = ((currentPriceUsd - trade.entry_price_usd) / trade.entry_price_usd) * 100;
 

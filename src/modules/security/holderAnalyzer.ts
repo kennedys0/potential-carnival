@@ -23,7 +23,7 @@ export class HolderAnalyzer {
       // TODO: Proper resolve owner and EXCLUDE pool/LP/vault/burn/program-owned
       const validAccounts = largestAccounts.value.filter(acc => acc.uiAmount && acc.uiAmount > 0);
       const topAccounts = validAccounts.slice(0, 10);
-      const top10Amount = topAccounts.reduce((acc, curr) => acc + (curr.uiAmount || 0), 0);
+      const top10Amount = topAccounts.reduce((acc, curr) => acc + (curr.uiAmount ?? 0), 0);
 
       const top10Percent = totalSupply > 0 ? (top10Amount / totalSupply) * 100 : 0;
       const largestHolderPercent =

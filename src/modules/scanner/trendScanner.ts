@@ -51,7 +51,7 @@ export class TrendScanner {
       logger.info(`TrendScanner: Fetching trending tokens for ${activeConfigs.length} active users...`);
 
       // 2. Fetch latest boosted/trending tokens from DexScreener
-      const response = await fetch('https://api.dexscreener.com/token-boosts/latest/v1');
+      const response = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
       if (!response.ok) throw new Error('Failed to fetch from DexScreener Token Boosts');
       
       const tokens = (await response.json()) as any[];
@@ -92,8 +92,8 @@ export class TrendScanner {
 
       // Sort by 24h volume (highest first)
       const sortedPairs = fetchedPairs.sort((a: any, b: any) => {
-        const volA = a.volume?.h24 || 0;
-        const volB = b.volume?.h24 || 0;
+        const volA = a.volume?.h24 ?? 0;
+        const volB = b.volume?.h24 ?? 0;
         return volB - volA;
       });
 
@@ -150,7 +150,7 @@ export class TrendScanner {
                 tokenAddress,
                 pair.baseToken.symbol,
                 priceUsd,
-                pair.liquidity?.usd || 0,
+                pair.liquidity?.usd ?? 0,
                 security,
                 aiAnalysis,
                 currentState,
@@ -162,10 +162,8 @@ export class TrendScanner {
                 
                 // Notify user
                 try {
-                  const grammy = await import('grammy');
-                  const envMod = await import('../../config/env.js');
-                  const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
-                  const bot = new grammy.Bot(botToken);
+                  const { createTelegramBot } = await import('../telegram/bot.js');
+                  const bot = createTelegramBot();
                   await bot.api.sendMessage(config.user_id, 
                     `🤖 <b>Autopilot Alert!</b>\n\n` +
                     `Sistem baru saja mengeksekusi order <b>BUY</b> untuk token <b>${pair.baseToken.symbol}</b> secara otomatis!\n` +
@@ -180,10 +178,8 @@ export class TrendScanner {
                 logger.debug(`Autopilot skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
                 if (liveFeedSubscribers.has(config.user_id)) {
                   try {
-                    const grammy = await import('grammy');
-                    const envMod = await import('../../config/env.js');
-                    const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
-                    const bot = new grammy.Bot(botToken);
+                    const { createTelegramBot } = await import('../telegram/bot.js');
+                  const bot = createTelegramBot();
                     await bot.api.sendMessage(config.user_id, 
                       `🔍 <b>[Live Feed]</b> Token <b>${pair.baseToken.symbol}</b> di-skip.\n` +
                       `Alasan: ${result.reason}`,
@@ -210,10 +206,8 @@ export class TrendScanner {
       // Notify live feed subscribers that a cycle finished
       for (const userId of liveFeedSubscribers) {
         try {
-          const grammy = await import('grammy');
-          const envMod = await import('../../config/env.js');
-          const botToken = envMod.getEnv().TELEGRAM_BOT_TOKEN;
-          const bot = new grammy.Bot(botToken);
+          const { createTelegramBot } = await import('../telegram/bot.js');
+                  const bot = createTelegramBot();
           await bot.api.sendMessage(userId, `✅ <b>[Live Feed]</b> Selesai memindai ${topPairs.length} token trending. Siklus berikutnya dalam 2 menit.`, { parse_mode: 'HTML' });
         } catch (e) {
           // ignore
