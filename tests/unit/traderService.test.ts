@@ -32,6 +32,7 @@ describe('TraderService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRedis.get.mockResolvedValue(null); // Kill switch off by default
+    mockRedis.set.mockResolvedValue('OK'); // Lock acquired successfully
   });
 
   it('calculates dynamic slippage capped at maxSlippageBps', () => {
@@ -92,13 +93,19 @@ describe('TraderService', () => {
       getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
       signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'mock-tx-sig-123' }),
       getParsedTransaction: vi.fn().mockResolvedValue({
-        meta: { fee: 5000, preBalances: [2_000_000_000], postBalances: [1_500_000_000] },
-        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }] } }
+        meta: { 
+          fee: 5000, 
+          preBalances: [2_000_000_000], 
+          postBalances: [1_500_000_000],
+          preTokenBalances: [],
+          postTokenBalances: [{ mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'] } }
       }),
     };
     const mockJupiterClient: any = {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ mockTx: true }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
     };
 
     const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
@@ -170,7 +177,7 @@ describe('TraderService', () => {
     };
     const mockJupiterClient: any = {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ mockTx: true }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
     };
 
     const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
@@ -249,18 +256,28 @@ describe('TraderService', () => {
     sol_amount: 0.5, token_amount: 10, entry_price_usd: 1.0,
     token_amount_raw: 10_000_000, remaining_raw: 10_000_000, exit_attempts: 0, ...over,
   });
-  const exitDeps = (sendResult: any) => {
+    const exitDeps = (sendResult: any) => {
     const repo: any = { updateTradeStatus: vi.fn().mockResolvedValue(true) };
     const wallet: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
-      getTokenBalance: vi.fn().mockResolvedValue(10_000_000),
+      getTokenBalance: vi.fn().mockResolvedValue({ raw: 10_000_000n, decimals: 6, ui: 10 }),
       signAndSendVersionedTransaction: vi.fn().mockResolvedValue(sendResult),
+      getParsedTransaction: vi.fn().mockResolvedValue({
+        meta: { 
+          fee: 5000, 
+          preBalances: [2_000_000_000], 
+          postBalances: [2_800_000_000], // gained 0.8 SOL
+          preTokenBalances: [{ mint: MINT, owner: '1111', uiTokenAmount: { amount: '2000000', decimals: 6 } }],
+          postTokenBalances: [{ mint: MINT, owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, MINT] } }
+      }),
     };
     const jup: any = {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '1000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ tx: true }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
     };
-    return { repo, wallet, service: new TraderService(repo, wallet, jup) };
+    return { repo, wallet, jup, service: new TraderService(repo, wallet, jup) };
   };
   const updatesOf = (repo: any): any[] => repo.updateTradeStatus.mock.calls.map((c: any) => c[1]);
 
@@ -317,11 +334,20 @@ describe('TraderService', () => {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
       getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
       signAndSendVersionedTransaction: sendImpl,
-      getParsedTransaction: parsedImpl ?? vi.fn().mockResolvedValue(null),
+      getParsedTransaction: parsedImpl ?? vi.fn().mockResolvedValue({
+        meta: { 
+          fee: 5000, 
+          preBalances: [2_000_000_000], 
+          postBalances: [1_500_000_000],
+          preTokenBalances: [],
+          postTokenBalances: [{ mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'] } }
+      }),
     };
     const jup: any = {
       getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ tx: true }),
+      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
     };
     return { repo, wallet, service: new TraderService(repo, wallet, jup) };
   };
@@ -356,5 +382,98 @@ describe('TraderService', () => {
     const ups = updatesOf(repo);
     expect(ups).toContainEqual(expect.objectContaining({ pending_signature: 'sigY' }));
     expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
+  });
+
+  it('[GUARD] entry: tolak bila priceImpactPct > batas config', async () => {
+    const { service } = buyDeps(sendWithSig({ status: 'SUCCESS', signature: 'sigX' }));
+    // Mock quote to return high price impact (3% = "0.03")
+    service['jupiterClient']!.getQuote = vi.fn().mockResolvedValue({ priceImpactPct: '0.03' });
+    await expect(service.executeOrder(buyReq)).rejects.toThrow(/Price impact \(3.00%\) melebihi batas/);
+  });
+
+  it('[GUARD] exit: eskalasi slippage exit sesuai attempts, dan cost basis proporsional (PnL benar)', async () => {
+    const send = vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'sigZ' });
+    const { service, repo, jup } = exitDeps(send);
+    const trade = liveTrade({ 
+      remaining_raw: 2000000, 
+      exit_attempts: 2, 
+      sol_spent_lamports: 1000000000, // 1 SOL
+      token_amount_raw: 2000000 
+    });
+    
+    await service.closePosition(trade as any, 1.5, 50); // 50% = 1,000,000 tokens
+    
+    // Check slippage escalation
+    // base: 100, step: 50. attempt: 2 -> currentAttempt before fetch is 3.
+    // wait, in exitPosition: currentAttempts = (trade.exit_attempts ?? 0) + 1 = 3.
+    // exitSlippageBps = 100 + (3-1)*50 = 200.
+    expect(jup.getQuote).toHaveBeenCalledWith(trade.token_mint, expect.any(String), 1000000, 200);
+    
+    const ups = updatesOf(repo);
+    const pnlUpdate = ups.find(u => u.pnl_sol !== undefined);
+    expect(pnlUpdate).toBeDefined();
+    // 50% tokens = 0.5 SOL cost. solReceived = 0.8. fee = 0.000005. 
+    // realizedPnl = 0.8 - 0.5 - 0.000005 = 0.299995
+    expect(pnlUpdate!.realized_pnl_sol).toBeCloseTo(0.299995, 5);
+  });
+
+  it('[GUARD] exit: partial exit berulang (50%, lalu 100% sisa) dengan presisi BigInt (>2^53)', async () => {
+    // 5_000_000_000_000_000 = 5e15, which is < Number.MAX_SAFE_INTEGER (9e15), 
+    // but we can use big numbers to ensure logic holds.
+    const initialRaw = 5000000000000000;
+    const trade = liveTrade({ 
+      remaining_raw: initialRaw, 
+      exit_attempts: 0, 
+      sol_spent_lamports: 2000000000, // 2 SOL cost
+      token_amount_raw: initialRaw,
+      realized_pnl_sol: 0,
+      pnl_percent: 0,
+    });
+    
+    // 1st partial exit: 50%
+    const send1 = vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'sig1' });
+    let { service, repo, jup, wallet } = exitDeps(send1);
+    wallet.getTokenBalance.mockResolvedValue({ raw: BigInt(initialRaw), decimals: 9, ui: 5000000 });
+    wallet.getParsedTransaction.mockResolvedValue({
+      meta: { 
+        fee: 5000, postBalances: [3000000000], preBalances: [2000000000], // gained 1.0 SOL
+        preTokenBalances: [{ mint: MINT, owner: '1111', uiTokenAmount: { amount: initialRaw.toString(), decimals: 9 } }],
+        postTokenBalances: [{ mint: MINT, owner: '1111', uiTokenAmount: { amount: (initialRaw / 2).toString(), decimals: 9 } }]
+      },
+      transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, MINT] } }
+    });
+    await service.closePosition(trade as any, 1.5, 50); 
+    
+    let ups = updatesOf(repo);
+    let pnlUpdate1 = ups.find(u => u.pnl_sol !== undefined);
+    expect(pnlUpdate1).toBeDefined();
+    expect(pnlUpdate1!.remaining_raw).toBe(initialRaw / 2);
+    // Cost for 50% is 1 SOL. Received 1 SOL (net). Fee is 0.000005. PnL = 0.
+    expect(pnlUpdate1!.realized_pnl_sol).toBeCloseTo(0.0, 5);
+    
+    // 2nd exit: 100% of remaining
+    const send2 = vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'sig2' });
+    const deps2 = exitDeps(send2);
+    deps2.wallet.getTokenBalance.mockResolvedValue({ raw: BigInt(initialRaw / 2), decimals: 9, ui: 2500000 });
+    deps2.wallet.getParsedTransaction.mockResolvedValue({
+      meta: { 
+        fee: 5000, postBalances: [4500000000], preBalances: [3000000000], // gained 1.5 SOL
+        preTokenBalances: [{ mint: MINT, owner: '1111', uiTokenAmount: { amount: (initialRaw / 2).toString(), decimals: 9 } }],
+        postTokenBalances: [{ mint: MINT, owner: '1111', uiTokenAmount: { amount: '0', decimals: 9 } }]
+      },
+      transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, MINT] } }
+    });
+    
+    const trade2 = { ...trade, ...pnlUpdate1, id: 'trade-2' }; // mock updated trade
+    await deps2.service.closePosition(trade2 as any, 2.0, 100); 
+    
+    ups = updatesOf(deps2.repo);
+    const pnlUpdate2 = ups.find(u => u.status === 'CLOSED');
+    expect(pnlUpdate2).toBeDefined();
+    expect(pnlUpdate2!.remaining_raw).toBe(0);
+    expect(pnlUpdate2!.closed_at).toBeDefined(); // should be fully closed
+    // 2nd exit cost = 1 SOL. Received 1.5 SOL (net). Fee = 0.000005. Realized this time = +0.5.
+    // Total realized = 0.0 + 0.5 = 0.5.
+    expect(pnlUpdate2!.realized_pnl_sol).toBeCloseTo(0.5, 5);
   });
 });

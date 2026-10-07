@@ -7,7 +7,7 @@
   "ts-escape-hatch": 0,
   "repo-db-exposed": 0,
   "debt-hardcoded-or-default": 0,
-  "debt-hardcoded-nullish-default": 23,
+  "debt-hardcoded-nullish-default": 16,
   "debt-unbounded-limit": 2,
   "debt-bot-created-per-call": 0,
   "debt-inline-dynamic-import": 9,

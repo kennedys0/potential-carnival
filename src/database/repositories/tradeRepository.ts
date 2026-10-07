@@ -33,6 +33,9 @@ export interface TradeRecord {
   needs_attention?: boolean;
   remaining_raw?: number | null;
   realized_pnl_sol?: number | null;
+  blockhash?: string | null;
+  last_valid_block_height?: number | null;
+  pending_since?: string | null;
 }
 
 export class TradeRepository {

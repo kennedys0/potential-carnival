@@ -29,6 +29,16 @@ export const AppSettingsSchema = z.object({
     DEFAULT_TRAILING_STOP_PERCENT: z.number().default(5),
     DEFAULT_TRAILING_ACTIVATION_PERCENT: z.number().default(20),
   }).default({}),
+  AUTOPILOT_PARAMS: z.object({
+    DEFAULT_MIN_RESERVE_SOL: z.number().default(0.05),
+    DEFAULT_BUDGET_SOL: z.number().default(1000.0), // reasonable explicit budget instead of Infinity
+    DEFAULT_MAX_DAILY_LOSS_SOL: z.number().default(1.0),
+    DEFAULT_MAX_CONSECUTIVE_LOSSES: z.number().default(3),
+    DEFAULT_MAX_DRAWDOWN_PERCENT: z.number().default(20),
+    DEFAULT_FIXED_SOL: z.number().default(0.1),
+    DEFAULT_PERCENT_BALANCE: z.number().default(10),
+    DEFAULT_RISK_PERCENT: z.number().default(2),
+  }).default({}),
   ANALYZER_PARAMS: z.object({
     MIN_CANDLES: z.number().default(21),
     MAX_STALE_CANDLE_AGE_MS: z.number().default(300000), // 5 minutes

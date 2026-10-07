@@ -28,7 +28,7 @@ export interface FactorReport {
 
 export interface SecurityScoreResult {
   score: number;
-  level: 'SAFE' | 'CAUTION' | 'UNAVAILABLE';
+  level: 'SAFE' | 'CAUTION' | 'DANGER' | 'UNVERIFIED';
   isHardBlocked: boolean;
   hardBlockReasons: string[];
   riskFlags: string[];
@@ -176,11 +176,11 @@ export class ScoreCalculator {
 
     const coverage = (availableWeights / totalWeights) * 100;
     
-    // Hard blocks -> Score 0, UNAVAILABLE
+    // Hard blocks -> Score 0, DANGER
     if (hardBlockReasons.length > 0) {
       return {
         score: 0,
-        level: 'UNAVAILABLE',
+        level: 'DANGER',
         isHardBlocked: true,
         hardBlockReasons,
         riskFlags: [...new Set([...hardBlockReasons, ...riskFlags])],
@@ -190,17 +190,17 @@ export class ScoreCalculator {
     }
 
     // Determine Level
-    let level: 'SAFE' | 'CAUTION' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    let level: 'SAFE' | 'CAUTION' | 'DANGER' | 'UNVERIFIED' = 'UNVERIFIED';
     
     // Scale score based on coverage (e.g. if you got 60 out of 60 available weights, that's 100% scaled score)
     const scaledScore = availableWeights > 0 ? (score / availableWeights) * 100 : 0;
     
     if (coverage < settings.MIN_COVERAGE_PERCENT) {
-      level = 'UNAVAILABLE';
+      level = 'UNVERIFIED';
     } else {
       if (scaledScore >= 80) level = 'SAFE';
       else if (scaledScore >= 60) level = 'CAUTION';
-      else level = 'UNAVAILABLE';
+      else level = 'DANGER';
     }
 
     return {

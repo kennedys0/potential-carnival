@@ -50,19 +50,23 @@ export class WalletService {
     };
   }
 
-  async getTokenBalance(walletPubkeyString: string, tokenMintString: string): Promise<number> {
+  async getTokenBalance(walletPubkeyString: string, tokenMintString: string): Promise<{ raw: bigint, decimals: number, ui: number }> {
     const walletPubkey = new PublicKey(walletPubkeyString);
     const tokenMint = new PublicKey(tokenMintString);
     const accounts = await this.connection.getParsedTokenAccountsByOwner(walletPubkey, { mint: tokenMint });
-    if (accounts.value.length === 0) return 0;
+    if (accounts.value.length === 0) return { raw: 0n, decimals: 0, ui: 0 };
     
     // Sum up if there are multiple accounts for the same mint, usually just one
-    let total = 0;
+    let totalRaw = 0n;
+    let decimals = 0;
+    let totalUi = 0;
     for (const acc of accounts.value) {
-      const amountStr = acc.account.data.parsed.info.tokenAmount.amount;
-      total += parseInt(amountStr, 10);
+      const tokenAmount = acc.account.data.parsed.info.tokenAmount;
+      totalRaw += BigInt(tokenAmount.amount);
+      decimals = tokenAmount.decimals;
+      totalUi += tokenAmount.uiAmount ?? 0;
     }
-    return total;
+    return { raw: totalRaw, decimals, ui: totalUi };
   }
 
   async generateQrBuffer(address: string): Promise<Buffer> {

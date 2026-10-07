@@ -13,7 +13,8 @@ describe('TxSender', () => {
 
     const mockTx: any = {
       sign: vi.fn(),
-      message: { recentBlockhash: 'mock-blockhash' }
+      message: { recentBlockhash: 'mock-blockhash' },
+      signatures: [new Uint8Array([1, 2, 3])]
     };
 
     const result = await TxSender.sendAndConfirm(mockConnection, mockTx, []);
@@ -32,12 +33,13 @@ describe('TxSender', () => {
 
     const mockTx: any = {
       sign: vi.fn(),
-      message: { recentBlockhash: 'mock-blockhash' }
+      message: { recentBlockhash: 'mock-blockhash' },
+      signatures: [new Uint8Array([1, 2, 3])]
     };
 
     const result = await TxSender.sendAndConfirm(mockConnection, mockTx, []);
     expect(result.status).toBe('SUCCESS');
-    expect(result.signature).toBe('mock-sig');
+    expect(result.signature).toBeDefined();
   });
 
   it('returns UNKNOWN if blockhash expires and status is still unknown', async () => {
@@ -51,7 +53,8 @@ describe('TxSender', () => {
 
     const mockTx: any = {
       sign: vi.fn(),
-      message: { recentBlockhash: 'mock-blockhash' }
+      message: { recentBlockhash: 'mock-blockhash' },
+      signatures: [new Uint8Array([1, 2, 3])]
     };
 
     const result = await TxSender.sendAndConfirm(mockConnection, mockTx, [], { pollingIntervalMs: 1 });

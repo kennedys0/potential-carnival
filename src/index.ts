@@ -74,17 +74,20 @@ async function main() {
   const scannerService = new ScannerService(dexScreenerClient, geckoTerminalClient, redis);
   const userStateService = new UserStateService(tradeRepo, autopilotRepo, walletService);
   
+  const bot = createTelegramBot();
+
   const trendScanner = new TrendScanner(
     scannerService,
     autopilotEngine,
     securityService,
     analyzerService,
     autopilotRepo,
-    userStateService
+    userStateService,
+    bot.api
   );
 
   // BullMQ Workers
-  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient);
+  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api);
   const reconcileWorker = createReconcileWorker(tradeRepo, walletService);
 
   // Position Monitoring Scheduler (runs every minute)
@@ -115,8 +118,8 @@ async function main() {
     });
   }
 
-  // Telegram Bot
-  const bot = createTelegramBot();
+  // Telegram Bot routes
+
   registerBotRoutes(bot, {
     userRepo,
     autopilotRepo,

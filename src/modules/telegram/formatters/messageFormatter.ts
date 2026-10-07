@@ -36,7 +36,11 @@ export function formatTokenReport(
   hasIndicators: boolean
 ): string {
   const priceNum = parseFloat(pair.priceUsd || '0');
-  const levelEmoji = security.level === 'SAFE' ? '🟢' : security.level === 'CAUTION' ? '🟡' : '🔴';
+  let levelEmoji = '🔴';
+  if (security.level === 'SAFE') levelEmoji = '🟢';
+  else if (security.level === 'CAUTION') levelEmoji = '🟡';
+  else if (security.level === 'UNVERIFIED') levelEmoji = '⚪';
+
   const progressBar = formatProgressBar(security.score, 100);
 
   const flagList = security.riskFlags.length > 0

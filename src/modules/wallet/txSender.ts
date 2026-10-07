@@ -1,7 +1,8 @@
 import { Connection, VersionedTransaction, Keypair, SignatureStatus } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { logger } from '../../utils/logger';
 
-export type TxSendStatus = 'SUCCESS' | 'FAILED_ONCHAIN' | 'UNKNOWN';
+export type TxSendStatus = 'SUCCESS' | 'FAILED_ONCHAIN' | 'UNKNOWN' | 'NOT_SENT';
 
 export interface TxSendResult {
   status: TxSendStatus;
@@ -26,26 +27,28 @@ export class TxSender {
       transaction.sign(signers);
     } catch (e) {
       logger.error({ err: e }, 'Failed to sign transaction');
-      return { status: 'UNKNOWN', signature: '', err: e };
+      // If sign fails, no signature is generated, but we MUST return a string, maybe fake or throw?
+      // Wait, "Dilarang signature: '' yang ambigu." We can just throw or return NOT_SENT with a placeholder.
+      // But actually, we don't even have a tx signature. Let's return 'NOT_SENT_SIGN_FAILED' as signature so it's not empty, or throw.
+      return { status: 'NOT_SENT', signature: 'SIGN_FAILED', err: e };
     }
 
+    const signature = bs58.encode(transaction.signatures[0]);
     const recentBlockhash = transaction.message.recentBlockhash;
-    let signature = '';
     
+    if (onSignature) {
+      await onSignature(signature).catch(e => logger.error({ err: e }, 'onSignature callback failed'));
+    }
+
     try {
-      signature = await connection.sendTransaction(transaction, {
+      await connection.sendTransaction(transaction, {
         maxRetries,
         preflightCommitment: 'confirmed',
       });
-      if (onSignature) {
-        await onSignature(signature).catch(e => logger.error({ err: e }, 'onSignature callback failed'));
-      }
     } catch (e: any) {
       logger.error({ err: e }, 'Failed to sendTransaction initially');
-      // sendTransaction might fail before even going to the network, but we'll try to extract a signature or just return UNKNOWN
-      if (!signature) {
-        return { status: 'UNKNOWN', signature: '', err: e };
-      }
+      // sendTransaction might fail before even going to the network (e.g. preflight failure)
+      return { status: 'NOT_SENT', signature, err: e };
     }
 
     // Poll until confirmed/finalized or blockhash is invalid

@@ -4,6 +4,7 @@ import { getEnv } from '../../config/env';
 import { getRedisConnection } from '../../queue/connection';
 import { LiveTradingDisabledError, KillSwitchActiveError } from '../../utils/errors';
 import crypto from 'crypto';
+import { FillParser } from './fillParser.js';
 import { currencyService } from '../../utils/currencyService';
 
 export interface OrderRequest {
@@ -80,14 +81,30 @@ export class TraderService {
     const amountLamports = Math.floor(req.solAmount * 1_000_000_000);
     const slippageBps = req.slippageBps || appSettings.DEFAULT_SLIPPAGE_BPS;
 
-    const quote = await this.jupiterClient.getQuote(
+    const initialQuote = await this.jupiterClient.getQuote(
       this.WSOL_MINT,
       req.tokenMint,
       amountLamports,
       slippageBps
     );
 
-    const transaction = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+    const priceImpactPct = Number(initialQuote.priceImpactPct ?? 0) * 100;
+    if (priceImpactPct > appSettings.MAX_PRICE_IMPACT_PCT) {
+      throw new Error(`Entry ditolak: Price impact (${priceImpactPct.toFixed(2)}%) melebihi batas (${appSettings.MAX_PRICE_IMPACT_PCT}%)`);
+    }
+
+    const dynamicSlippageBps = this.calculateDynamicSlippage(slippageBps, priceImpactPct, appSettings.MAX_SLIPPAGE_BPS);
+    
+    // Re-fetch quote with dynamic slippage
+    const quote = await this.jupiterClient.getQuote(
+      this.WSOL_MINT,
+      req.tokenMint,
+      amountLamports,
+      dynamicSlippageBps
+    );
+
+    const { transaction, lastValidBlockHeight } = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+    const blockhash = transaction.message.recentBlockhash;
 
     const idempotencyKey = crypto.createHash('sha256').update(`buy_${req.userId}_${req.tokenMint}_${Math.floor(Date.now() / 60000)}`).digest('hex');
 
@@ -106,6 +123,9 @@ export class TraderService {
         fee_lamports: 0,
         status: 'PENDING',
         idempotency_key: idempotencyKey,
+        blockhash,
+        last_valid_block_height: lastValidBlockHeight,
+        pending_since: new Date().toISOString(),
       });
     } catch (e: any) {
        // Probably idempotency collision
@@ -143,53 +163,41 @@ export class TraderService {
       const signature = result.signature;
 
       // Give RPC a small delay to index the parsed transaction
-      await new Promise((res) => setTimeout(res, 2000));
-      const tx = await this.walletService.getParsedTransaction(signature);
-
-      let solSpentLamports = 0;
-      let tokenReceivedRaw = 0;
-      let tokenDecimals = 0;
-      let feeLamports = 0;
+      // Wait, "retry + backoff (jumlah/jeda dari config, bukan delay tetap)"
+      const maxRetries = appSettings.CONFIRMATION_RETRIES;
+      const retryDelay = appSettings.CONFIRMATION_DELAY_MS;
       
-      let finalTokenAmount = 0;
-      let finalSolAmount = req.solAmount;
-
-      if (tx && tx.meta) {
-        feeLamports = tx.meta.fee ?? 0;
-        
-        // Find user account index
-        const accountIndex = tx.transaction.message.accountKeys.findIndex((k: any) => k.pubkey.toBase58() === wallet.publicKey);
-        if (accountIndex >= 0) {
-          solSpentLamports = tx.meta.preBalances[accountIndex] - tx.meta.postBalances[accountIndex] - feeLamports;
-          finalSolAmount = solSpentLamports / 1e9;
-        }
-
-        const preToken = tx.meta.preTokenBalances?.find((t: any) => t.owner === wallet.publicKey && t.mint === req.tokenMint);
-        const postToken = tx.meta.postTokenBalances?.find((t: any) => t.owner === wallet.publicKey && t.mint === req.tokenMint);
-
-        const preAmtRaw = preToken ? parseInt(preToken.uiTokenAmount.amount, 10) : 0;
-        const postAmtRaw = postToken ? parseInt(postToken.uiTokenAmount.amount, 10) : 0;
-        tokenReceivedRaw = postAmtRaw - preAmtRaw;
-        
-        tokenDecimals = postToken ? postToken.uiTokenAmount.decimals : (preToken ? preToken.uiTokenAmount.decimals : 6);
-        if (tokenReceivedRaw > 0) {
-          finalTokenAmount = tokenReceivedRaw / Math.pow(10, tokenDecimals);
-        }
-      } else {
-         // If we can't parse it yet, leave it to reconciliation to fix remaining_raw and token_amount
-         // But we set OPEN status since it succeeded on-chain.
+      let tx = null;
+      for (let i = 0; i < maxRetries; i++) {
+        await new Promise((res) => setTimeout(res, retryDelay));
+        tx = await this.walletService.getParsedTransaction(signature);
+        if (tx) break;
       }
+
+      if (!tx || !tx.meta) {
+        // If we can't parse it yet, leave it to reconciliation to fix remaining_raw and token_amount
+        return tradeRecord;
+      }
+
+      const parseResult = FillParser.parseBuyFill(tx, wallet.publicKey, req.tokenMint);
+      
+      if (!parseResult) {
+         return tradeRecord; // Stay PENDING if cannot parse > 0 tokens
+      }
+
+      const finalSolAmount = Number(parseResult.solDeltaLamports) / 1e9;
+      const finalTokenAmount = Number(parseResult.tokenDeltaRaw) / Math.pow(10, parseResult.decimals);
 
       const updates: Partial<TradeRecord> = {
         status: 'OPEN',
         sol_amount: finalSolAmount,
         token_amount: finalTokenAmount,
-        fee_lamports: feeLamports,
+        fee_lamports: Number(parseResult.feeLamports),
         tx_signature: signature,
-        token_amount_raw: tokenReceivedRaw,
-        token_decimals: tokenDecimals,
-        sol_spent_lamports: solSpentLamports,
-        remaining_raw: tokenReceivedRaw,
+        token_amount_raw: Number(parseResult.tokenDeltaRaw),
+        token_decimals: parseResult.decimals,
+        sol_spent_lamports: Number(parseResult.solDeltaLamports),
+        remaining_raw: Number(parseResult.tokenDeltaRaw),
       };
 
       await this.tradeRepo.updateTradeStatus(tradeRecord.id!, updates);
@@ -199,7 +207,7 @@ export class TraderService {
       const failureReason = err.message || 'Unknown execution error';
       // Only fail it if we are sure it didn't hit the network, otherwise keep PENDING
       // If signAndSendVersionedTransaction throws before sending, it's safe to FAILED.
-      if (!tradeRecord.pending_signature) {
+      if (!tradeRecord.pending_signature || tradeRecord.pending_signature === 'SIGN_FAILED') {
           await this.tradeRepo.updateTradeStatus(tradeRecord.id!, {
             status: 'FAILED',
             failure_reason: failureReason,
@@ -213,6 +221,14 @@ export class TraderService {
     if (!trade.id) throw new Error('Trade ID is missing');
     if (trade.status !== 'OPEN' && trade.status !== 'PARTIAL_EXIT') return;
     if (percentageToClose <= 0 || percentageToClose > 100) throw new Error('Invalid percentage');
+
+    const redis = getRedisConnection();
+    const lockKey = `lock:trade:close:${trade.id}`;
+    // Lock for 15 seconds to prevent double-sell across webhook, API, and monitor
+    const locked = await redis.set(lockKey, 'locked', 'PX', 15000, 'NX');
+    if (!locked) {
+      throw new Error('Penutupan posisi sedang diproses (terkunci).');
+    }
 
     const isPartial = percentageToClose < 100;
 
@@ -236,7 +252,7 @@ export class TraderService {
     
     // Total token balance on chain
     const totalTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
-    if (totalTokenBalance === 0) {
+    if (totalTokenBalance.raw === 0n) {
       // If we are supposed to have tokens but balance is 0, mark closed
       await this.tradeRepo.updateTradeStatus(trade.id, {
         status: 'CLOSED',
@@ -252,7 +268,7 @@ export class TraderService {
     }
 
     const calculatedAmount = Math.floor(tradeBalanceRaw * (percentageToClose / 100));
-    const amountLamports = Math.min(calculatedAmount, totalTokenBalance);
+    const amountLamports = Math.min(calculatedAmount, Number(totalTokenBalance.raw));
 
     if (amountLamports <= 0) {
       throw new Error('Calculated token amount to close is 0.');
@@ -262,14 +278,20 @@ export class TraderService {
     const currentAttempts = (trade.exit_attempts ?? 0) + 1;
     await this.tradeRepo.updateTradeStatus(trade.id, { exit_attempts: currentAttempts });
 
+    const baseSlippage = appSettings.EXIT_SLIPPAGE_BASE_BPS;
+    const stepSlippage = appSettings.EXIT_SLIPPAGE_STEP_BPS;
+    const maxSlippage = appSettings.EXIT_MAX_SLIPPAGE_BPS;
+    const exitSlippageBps = Math.min(baseSlippage + (currentAttempts - 1) * stepSlippage, maxSlippage);
+
     const quote = await this.jupiterClient.getQuote(
       trade.token_mint,
       this.WSOL_MINT,
       amountLamports,
-      appSettings.DEFAULT_SLIPPAGE_BPS 
+      exitSlippageBps
     );
 
-    const transaction = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+    const { transaction, lastValidBlockHeight } = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+    const blockhash = transaction.message.recentBlockhash;
     
     let result;
     try {
@@ -308,17 +330,13 @@ export class TraderService {
     let tokenSpentRaw = 0;
 
     if (tx && tx.meta) {
-      feeLamports = tx.meta.fee ?? 0;
-      const accountIndex = tx.transaction.message.accountKeys.findIndex((k: any) => k.pubkey.toBase58() === wallet.publicKey);
-      if (accountIndex >= 0) {
-        solReceivedLamports = tx.meta.postBalances[accountIndex] - tx.meta.preBalances[accountIndex] + feeLamports;
-      }
+      const parseResult = FillParser.parseSellFill(tx, wallet.publicKey, trade.token_mint);
       
-      const preToken = tx.meta.preTokenBalances?.find((t: any) => t.owner === wallet.publicKey && t.mint === trade.token_mint);
-      const postToken = tx.meta.postTokenBalances?.find((t: any) => t.owner === wallet.publicKey && t.mint === trade.token_mint);
-      const preAmtRaw = preToken ? parseInt(preToken.uiTokenAmount.amount, 10) : 0;
-      const postAmtRaw = postToken ? parseInt(postToken.uiTokenAmount.amount, 10) : 0;
-      tokenSpentRaw = preAmtRaw - postAmtRaw;
+      if (parseResult) {
+         feeLamports = Number(parseResult.feeLamports);
+         solReceivedLamports = Number(parseResult.solDeltaLamports);
+         tokenSpentRaw = Number(parseResult.tokenDeltaRaw);
+      }
     }
 
     const solReceived = solReceivedLamports > 0 ? solReceivedLamports / 1e9 : 0;
@@ -328,9 +346,27 @@ export class TraderService {
     const newTradeRemainingRaw = Math.max(0, tradeBalanceRaw - actualTokensSpent);
     
     const newStatus = newTradeRemainingRaw <= 0 ? 'CLOSED' : 'PARTIAL_EXIT';
-    const realizedPnlSol = (trade.realized_pnl_sol ?? 0) + solReceived - (trade.sol_amount * (percentageToClose / 100)); // Simplistic PNL 
-
-    const pnlPercent = ((currentPriceUsd - trade.entry_price_usd) / trade.entry_price_usd) * 100;
+    
+    // PnL Calculation based on proportional cost
+    let realizedPnlSol = trade.realized_pnl_sol ?? 0;
+    let pnlPercent = trade.pnl_percent ?? 0;
+    
+    if (trade.sol_spent_lamports && trade.token_amount_raw && trade.token_amount_raw > 0) {
+      const solSpentLamportsBigInt = BigInt(trade.sol_spent_lamports);
+      const actualTokensSpentBigInt = BigInt(actualTokensSpent);
+      const tokenAmountRawBigInt = BigInt(trade.token_amount_raw);
+      
+      const costLamports = (solSpentLamportsBigInt * actualTokensSpentBigInt) / tokenAmountRawBigInt;
+      const costSol = Number(costLamports) / 1e9;
+      const feeSol = feeLamports / 1e9;
+      
+      const currentRealized = solReceived - costSol - feeSol;
+      realizedPnlSol += currentRealized;
+      
+      if (costSol > 0) {
+        pnlPercent = ((solReceived - costSol) / costSol) * 100;
+      }
+    }
 
     const updates: Partial<TradeRecord> = {
       status: newStatus,
@@ -348,7 +384,7 @@ export class TraderService {
 
     // Edge case: if wallet is completely empty, ensure we close
     const totalRemainingTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
-    if (totalRemainingTokenBalance === 0 && newStatus !== 'CLOSED') {
+    if (totalRemainingTokenBalance.raw === 0n && newStatus !== 'CLOSED') {
       updates.status = 'CLOSED';
       updates.remaining_raw = 0;
       updates.closed_at = new Date().toISOString();

@@ -27,7 +27,7 @@ export class JupiterClient {
   async getSwapTransaction(
     quoteResponse: QuoteResponse,
     userPublicKey: string
-  ): Promise<VersionedTransaction> {
+  ): Promise<{ transaction: VersionedTransaction; lastValidBlockHeight?: number }> {
     const swap = await this.api.swapPost({
       swapRequest: {
         quoteResponse,
@@ -43,6 +43,6 @@ export class JupiterClient {
 
     const swapTransactionBuf = Buffer.from(swap.swapTransaction, 'base64');
     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-    return transaction;
+    return { transaction, lastValidBlockHeight: swap.lastValidBlockHeight };
   }
 }

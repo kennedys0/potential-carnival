@@ -7,6 +7,7 @@ import { RiskManager } from './riskManager';
 import { TraderService } from '../trader/traderService';
 import { getRedisConnection } from '../../queue/connection';
 import { z } from 'zod';
+import { appSettings } from '../../config/settings';
 
 const SafetyParamsSchema = z.object({
   min_safety_score: z.number().default(75),
@@ -140,13 +141,13 @@ export class AutopilotEngine {
     let orderSol = 0;
     
     if (sizingConf.mode === 'FIXED_SOL') {
-      orderSol = sizingConf.fixed_sol ?? 0.1;
+      orderSol = sizingConf.fixed_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_FIXED_SOL;
     } else if (sizingConf.mode === 'PERCENT_BALANCE') {
-      orderSol = (currentState.availableBalanceSol * (sizingConf.percent_balance ?? 10)) / 100;
+      orderSol = (currentState.availableBalanceSol * (sizingConf.percent_balance ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_PERCENT_BALANCE)) / 100;
     } else if (sizingConf.mode === 'RISK_BASED') {
       if (ai && ai.stop_loss_usd > 0 && currentPriceUsd > ai.stop_loss_usd) {
         const slDistance = (currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd;
-        orderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? 2)) / 100) / slDistance;
+        orderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_RISK_PERCENT)) / 100) / slDistance;
       } else {
         return { executed: false, reason: 'Risk based sizing failed: invalid SL' };
       }

@@ -30,15 +30,28 @@ export class UserStateService {
     // 1. Get Open Positions
     // Actually we should get from positions table, but let's assume we can get from trades for now
     // Since Phase 2/3 will migrate to PENDING/OPEN/PARTIAL_EXIT.
-    const openTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING']);
+    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING']);
+    
+    const maxPendingAge = appSettings.MAX_PENDING_AGE_MS;
+    const nowMs = Date.now();
+    const openTrades = allActiveTrades.filter(t => {
+      if (t.status === 'PENDING' && t.pending_since) {
+        const ageMs = nowMs - new Date(t.pending_since).getTime();
+        if (ageMs > maxPendingAge) {
+          return false;
+        }
+      }
+      return true;
+    });
+
     const openPositionsCount = openTrades.length;
     const heldMints = openTrades.map((t) => t.token_mint);
 
     // 2. Get Balance
     const wallet = await this.walletService.getOrCreateWallet(userId);
     const balance = await this.walletService.getBalance(wallet.publicKey);
-    const minReserve = sizingParams.min_reserve_sol ?? 0.05;
-    const autopilotBudget = sizingParams.autopilot_budget_sol ?? Number.MAX_SAFE_INTEGER;
+    const minReserve = sizingParams.min_reserve_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MIN_RESERVE_SOL;
+    const autopilotBudget = sizingParams.autopilot_budget_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_BUDGET_SOL;
     
     const availableBalanceSol = Math.max(0, Math.min(balance.sol - minReserve, autopilotBudget));
 
@@ -110,9 +123,9 @@ export class UserStateService {
 
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
     const cbParams = config.circuit_breaker_params as any;
-    const maxDailyLoss = cbParams.max_daily_loss_sol ?? 1.0;
-    const maxConsecutiveLosses = cbParams.max_consecutive_losses ?? 3;
-    const maxDrawdownLimit = cbParams.max_drawdown_percent ?? 20;
+    const maxDailyLoss = cbParams.max_daily_loss_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DAILY_LOSS_SOL;
+    const maxConsecutiveLosses = cbParams.max_consecutive_losses ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_CONSECUTIVE_LOSSES;
+    const maxDrawdownLimit = cbParams.max_drawdown_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DRAWDOWN_PERCENT;
 
     let reason = '';
     if (metrics.dailyLossSol >= maxDailyLoss) {

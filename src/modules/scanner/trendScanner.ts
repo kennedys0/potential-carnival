@@ -20,7 +20,8 @@ export class TrendScanner {
     private readonly securityService: SecurityFilterService,
     private readonly analyzerService: AnalyzerService,
     private readonly autopilotRepo: AutopilotRepository,
-    private readonly userStateService: UserStateService
+    private readonly userStateService: UserStateService,
+    private readonly botApi: any
   ) {}
 
   start() {
@@ -162,9 +163,7 @@ export class TrendScanner {
                 
                 // Notify user
                 try {
-                  const { createTelegramBot } = await import('../telegram/bot.js');
-                  const bot = createTelegramBot();
-                  await bot.api.sendMessage(config.user_id, 
+                  await this.botApi.sendMessage(config.user_id, 
                     `🤖 <b>Autopilot Alert!</b>\n\n` +
                     `Sistem baru saja mengeksekusi order <b>BUY</b> untuk token <b>${pair.baseToken.symbol}</b> secara otomatis!\n` +
                     `Alasan: ${result.reason}\n\n` +
@@ -178,9 +177,7 @@ export class TrendScanner {
                 logger.debug(`Autopilot skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
                 if (liveFeedSubscribers.has(config.user_id)) {
                   try {
-                    const { createTelegramBot } = await import('../telegram/bot.js');
-                  const bot = createTelegramBot();
-                    await bot.api.sendMessage(config.user_id, 
+                    await this.botApi.sendMessage(config.user_id, 
                       `🔍 <b>[Live Feed]</b> Token <b>${pair.baseToken.symbol}</b> di-skip.\n` +
                       `Alasan: ${result.reason}`,
                       { parse_mode: 'HTML' }
@@ -206,9 +203,7 @@ export class TrendScanner {
       // Notify live feed subscribers that a cycle finished
       for (const userId of liveFeedSubscribers) {
         try {
-          const { createTelegramBot } = await import('../telegram/bot.js');
-                  const bot = createTelegramBot();
-          await bot.api.sendMessage(userId, `✅ <b>[Live Feed]</b> Selesai memindai ${topPairs.length} token trending. Siklus berikutnya dalam 2 menit.`, { parse_mode: 'HTML' });
+          await this.botApi.sendMessage(userId, `✅ <b>[Live Feed]</b> Selesai memindai ${topPairs.length} token trending. Siklus berikutnya dalam 2 menit.`, { parse_mode: 'HTML' });
         } catch (e) {
           // ignore
         }
