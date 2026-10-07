@@ -35,7 +35,7 @@ export interface TradeRecord {
 }
 
 export class TradeRepository {
-  constructor(private readonly db: SupabaseClient) {}
+  constructor(public readonly db: SupabaseClient) {}
 
   async createTrade(trade: TradeRecord): Promise<TradeRecord> {
     const { data, error } = await this.db

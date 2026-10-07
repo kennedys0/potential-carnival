@@ -65,7 +65,7 @@ export class TxSender {
       }
 
       // Check if blockhash is still valid
-      const isValid = await connection.isBlockhashValid(recentBlockhash, 'confirmed');
+      const isValid = await connection.isBlockhashValid(recentBlockhash, { commitment: 'confirmed' });
       if (!isValid.value) {
         logger.warn({ signature }, 'Blockhash expired while waiting for confirmation');
         

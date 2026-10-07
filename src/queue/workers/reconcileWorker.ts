@@ -1,9 +1,9 @@
 import { Worker } from 'bullmq';
 import { QUEUE_NAMES } from '../queues';
 import { getRedisConnection } from '../connection';
-import { logger } from '../../../utils/logger';
-import { TradeRepository } from '../../../database/repositories/tradeRepository';
-import { WalletService } from '../../../modules/wallet/walletService';
+import { logger } from '../../utils/logger';
+import { TradeRepository } from '../../database/repositories/tradeRepository';
+import { WalletService } from '../../modules/wallet/walletService';
 
 export function createReconcileWorker(
   tradeRepo: TradeRepository,

@@ -3,6 +3,7 @@ import { AutopilotRepository, AutopilotStateRecord } from '../../database/reposi
 import { WalletService } from '../wallet/walletService';
 import { getRedisConnection } from '../../queue/connection';
 import { appSettings } from '../../config/settings';
+import { logger } from '../../utils/logger';
 
 export interface AutopilotStateMetrics {
   openPositionsCount: number;
