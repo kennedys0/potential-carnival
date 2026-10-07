@@ -40,6 +40,46 @@ export class TrendScanner {
     }
   }
 
+  private async fetchOrganicTrendingTokens(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
+    // Primary source: GeckoTerminal — organic trending pools sorted by volume (no paid promotions)
+    try {
+      const url = 'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=1';
+      const res = await fetch(url, { headers: { 'Accept': 'application/json;version=20230302' } });
+      if (!res.ok) throw new Error(`GeckoTerminal responded ${res.status}`);
+      const data: any = await res.json();
+      const pools: any[] = data?.data ?? [];
+      const included: any[] = data?.included ?? [];
+      
+      const result: { tokenAddress: string; pairAddress: string; symbol: string }[] = [];
+      for (const pool of pools) {
+        const poolAddr = pool.attributes?.address;
+        const relBaseToken = pool.relationships?.base_token?.data;
+        if (!poolAddr || !relBaseToken) continue;
+        const baseToken = included.find((i: any) => i.type === relBaseToken.type && i.id === relBaseToken.id);
+        const tokenAddress = baseToken?.attributes?.address ?? relBaseToken.id?.split('_')[1];
+        const symbol = baseToken?.attributes?.symbol ?? '???';
+        if (!tokenAddress) continue;
+        result.push({ tokenAddress, pairAddress: poolAddr, symbol });
+      }
+      logger.info(`TrendScanner: GeckoTerminal returned ${result.length} organic trending tokens.`);
+      return result;
+    } catch (err) {
+      logger.warn({ err }, 'TrendScanner: GeckoTerminal trending failed, falling back to DexScreener boosted');
+      // Fallback: DexScreener latest boosted (known-paid, flagged)
+      try {
+        const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+        if (!res.ok) return [];
+        const tokens = (await res.json()) as any[];
+        return tokens
+          .filter((t: any) => t.chainId === 'solana' && t.tokenAddress)
+          .slice(0, 20)
+          .map((t: any) => ({ tokenAddress: t.tokenAddress, pairAddress: '', symbol: '' }));
+      } catch {
+        return [];
+      }
+    }
+  }
+
   private async scanTrending() {
     try {
       // 1. Get active autopilot users
@@ -51,11 +91,8 @@ export class TrendScanner {
 
       logger.info(`TrendScanner: Fetching trending tokens for ${activeConfigs.length} active users...`);
 
-      // 2. Fetch latest boosted/trending tokens from DexScreener
-      const response = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
-      if (!response.ok) throw new Error('Failed to fetch from DexScreener Token Boosts');
-      
-      const tokens = (await response.json()) as any[];
+      // 2. Fetch organic trending tokens (GeckoTerminal primary, DexScreener fallback)
+      const trendingList = await this.fetchOrganicTrendingTokens();
       const now = Date.now();
       // Cleanup cache (older than 15 minutes)
       for (const [address, timestamp] of scannedTokensCache.entries()) {
@@ -64,11 +101,11 @@ export class TrendScanner {
         }
       }
 
-      const solanaTokens = tokens.filter((t: any) => t.chainId === 'solana' && !scannedTokensCache.has(t.tokenAddress));
+      const newTokens = trendingList.filter(t => !scannedTokensCache.has(t.tokenAddress));
       
       // Ambil top 15 token trending untuk di-scan ringan
-      const tokensToScan = solanaTokens.slice(0, 15);
-      logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW trending Solana tokens.`);
+      const tokensToScan = newTokens.slice(0, 15);
+      logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW organic trending Solana tokens.`);
 
       // Ambil profile/pair DexScreener secara concurrent max 3 sekaligus (Chunking manual)
       const fetchedPairs = [];

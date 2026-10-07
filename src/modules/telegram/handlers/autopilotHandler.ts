@@ -1,5 +1,20 @@
 import { Context, InlineKeyboard } from 'grammy';
 import { AutopilotRepository } from '../../../database/repositories/autopilotRepository';
+import { z } from 'zod';
+
+const DisplaySafetyParamsSchema = z.object({
+  min_safety_score: z.number().default(75),
+  min_liquidity_usd: z.number().default(10000),
+});
+
+const DisplaySizingParamsSchema = z.object({
+  fixed_sol: z.number().optional(),
+});
+
+const DisplayExitParamsSchema = z.object({
+  tp1_percent: z.number().default(15),
+  sl_percent: z.number().default(8),
+});
 
 export async function handleAutopilotMenu(
   ctx: Context,
@@ -11,6 +26,10 @@ export async function handleAutopilotMenu(
   const statusEmoji = config.is_active ? '🟢 <b>AKTIF</b>' : '⏸ <b>JEDA / NONAKTIF</b>';
   const modeTag = config.mode === 'PAPER' ? '🟢 <b>PAPER TRADING (Simulasi)</b>' : '⚡ <b>LIVE ON-CHAIN</b>';
 
+  const safety = DisplaySafetyParamsSchema.parse(config.safety_params);
+  const sizing = DisplaySizingParamsSchema.parse(config.sizing_params);
+  const exit = DisplayExitParamsSchema.parse(config.exit_params);
+
   const text = `
 🤖 <b>Dashboard Autopilot Scalping</b>
 
@@ -19,10 +38,10 @@ export async function handleAutopilotMenu(
 • <b>Profil Risiko:</b> ⚖️ ${config.risk_profile}
 
 ⚙️ <b>Parameter Aktif:</b>
-• <b>Min Safety Score:</b> ${(config.safety_params as any)?.min_safety_score ?? 75}/100
-• <b>Min Likuiditas:</b> $${(config.safety_params as any)?.min_liquidity_usd ?? 10000}
-• <b>Ukuran Trade:</b> ${(config.sizing_params as any)?.fixed_sol ?? 0.1} SOL
-• <b>Target TP / SL:</b> +${(config.exit_params as any)?.tp1_percent ?? 15}% / -${(config.exit_params as any)?.sl_percent ?? 8}%
+• <b>Min Safety Score:</b> ${safety.min_safety_score}/100
+• <b>Min Likuiditas:</b> $${safety.min_liquidity_usd}
+• <b>Ukuran Trade:</b> ${sizing.fixed_sol ?? 0.1} SOL
+• <b>Target TP / SL:</b> +${exit.tp1_percent}% / -${exit.sl_percent}%
 
 <i>Gunakan tombol di bawah untuk mengontrol autopilot secara real-time:</i>
 `.trim();
@@ -160,16 +179,22 @@ export async function handleAutopilotStats(
   if (!ctx.from) return;
 
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
+  const stats = await autopilotRepo.getStats(ctx.from.id);
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
+  
+  const pnlSign = stats.dailyRealizedPnlSol >= 0 ? '+' : '';
+  const cbStatus = stats.isCircuitBroken
+    ? `🔴 AKTIF — ${stats.circuitBreakReason ?? 'Lihat log'}`
+    : '🟢 NORMAL (Tidak Terpicu)';
+  
   const text = `
 📊 <b>Statistik Kinerja Autopilot</b>
 
 • <b>Mode Operasi:</b> ${config.mode}
-• <b>Total Trades:</b> 0
-• <b>Win Rate:</b> 0.0%
-• <b>Realized PnL:</b> +0.0000 SOL ($0.00)
-• <b>Max Consecutive Losses:</b> 0
-• <b>Circuit Breaker:</b> 🟢 NORMAL (Tidak Terpicu)
+• <b>Total Trade Dieksekusi:</b> ${stats.totalTrades}
+• <b>Realized PnL (hari ini):</b> ${pnlSign}${stats.dailyRealizedPnlSol.toFixed(4)} SOL
+• <b>Consecutive Losses:</b> ${stats.consecutiveLosses}
+• <b>Circuit Breaker:</b> ${cbStatus}
 • <i>Diperiksa pada: ${timestamp}</i>
 
 <i>Data diperbarui secara otomatis setiap kali trade dieksekusi dan ditutup.</i>

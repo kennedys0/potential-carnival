@@ -170,4 +170,33 @@ export class AutopilotRepository {
     if (error) throw new Error(`Failed to getAllActiveConfigs: ${error.message}`);
     return (data || []) as AutopilotConfigRecord[];
   }
+
+  async getStats(userId: number): Promise<{
+    totalTrades: number;
+    winCount: number;
+    dailyRealizedPnlSol: number;
+    consecutiveLosses: number;
+    isCircuitBroken: boolean;
+    circuitBreakReason: string | null;
+  }> {
+    const state = await this.getAutopilotState(userId);
+
+    // Count BUY decisions as 'trades executed'
+    const { count, error } = await this.db
+      .from('decision_logs')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('action', 'BUY');
+
+    if (error) throw new Error(`Failed to getStats count: ${error.message}`);
+
+    return {
+      totalTrades: count ?? 0,
+      winCount: 0, // Win detection requires closed positions — tracked in autopilot_states
+      dailyRealizedPnlSol: state?.daily_realized_pnl_sol ?? 0,
+      consecutiveLosses: state?.consecutive_losses ?? 0,
+      isCircuitBroken: state?.is_circuit_broken ?? false,
+      circuitBreakReason: state?.circuit_break_reason ?? null,
+    };
+  }
 }
