@@ -38,10 +38,11 @@ export function createReconcileWorker(
              const pendingSince = trade.pending_since ? new Date(trade.pending_since).getTime() : 0;
              const ageMs = Date.now() - pendingSince;
              if (pendingSince > 0 && ageMs > appSettings.MAX_PENDING_AGE_MS) {
-               await tradeRepo.updateTradeStatus(trade.id!, {
-                 needs_attention: true,
-               });
-               continue;
+               if (!trade.needs_attention) {
+                 await tradeRepo.updateTradeStatus(trade.id!, {
+                   needs_attention: true,
+                 });
+               }
              }
 
              const connection = walletService.getConnection();

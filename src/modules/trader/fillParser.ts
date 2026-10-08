@@ -41,16 +41,26 @@ export class FillParser {
     const preTokenBalances = tx.meta.preTokenBalances || [];
     const postTokenBalances = tx.meta.postTokenBalances || [];
 
-    const preTokenInfo = preTokenBalances.find(b => b.mint === mint && b.owner === walletPubkey);
-    if (preTokenInfo && preTokenInfo.uiTokenAmount) {
-      preToken = BigInt(preTokenInfo.uiTokenAmount.amount);
-      decimals = preTokenInfo.uiTokenAmount.decimals;
-    }
+    const relevantIndices = new Set<number>();
+    preTokenBalances.forEach(b => {
+      if (b.mint === mint && b.owner === walletPubkey) relevantIndices.add(b.accountIndex);
+    });
+    postTokenBalances.forEach(b => {
+      if (b.mint === mint && b.owner === walletPubkey) relevantIndices.add(b.accountIndex);
+    });
 
-    const postTokenInfo = postTokenBalances.find(b => b.mint === mint && b.owner === walletPubkey);
-    if (postTokenInfo && postTokenInfo.uiTokenAmount) {
-      postToken = BigInt(postTokenInfo.uiTokenAmount.amount);
-      decimals = postTokenInfo.uiTokenAmount.decimals;
+    for (const index of relevantIndices) {
+      const preInfo = preTokenBalances.find(b => b.accountIndex === index);
+      const postInfo = postTokenBalances.find(b => b.accountIndex === index);
+      
+      const preAmt = preInfo?.uiTokenAmount ? BigInt(preInfo.uiTokenAmount.amount) : 0n;
+      const postAmt = postInfo?.uiTokenAmount ? BigInt(postInfo.uiTokenAmount.amount) : 0n;
+      
+      if (preInfo?.uiTokenAmount) decimals = preInfo.uiTokenAmount.decimals;
+      else if (postInfo?.uiTokenAmount) decimals = postInfo.uiTokenAmount.decimals;
+      
+      preToken += preAmt;
+      postToken += postAmt;
     }
 
     const tokenDeltaRaw = postToken - preToken;
@@ -98,16 +108,26 @@ export class FillParser {
     const preTokenBalances = tx.meta.preTokenBalances || [];
     const postTokenBalances = tx.meta.postTokenBalances || [];
 
-    const preTokenInfo = preTokenBalances.find(b => b.mint === mint && b.owner === walletPubkey);
-    if (preTokenInfo && preTokenInfo.uiTokenAmount) {
-      preToken = BigInt(preTokenInfo.uiTokenAmount.amount);
-      decimals = preTokenInfo.uiTokenAmount.decimals;
-    }
+    const relevantIndices = new Set<number>();
+    preTokenBalances.forEach(b => {
+      if (b.mint === mint && b.owner === walletPubkey) relevantIndices.add(b.accountIndex);
+    });
+    postTokenBalances.forEach(b => {
+      if (b.mint === mint && b.owner === walletPubkey) relevantIndices.add(b.accountIndex);
+    });
 
-    const postTokenInfo = postTokenBalances.find(b => b.mint === mint && b.owner === walletPubkey);
-    if (postTokenInfo && postTokenInfo.uiTokenAmount) {
-      postToken = BigInt(postTokenInfo.uiTokenAmount.amount);
-      decimals = postTokenInfo.uiTokenAmount.decimals;
+    for (const index of relevantIndices) {
+      const preInfo = preTokenBalances.find(b => b.accountIndex === index);
+      const postInfo = postTokenBalances.find(b => b.accountIndex === index);
+      
+      const preAmt = preInfo?.uiTokenAmount ? BigInt(preInfo.uiTokenAmount.amount) : 0n;
+      const postAmt = postInfo?.uiTokenAmount ? BigInt(postInfo.uiTokenAmount.amount) : 0n;
+      
+      if (preInfo?.uiTokenAmount) decimals = preInfo.uiTokenAmount.decimals;
+      else if (postInfo?.uiTokenAmount) decimals = postInfo.uiTokenAmount.decimals;
+      
+      preToken += preAmt;
+      postToken += postAmt;
     }
 
     // Sell means preToken > postToken

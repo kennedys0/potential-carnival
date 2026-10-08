@@ -104,4 +104,72 @@ describe('FillParser', () => {
     };
     expect(FillParser.parseBuyFill(tx, walletPubkey, mintPubkey)).toBeNull();
   });
+
+  it('parses sell fill correctly when multiple token accounts exist and only one changes', () => {
+    // Pengujian A — Account pertama tidak berubah
+    const tx: any = {
+      meta: {
+        err: null,
+        fee: 5000,
+        preBalances: [900000000, 0, 0],
+        postBalances: [1000000000, 0, 0],
+        preTokenBalances: [
+          { accountIndex: 1, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '100', decimals: 6 } },
+          { accountIndex: 2, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '250', decimals: 6 } }
+        ],
+        postTokenBalances: [
+          { accountIndex: 1, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '100', decimals: 6 } },
+          { accountIndex: 2, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '200', decimals: 6 } }
+        ]
+      },
+      transaction: { message: { accountKeys: [ { pubkey: { toBase58: () => walletPubkey } }, { pubkey: { toBase58: () => mintPubkey } } ] } }
+    };
+    const result = FillParser.parseSellFill(tx, walletPubkey, mintPubkey);
+    expect(result).not.toBeNull();
+    expect(result?.tokenDeltaRaw).toBe(50n); // 350 - 300 = 50
+  });
+
+  it('parses sell fill correctly when multiple token accounts exist and both change', () => {
+    // Pengujian B — Kedua account berubah
+    const tx: any = {
+      meta: {
+        err: null,
+        fee: 5000,
+        preBalances: [900000000, 0, 0],
+        postBalances: [1000000000, 0, 0],
+        preTokenBalances: [
+          { accountIndex: 1, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '100', decimals: 6 } },
+          { accountIndex: 2, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '250', decimals: 6 } }
+        ],
+        postTokenBalances: [
+          { accountIndex: 1, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '80', decimals: 6 } },
+          { accountIndex: 2, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '200', decimals: 6 } }
+        ]
+      },
+      transaction: { message: { accountKeys: [ { pubkey: { toBase58: () => walletPubkey } }, { pubkey: { toBase58: () => mintPubkey } } ] } }
+    };
+    const result = FillParser.parseSellFill(tx, walletPubkey, mintPubkey);
+    expect(result).not.toBeNull();
+    expect(result?.tokenDeltaRaw).toBe(70n); // 350 - 280 = 70
+  });
+
+  it('parses buy fill correctly when a new token account is created', () => {
+    // account didn't exist in pre, exists in post
+    const tx: any = {
+      meta: {
+        err: null,
+        fee: 5000,
+        preBalances: [1000000000, 0, 0],
+        postBalances: [900000000, 0, 0],
+        preTokenBalances: [],
+        postTokenBalances: [
+          { accountIndex: 1, mint: mintPubkey, owner: walletPubkey, uiTokenAmount: { amount: '500', decimals: 6 } }
+        ]
+      },
+      transaction: { message: { accountKeys: [ { pubkey: { toBase58: () => walletPubkey } }, { pubkey: { toBase58: () => mintPubkey } } ] } }
+    };
+    const result = FillParser.parseBuyFill(tx, walletPubkey, mintPubkey);
+    expect(result).not.toBeNull();
+    expect(result?.tokenDeltaRaw).toBe(500n);
+  });
 });
