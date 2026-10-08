@@ -20,9 +20,9 @@ export function createReconcileWorker(
     logger.info('Starting reconciliation job');
 
     try {
-      // 1. Reconcile PENDING trades
+      // 1. Reconcile INFLIGHT trades
       try {
-        const pendingTrades = await tradeRepo.getPendingTradesWithSignature();
+        const pendingTrades = await tradeRepo.getInflightTradesWithSignature();
         if (pendingTrades && pendingTrades.length > 0) {
           for (const trade of pendingTrades) {
              const signature = trade.pending_signature;
@@ -102,9 +102,9 @@ export function createReconcileWorker(
         logger.error({ err }, 'Failed to fetch pending trades');
       }
 
-      // 1.2 Reconcile Pre-Broadcast PENDING trades
+      // 1.2 Reconcile RESERVED trades without signature
       try {
-        const preBroadcastTrades = await tradeRepo.getPendingTradesWithoutSignature();
+        const preBroadcastTrades = await tradeRepo.getReservedTradesWithoutSignature();
         for (const trade of preBroadcastTrades) {
           const pendingSince = trade.pending_since ? new Date(trade.pending_since).getTime() : new Date(trade.created_at || Date.now()).getTime();
           const ageMs = Date.now() - pendingSince;
@@ -114,9 +114,9 @@ export function createReconcileWorker(
           if (ageMs > 120000) {
              await tradeRepo.updateTradeStatus(trade.id!, {
                 status: 'FAILED',
-                failure_reason: 'Reconciled: Pre-broadcast failure (no signature generated)'
+                failure_reason: 'Reconciled: Reservation expired (process halted before signing)'
              });
-             logger.info({ tradeId: trade.id }, 'Reconciled pre-broadcast PENDING trade to FAILED to release lock');
+             logger.info({ tradeId: trade.id }, 'Reconciled RESERVED trade to FAILED to release lock');
           }
         }
       } catch (err) {

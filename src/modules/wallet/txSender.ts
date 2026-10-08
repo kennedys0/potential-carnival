@@ -30,9 +30,10 @@ export class TxSender {
       pollingIntervalMs?: number;
       timeoutMs?: number;
       onSignature?: (signature: string) => Promise<void>;
+      onSend?: () => Promise<void>;
     } = {}
   ): Promise<TxSendResult> {
-    const { pollingIntervalMs = 2000, onSignature } = options;
+    const { pollingIntervalMs = 2000, onSignature, onSend } = options;
 
     try {
       transaction.sign(signers);
@@ -49,6 +50,15 @@ export class TxSender {
         await onSignature(signature);
       } catch (e) {
         logger.error({ err: e }, 'onSignature callback failed - persisting signature aborted');
+        return { status: 'PERSISTENCE_FAILED', signature, err: e };
+      }
+    }
+
+    if (onSend) {
+      try {
+        await onSend();
+      } catch (e) {
+        logger.error({ err: e }, 'onSend callback failed');
         return { status: 'PERSISTENCE_FAILED', signature, err: e };
       }
     }

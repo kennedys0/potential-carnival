@@ -133,7 +133,7 @@ export class TraderService {
         token_amount: 0,
         entry_price_usd: req.currentPriceUsd,
         fee_lamports: 0,
-        status: 'PENDING',
+        status: 'RESERVED',
         idempotency_key: idempotencyKey,
         blockhash,
         last_valid_block_height: lastValidBlockHeight,
@@ -153,16 +153,20 @@ export class TraderService {
         }
       }
 
-      // Sign and send via WalletService safely
       const result = await this.walletService.signAndSendVersionedTransaction(
         req.userId, 
         transaction,
-        async (sig) => {
-          // Tandai di memori SEBELUM apa pun yang bisa melempar: setelah signature ada, tx mungkin sudah terkirim,
-          // jadi blok catch di bawah TIDAK boleh menandai trade FAILED.
-          tradeRecord.pending_signature = sig;
-          if (tradeRecord.id) {
-            await this.tradeRepo.updateTradeStatus(tradeRecord.id, { pending_signature: sig });
+        {
+          onSignature: async (sig) => {
+            tradeRecord.pending_signature = sig;
+            if (tradeRecord.id) {
+              await this.tradeRepo.updateTradeStatus(tradeRecord.id, { pending_signature: sig, status: 'SIGNED' });
+            }
+          },
+          onSend: async () => {
+            if (tradeRecord.id) {
+              await this.tradeRepo.updateTradeStatus(tradeRecord.id, { status: 'BROADCAST_ATTEMPTED' });
+            }
           }
         }
       );
@@ -362,11 +366,13 @@ export class TraderService {
       result = await this.walletService.signAndSendVersionedTransaction(
         trade.user_id, 
         transaction,
-        async (sig) => {
-          trade.pending_signature = sig; // update in memory
-          await this.tradeRepo.updateTradeStatus(trade.id!, { pending_signature: sig });
-          if (exitAttempt.id) {
-            await this.tradeRepo.updateExitAttempt(exitAttempt.id, { tx_signature: sig });
+        {
+          onSignature: async (sig) => {
+            trade.pending_signature = sig; // update in memory
+            await this.tradeRepo.updateTradeStatus(trade.id!, { pending_signature: sig });
+            if (exitAttempt.id) {
+              await this.tradeRepo.updateExitAttempt(exitAttempt.id, { tx_signature: sig });
+            }
           }
         }
       );

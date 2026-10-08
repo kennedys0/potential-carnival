@@ -20,7 +20,7 @@ export interface TradeRecord {
   fee_lamports?: number | string;
   pnl_sol?: number | null;
   pnl_percent?: number | null;
-  status: 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
+  status: 'RESERVED' | 'SIGNED' | 'BROADCAST_ATTEMPTED' | 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
   created_at?: string;
   closed_at?: string | null;
   token_amount_raw?: string | number | null;
@@ -84,11 +84,11 @@ export class TradeRepository {
     return (data || []) as TradeRecord[];
   }
 
-  async getPendingTradesWithSignature(): Promise<any[]> {
+  async getInflightTradesWithSignature(): Promise<any[]> {
     const { data, error } = await this.db
       .from('trades')
       .select(SELECT_TRADES_SAFE)
-      .eq('status', 'PENDING')
+      .in('status', ['PENDING', 'SIGNED', 'BROADCAST_ATTEMPTED'])
       .not('pending_signature', 'is', null);
     
     if (error) {
@@ -97,11 +97,11 @@ export class TradeRepository {
     return data || [];
   }
 
-  async getPendingTradesWithoutSignature(): Promise<TradeRecord[]> {
+  async getReservedTradesWithoutSignature(): Promise<TradeRecord[]> {
     const { data, error } = await this.db
       .from('trades')
       .select(SELECT_TRADES_SAFE)
-      .eq('status', 'PENDING')
+      .eq('status', 'RESERVED')
       .is('pending_signature', null);
       
     if (error) {

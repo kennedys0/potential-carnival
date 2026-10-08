@@ -285,7 +285,7 @@ export class WalletService {
     }
   }
 
-  async signAndSendVersionedTransaction(userId: number, transaction: any, onSignature?: (sig: string) => Promise<void>): Promise<TxSendResult> {
+  async signAndSendVersionedTransaction(userId: number, transaction: any, options?: { onSignature?: (sig: string) => Promise<void>; onSend?: () => Promise<void> }): Promise<TxSendResult> {
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar.');
 
@@ -300,9 +300,7 @@ export class WalletService {
     );
 
     try {
-      return await TxSender.sendAndConfirm(this.connection, transaction, [keypair], {
-        onSignature,
-      });
+      return await TxSender.sendAndConfirm(this.connection, transaction, [keypair], options);
     } finally {
       KeypairService.clearKeypair(keypair); // zero out memory per transaction
     }
