@@ -55,6 +55,10 @@ export class SniperScanner {
       const now = Date.now();
 
       const notifyGlobalLiveFeed = async (candidate: any, reason: string) => {
+        const notifKey = `sniper:notified_global:${candidate.pairAddress}`;
+        if (await redis.get(notifKey)) return;
+        await redis.set(notifKey, '1', 'EX', 15 * 60);
+
         for (const userId of liveFeedSubscribers) {
           try {
             const cfg = await this.sniperRepo.getOrCreateConfig(userId);
@@ -125,6 +129,10 @@ export class SniperScanner {
         for (const config of eligibleConfigs) {
           const notifyUserLiveFeed = async (reason: string) => {
             if (liveFeedSubscribers.has(config.user_id)) {
+              const notifKey = `sniper:notified_user:${config.user_id}:${candidate.pairAddress}`;
+              if (await redis.get(notifKey)) return;
+              await redis.set(notifKey, '1', 'EX', 15 * 60);
+
               try {
                 await this.botApi.sendMessage(config.user_id,
                   `⚡ <b>SNIPER RADAR</b>\n` +
@@ -189,17 +197,21 @@ export class SniperScanner {
                 }
               }
             } else if (liveFeedSubscribers.has(config.user_id)) {
-              try {
-                await this.botApi.sendMessage(config.user_id,
-                  `⚡ <b>SNIPER RADAR</b>\n` +
-                  `├ <b>Token:</b> <code>${htmlEscape(candidate.symbol)}</code>\n` +
-                  `├ <b>CA:</b> <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
-                  `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                  `└ <b>Reason:</b> <i>${htmlEscape(result.reason)}</i>`, { 
-                    parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${candidate.tokenAddress}` }]] }
-                  });
-              } catch { /* Best effort notification. */ }
+              const notifKey = `sniper:notified_user:${config.user_id}:${candidate.pairAddress}`;
+              if (!(await redis.get(notifKey))) {
+                await redis.set(notifKey, '1', 'EX', 15 * 60);
+                try {
+                  await this.botApi.sendMessage(config.user_id,
+                    `⚡ <b>SNIPER RADAR</b>\n` +
+                    `├ <b>Token:</b> <code>${htmlEscape(candidate.symbol)}</code>\n` +
+                    `├ <b>CA:</b> <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
+                    `├ <b>Status:</b> ⚪ SKIPPED\n` +
+                    `└ <b>Reason:</b> <i>${htmlEscape(result.reason)}</i>`, { 
+                      parse_mode: 'HTML',
+                      reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${candidate.tokenAddress}` }]] }
+                    });
+                } catch { /* Best effort notification. */ }
+              }
             }
           } catch (error) {
             logger.error({ error, userId: config.user_id, pool: candidate.pairAddress },
