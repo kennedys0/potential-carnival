@@ -117,7 +117,8 @@ export class WalletRepository {
       .select('*')
       .in('status', [
         'CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED',
-        'CONFIRMING', 'TX_CONFIRMED', 'RECONCILING', 'PENDING', 'NEEDS_ATTENTION'
+        'CONFIRMING', 'TX_CONFIRMED', 'RECONCILING', 'PENDING', 'NEEDS_ATTENTION',
+        'UNKNOWN', 'EXPIRED'
       ]);
     if (error) {
       throw new Error(`Database error on getPendingWithdrawals: ${error.message}`);

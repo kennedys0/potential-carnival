@@ -275,7 +275,7 @@ export function createReconcileWorker(
                      await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'SUCCESS' });
                   }
                }
-            } else if (['CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED', 'CONFIRMING', 'PENDING'].includes(w.status)) {
+            } else if (['CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED', 'CONFIRMING', 'PENDING', 'UNKNOWN', 'EXPIRED'].includes(w.status)) {
                // If it's been more than 5 minutes, mark as NEEDS_ATTENTION for investigation
                const age = Date.now() - new Date(w.updated_at).getTime();
                if (age > 300000) {
