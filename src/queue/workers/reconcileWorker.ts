@@ -294,32 +294,34 @@ export function createReconcileWorker(
                   if (tx.meta.err) {
                      await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'FAILED' });
                   } else {
-                     // Verify the effect of the transfer
-                     const destIndex = tx.transaction.message.accountKeys.findIndex((k: any) => 
-                        (typeof k.pubkey === 'string' ? k.pubkey : k.pubkey.toBase58()) === w.destination_address
-                     );
+                     // Verify the explicit transfer instructions
+                     let exactLamportsSent = 0;
+                     if (tx.transaction.message.instructions) {
+                         for (const ix of tx.transaction.message.instructions as any[]) {
+                             if (ix.program === 'system' && ix.parsed && ix.parsed.type === 'transfer') {
+                                 if (ix.parsed.info.destination === w.destination_address) {
+                                     exactLamportsSent += Number(ix.parsed.info.lamports || 0);
+                                 }
+                             }
+                         }
+                     }
                      
                      let isValidTransfer = false;
-                     if (destIndex !== -1) {
-                         const preBalance = tx.meta.preBalances[destIndex];
-                         const postBalance = tx.meta.postBalances[destIndex];
-                         const actualReceivedLamports = postBalance - preBalance;
-                         
-                         if (w.expected_lamports) {
-                             const expected = parseInt(w.expected_lamports, 10);
-                             if (actualReceivedLamports >= expected - 10000) {
-                                 isValidTransfer = true;
-                             }
-                         } else if (w.amount_sol === -1) {
-                             if (actualReceivedLamports > 0) {
-                                 isValidTransfer = true;
-                             }
-                         } else {
-                             const expectedLamports = Math.floor(w.amount_sol * 1e9);
-                             // allow up to 10000 lamports difference for potential floating point/rent inaccuracies
-                             if (actualReceivedLamports >= expectedLamports - 10000) {
-                                 isValidTransfer = true;
-                             }
+                     
+                     if (w.expected_lamports) {
+                         const expected = parseInt(w.expected_lamports, 10);
+                         if (exactLamportsSent === expected) {
+                             isValidTransfer = true;
+                         }
+                     } else if (w.amount_sol === -1) {
+                         // Legacy MAX without expected_lamports
+                         if (exactLamportsSent > 0) {
+                             isValidTransfer = true;
+                         }
+                     } else {
+                         const expectedLamports = Math.floor(w.amount_sol * 1e9);
+                         if (exactLamportsSent === expectedLamports) {
+                             isValidTransfer = true;
                          }
                      }
                      
