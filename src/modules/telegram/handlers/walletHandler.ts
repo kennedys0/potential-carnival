@@ -123,6 +123,8 @@ export async function handleWalletWithdrawPrompt(ctx: Context, walletService: Wa
 
   const wallet = await walletService.getWalletRecord(ctx.from.id);
 
+  const keyboard = new InlineKeyboard();
+
   let text = '';
   if (!wallet || !wallet.owner_pubkey) {
     text = `
@@ -132,32 +134,32 @@ export async function handleWalletWithdrawPrompt(ctx: Context, walletService: Wa
 Demi keamanan, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahulu menggunakan perintah:
 
 <code>/set_withdraw_address &lt;ALAMAT_SOLANA_ANDA&gt;</code>
-
-<i>Contoh:</i>
-<code>/set_withdraw_address 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU</code>
 `.trim();
+    keyboard.text('💳 Kembali ke Wallet', 'menu_wallet').row();
   } else {
+    const balance = await walletService.getBalance(wallet.public_key);
     text = `
 💸 <b>Withdraw Saldo SOL</b>
 
-Alamat Penarikan Anda:
+<b>Alamat Tujuan:</b>
 <code>${wallet.owner_pubkey}</code>
 
-Untuk mencairkan dana ke alamat di atas, gunakan perintah:
-<code>/withdraw &lt;JUMLAH_SOL&gt;</code>
+<b>Saldo Tersedia:</b> <code>${balance.sol.toFixed(4)} SOL</code>
 
-<b>Contoh:</b>
-<code>/withdraw 0.25</code>
-atau
-<code>/withdraw MAX</code>
-
-<i>Catatan: Sisakan minimal 0.005 SOL untuk biaya gas jaringan.</i>
+<i>Pilih jumlah yang ingin ditarik:</i>
 `.trim();
+
+    keyboard
+      .text('25%', 'withdraw_pct:25')
+      .text('50%', 'withdraw_pct:50')
+      .row()
+      .text('75%', 'withdraw_pct:75')
+      .text('100% (MAX)', 'withdraw_pct:MAX')
+      .row()
+      .text('💳 Batal', 'menu_wallet');
   }
 
-  const keyboard = new InlineKeyboard()
-    .text('💳 Cek Saldo', 'menu_wallet')
-    .text('🏠 Menu Utama', 'menu_main');
+  keyboard.row().text('🏠 Menu Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;

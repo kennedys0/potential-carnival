@@ -4,6 +4,7 @@ import { TradeRepository } from '../../../database/repositories/tradeRepository'
 import { currencyService } from '../../../utils/currencyService';
 import { ScannerService } from '../../scanner/scannerService';
 import { AccountingEngine } from '../../trader/accountingEngine.js';
+import { formatUsd } from '../formatters/messageFormatter';
 
 export async function handlePositionsMenu(
   ctx: Context,
@@ -20,79 +21,148 @@ export async function handlePositionsMenu(
 
   if (openTrades.length === 0) {
     text = `
-📊 <b>Posisi Trading Aktif</b>
+📊 <b>Portofolio Kosong</b>
 
-<i>Saat ini belum ada posisi trading yang aktif (0 Open Positions).</i>
+<i>Tidak ada posisi trading yang sedang aktif.</i>
 
 💡 <b>Cara Membuka Posisi:</b>
-1. Ketik <code>/scan &lt;CA&gt;</code> untuk menganalisis token Solana.
-2. Gunakan tombol Buy untuk eksekusi manual (Paper/Live).
-3. Atau aktifkan <b>🤖 Autopilot</b> untuk auto-snipe otomatis sesuai kriteria AI.
+1. Ketik <code>/scan &lt;CA&gt;</code> untuk menganalisis token.
+2. Gunakan tombol Buy untuk eksekusi manual.
+3. Aktifkan <b>🤖 Autopilot</b> untuk auto-snipe.
 
-• <i>Diperiksa pada: ${timestamp}</i>
+• <i>Diperbarui: ${timestamp}</i>
 `.trim();
   } else {
-    text = `📊 <b>Daftar Posisi Aktif (${openTrades.length})</b>\n\n`;
+    text = `📊 <b>Portofolio Aktif (${openTrades.length})</b>\n\n`;
     await currencyService.fetchRates();
 
-    // Fetch live prices for all tokens concurrently
     const pricePromises = openTrades.map(t => scannerService.scanTokenByAddress(t.token_mint));
     const pairs = await Promise.all(pricePromises);
+
+    let totalPnlUsd = 0;
+    let totalPnlSol = 0;
 
     for (let i = 0; i < openTrades.length; i++) {
       const trade = openTrades[i];
       const pair = pairs[i];
       const currentPriceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0;
       
-      const mode = trade.is_dry_run ? '🟢 [PAPER]' : '⚡ [LIVE]';
-      const entryPrice = trade.entry_price_usd;
-      
+      const mode = trade.is_dry_run ? '🟢' : '⚡';
       let pnlPercent = 0;
       let pnlSol = 0;
-      let pnlIdr: number | null = null;
       let pnlIcon = '➖';
       
-      if (currentPriceUsd > 0 && entryPrice > 0) {
-        // Use AccountingEngine for accurate live PnL instead of naive price differences
+      if (currentPriceUsd > 0 && trade.entry_price_usd > 0) {
         const liveAcct = AccountingEngine.calculateLiveValuation({
           trade,
           currentPriceUsd
         });
-        
         pnlPercent = liveAcct.pnlPercent;
         pnlSol = liveAcct.pnlSol;
-        pnlIdr = currencyService.solToIdr(pnlSol);
         pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
+        totalPnlUsd += (currencyService.solToUsd(liveAcct.pnlSol) ?? 0);
+        totalPnlSol += liveAcct.pnlSol;
       }
-
-      text += `${i + 1}. ${mode} <b>${trade.token_symbol}</b>\n`;
-      text += `   • <b>Ukuran:</b> ${trade.sol_amount} SOL (${trade.token_amount.toFixed(2)} tokens)\n`;
-      text += `   • <b>Entry:</b> $${entryPrice.toFixed(6)}\n`;
-      text += `   • <b>Current:</b> $${currentPriceUsd.toFixed(6)}\n`;
-      text += `   • <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b> (${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n`;
-      text += `   • <b>Profit/Loss:</b> ${pnlIdr !== null && pnlIdr > 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n`;
-      text += `   • <b>Status:</b> <code>${trade.status}</code>\n\n`;
       
-      // Add a sell button for this trade
-      keyboard.text(`🔴 Sell ${trade.token_symbol}`, `sell:${trade.id}:100`).row();
+      const pnlIdr = currencyService.solToIdr(pnlSol);
+
+      text += `${i + 1}. ${mode} <b>${trade.token_symbol}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
+      text += `   ↳ <code>${trade.sol_amount} SOL</code> | PnL: ${pnlSol >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n\n`;
+      
+      keyboard.text(`${trade.token_symbol}`, `view_pos:${trade.id}`);
+      if ((i + 1) % 2 === 0) keyboard.row();
     }
-    text += `• <i>Diperbarui pada: ${timestamp}</i>`;
+    
+    if (openTrades.length % 2 !== 0) keyboard.row();
+
+    const totalPnlIdr = currencyService.solToIdr(totalPnlSol);
+    text += `\n💰 <b>Total Unre. PnL:</b> ${totalPnlSol >= 0 ? '+' : ''}${totalPnlSol.toFixed(4)} SOL (≈ ${totalPnlIdr !== null && totalPnlIdr >= 0 ? '+' : ''}${currencyService.formatIdr(totalPnlIdr)})\n`;
+    text += `• <i>Diperbarui: ${timestamp}</i>`;
   }
 
+  keyboard.row();
   keyboard
-    .text('🔄 Refresh Posisi', 'menu_positions')
-    .text('🔍 Scan Token', 'menu_scan')
-    .row()
-    .text('🤖 Autopilot', 'menu_autopilot')
-    .text('🏠 Menu Utama', 'menu_main');
+    .text('🔄 Refresh', 'menu_positions')
+    .text('🏠 Dashboard', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
     } catch (err: any) {
-      if (err?.description?.includes('message is not modified')) {
-        return;
-      }
+      if (err?.description?.includes('message is not modified')) return;
+    }
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+}
+
+export async function handlePositionDetail(
+  ctx: Context,
+  tradeId: string,
+  tradeRepo: TradeRepository,
+  scannerService: ScannerService
+): Promise<void> {
+  if (!ctx.from) return;
+
+  const trade = await tradeRepo.getTradeById(tradeId);
+  if (!trade || trade.user_id !== ctx.from.id) {
+    await ctx.answerCallbackQuery({ text: '⚠️ Posisi tidak ditemukan atau sudah ditutup.' });
+    return;
+  }
+
+  await currencyService.fetchRates();
+  const pair = await scannerService.scanTokenByAddress(trade.token_mint);
+  const currentPriceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0;
+  
+  const modeBadge = trade.is_dry_run ? '🟢 [PAPER]' : '⚡ [LIVE]';
+  
+  let pnlPercent = 0;
+  let pnlSol = 0;
+  let pnlUsd = 0;
+  let pnlIdr: number | null = 0;
+  
+  if (currentPriceUsd > 0 && trade.entry_price_usd > 0) {
+    const liveAcct = AccountingEngine.calculateLiveValuation({
+      trade,
+      currentPriceUsd
+    });
+    pnlPercent = liveAcct.pnlPercent;
+    pnlSol = liveAcct.pnlSol;
+    pnlUsd = currencyService.solToUsd(liveAcct.pnlSol) ?? 0;
+    pnlIdr = currencyService.solToIdr(liveAcct.pnlSol);
+  }
+
+  const pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
+  const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
+
+  const text = `
+📈 <b>Detail Posisi: ${trade.token_symbol}</b>
+<code>${trade.token_mint}</code>
+
+• <b>Mode:</b> ${modeBadge}
+• <b>Status:</b> <code>${trade.status}</code>
+• <b>Ukuran:</b> ${trade.sol_amount} SOL (${trade.token_amount.toFixed(2)} tokens)
+
+<b>Performa Harga:</b>
+• <b>Entry:</b> $${trade.entry_price_usd.toFixed(6)}
+• <b>Sekarang:</b> $${currentPriceUsd.toFixed(6)}
+• <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>
+• <b>Value:</b> ${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL (≈ ${pnlIdr !== null && pnlIdr >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)})
+
+<i>Diperbarui: ${timestamp}</i>
+`.trim();
+
+  const keyboard = new InlineKeyboard()
+    .text('🔴 Jual Semua (100%)', `sell:${trade.id}:100`)
+    .row()
+    .text('🔄 Refresh', `view_pos:${trade.id}`)
+    .text('🔙 Kembali', 'menu_positions');
+
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err: any) {
+      if (err?.description?.includes('message is not modified')) return;
     }
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });

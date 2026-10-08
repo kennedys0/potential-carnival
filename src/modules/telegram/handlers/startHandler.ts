@@ -10,36 +10,23 @@ export async function handleStartCommand(
   if (!ctx.from) return;
 
   await userRepo.getOrCreateUser(ctx.from.id, ctx.from.username);
-  const wallet = await walletService.getOrCreateWallet(ctx.from.id);
-  const balance = await walletService.getBalance(wallet.publicKey);
+  await walletService.getOrCreateWallet(ctx.from.id);
 
   const text = `
 ⚡ <b>Selamat Datang di Solana Scalping Bot!</b>
 
-Bot scalping & auto-trading Solana dengan filter anti-rug ketat dan analisa AI real-time.
-
-🔑 <b>Wallet Anda:</b>
-<code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
-
-💰 <b>Saldo:</b> <code>${balance.sol.toFixed(4)} SOL</code>
-🛡️ <b>Mode:</b> 🟢 <b>PAPER TRADING (Simulasi)</b>
-
-Gunakan tombol di bawah untuk navigasi cepat atau ketik /scan &lt;CA&gt; untuk memindai token.
+Bot auto-trading pintar dengan proteksi anti-rug dan analisa AI.
+Untuk memulai, silakan buka <b>Dashboard</b>.
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text('🔍 Scan Token', 'menu_scan')
-    .text('💳 Wallet & Deposit', 'menu_wallet')
+    .text('🏠 Buka Dashboard', 'menu_main')
     .row()
-    .text('🤖 Autopilot', 'menu_autopilot')
-    .text('📊 Positions', 'menu_positions')
-    .row()
-    .text('⚙️ Settings', 'menu_settings')
     .text('❓ Bantuan', 'menu_help');
 
   // Persistent menu using regular Keyboard
   const persistentKeyboard = new Keyboard()
-    .text('/scan').text('/autopilot').text('/positions').text('/livefeed')
+    .text('/dashboard').text('/autopilot').text('/positions').text('/livefeed')
     .row()
     .text('/wallet').text('/settings').text('/report').text('/help')
     .resized();

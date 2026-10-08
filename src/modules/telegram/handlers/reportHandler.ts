@@ -2,6 +2,7 @@ import { Context } from 'grammy';
 import { TradeRepository } from '../../../database/repositories/tradeRepository';
 
 import { appSettings } from '../../../config/settings';
+import { currencyService } from '../../../utils/currencyService';
 
 export async function handleReportCommand(
   ctx: Context,
@@ -17,21 +18,31 @@ export async function handleReportCommand(
     const closedTrades = await tradeRepo.getClosedTradesToday(userId, tz);
     const openTrades = await tradeRepo.getOpenTradesByUserId(userId);
 
+    // Fetch rates for IDR conversion
+    await currencyService.fetchRates();
+
     // Calculate total realized PnL today
     let totalRealizedPnlSol = 0;
-    const closedTokens = new Set<string>();
+    const closedBreakdown: string[] = [];
 
     for (const trade of closedTrades) {
-      if (trade.realized_pnl_sol) {
-        totalRealizedPnlSol += trade.realized_pnl_sol;
-      }
-      closedTokens.add(trade.token_symbol || trade.token_mint);
+      const pnl = trade.realized_pnl_sol || 0;
+      totalRealizedPnlSol += pnl;
+      
+      const symbol = trade.token_symbol || trade.token_mint.slice(0, 8);
+      const sign = pnl > 0 ? '+' : '';
+      const icon = pnl > 0 ? '🟢' : pnl < 0 ? '🔴' : '➖';
+      
+      const pnlIdr = currencyService.solToIdr(pnl);
+      const idrText = pnlIdr !== null ? ` (≈ ${sign}${currencyService.formatIdr(pnlIdr)})` : '';
+      
+      closedBreakdown.push(`└ ${icon} <b>${symbol}</b>: ${sign}${pnl.toFixed(4)} SOL${idrText}`);
     }
 
     // Collect open tokens
     const openTokens = new Set<string>();
     for (const trade of openTrades) {
-      openTokens.add(trade.token_symbol || trade.token_mint);
+      openTokens.add(trade.token_symbol || trade.token_mint.slice(0, 8));
     }
 
     const todayDateStr = now.toLocaleDateString('id-ID', {
@@ -44,13 +55,15 @@ export async function handleReportCommand(
 
     const pnlSign = totalRealizedPnlSol >= 0 ? '+' : '';
     const pnlEmoji = totalRealizedPnlSol >= 0 ? '🟩' : '🟥';
+    const totalIdr = currencyService.solToIdr(totalRealizedPnlSol);
+    const totalIdrText = totalIdr !== null ? ` (≈ ${pnlSign}${currencyService.formatIdr(totalIdr)})` : '';
 
     let text = `📈 <b>DAILY REPORT</b>\n📅 <i>${todayDateStr}</i>\n\n`;
-    text += `💰 <b>Realized PnL Hari Ini:</b>\n${pnlEmoji} ${pnlSign}${totalRealizedPnlSol.toFixed(4)} SOL\n\n`;
+    text += `💰 <b>Realized PnL Hari Ini:</b>\n${pnlEmoji} ${pnlSign}${totalRealizedPnlSol.toFixed(4)} SOL${totalIdrText}\n\n`;
     
     text += `✅ <b>Token Selesai (Closed): ${closedTrades.length} Trades</b>\n`;
-    if (closedTokens.size > 0) {
-      text += `└ <i>${Array.from(closedTokens).join(', ')}</i>\n\n`;
+    if (closedBreakdown.length > 0) {
+      text += `${closedBreakdown.join('\n')}\n\n`;
     } else {
       text += `└ <i>Tidak ada</i>\n\n`;
     }

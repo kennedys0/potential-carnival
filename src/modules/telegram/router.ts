@@ -10,6 +10,7 @@ import { AnalyzerService } from '../analyzer/analyzerService';
 import { TraderService } from '../trader/traderService';
 import { getRedisConnection } from '../../queue/connection';
 import { handleStartCommand } from './handlers/startHandler';
+import { handleDashboardMenu } from './handlers/dashboardHandler';
 import { currencyService } from '../../utils/currencyService';
 import { getEnv } from '../../config/env';
 import { liveFeedSubscribers } from '../scanner/liveFeedState';
@@ -31,7 +32,7 @@ import {
   handleAutopilotStats,
 } from './handlers/autopilotHandler';
 import { handleSettingsMenu } from './handlers/settingsHandler';
-import { handlePositionsMenu } from './handlers/positionsHandler';
+import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsHandler';
 import { handleHelpMenu } from './handlers/helpHandler';
 import { handleReportCommand } from './handlers/reportHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
@@ -54,6 +55,11 @@ export function registerBotRoutes(
   // Command /start
   bot.command('start', async (ctx) => {
     await handleStartCommand(ctx, services.userRepo, services.walletService);
+  });
+
+  // Command /dashboard
+  bot.command('dashboard', async (ctx) => {
+    await handleDashboardMenu(ctx, services.userRepo, services.autopilotRepo, services.tradeRepo, services.walletService);
   });
 
   // Command /wallet
@@ -254,24 +260,7 @@ export function registerBotRoutes(
     // 1. Navigation Menus
     if (data === 'menu_main') {
       await ctx.answerCallbackQuery();
-      const text = '🏠 <b>Menu Utama Solana Scalping Bot</b>\nPilih salah satu aksi di bawah untuk melanjutkan:';
-      const isPhoto = ctx.callbackQuery?.message && 'caption' in ctx.callbackQuery.message;
-      try {
-        if (isPhoto) {
-          await ctx.editMessageCaption({
-            caption: text,
-            parse_mode: 'HTML',
-            reply_markup: createMainMenuKeyboard(),
-          });
-        } else {
-          await ctx.editMessageText(text, {
-            parse_mode: 'HTML',
-            reply_markup: createMainMenuKeyboard(),
-          });
-        }
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) return;
-      }
+      await handleDashboardMenu(ctx, services.userRepo, services.autopilotRepo, services.tradeRepo, services.walletService);
     } else if (data === 'menu_wallet') {
       await ctx.answerCallbackQuery();
       await handleWalletMenu(ctx, services.walletService);
@@ -284,6 +273,10 @@ export function registerBotRoutes(
     } else if (data === 'menu_positions') {
       await ctx.answerCallbackQuery();
       await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
+    } else if (data.startsWith('view_pos:')) {
+      const tradeId = data.substring(9);
+      await ctx.answerCallbackQuery();
+      await handlePositionDetail(ctx, tradeId, services.tradeRepo, services.scannerService);
     } else if (data === 'menu_help') {
       await ctx.answerCallbackQuery();
       await handleHelpMenu(ctx);
@@ -322,6 +315,32 @@ export function registerBotRoutes(
     } else if (data === 'wallet_withdraw') {
       await ctx.answerCallbackQuery();
       await handleWalletWithdrawPrompt(ctx, services.walletService);
+    } else if (data.startsWith('withdraw_pct:')) {
+      const pct = data.substring(13);
+      await ctx.answerCallbackQuery();
+      if (!ctx.from) return;
+      const wallet = await services.walletService.getWalletRecord(ctx.from.id);
+      if (!wallet || !wallet.owner_pubkey) {
+         await ctx.reply('⚠️ Alamat penarikan belum diatur.');
+         return;
+      }
+      
+      let amount: number | 'MAX' = 'MAX';
+      if (pct !== 'MAX') {
+         const pctNum = parseFloat(pct);
+         const balance = await services.walletService.getBalance(wallet.public_key);
+         // leaves some room for gas (e.g. 0.002) if we were smart, but since it's a percentage of balance,
+         // the percentage will be calculated. 
+         const computed = (balance.sol * pctNum) / 100;
+         amount = Math.max(0, computed - 0.005); // reserve gas
+      }
+      
+      if (amount !== 'MAX' && amount <= 0) {
+        await ctx.reply('⚠️ Saldo terlalu kecil untuk ditarik setelah dikurangi biaya gas (0.005 SOL).');
+        return;
+      }
+
+      await handleWalletWithdrawConfirm(ctx, wallet.owner_pubkey, amount, services.walletService);
     } else if (data.startsWith('wd_exec:')) {
       const withdrawalId = data.substring(8);
       await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
