@@ -50,4 +50,30 @@ describe('Environment Validation', () => {
       expect(() => validateEnv({ ...base, LIVE_TRADING_ENABLED: v })).toThrow();
     });
   });
+  describe('production live guardrails', () => {
+    const productionBase = {
+      NODE_ENV: 'production',
+      TELEGRAM_BOT_TOKEN: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+      SOLANA_RPC_URL: 'https://api.mainnet-beta.solana.com',
+      SOLANA_WSS_URL: 'wss://api.mainnet-beta.solana.com',
+      SUPABASE_URL: 'https://xyzcompany.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy',
+      MASTER_ENCRYPTION_KEY: 'e1a49f7b3c2d8e6f1a5b9d3c4e7f8a2b5d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a',
+      REDIS_URL: 'redis://127.0.0.1:6379',
+    };
+
+    it('rejects production without whitelisted operators and admins', () => {
+      expect(() => validateEnv(productionBase)).toThrow();
+    });
+
+    it('accepts production when whitelist and admin IDs are explicit numeric lists', () => {
+      const parsed = validateEnv({
+        ...productionBase,
+        WHITELISTED_USERS: '12345,67890',
+        ADMIN_USER_IDS: '12345',
+      });
+      expect(parsed.WHITELISTED_USERS).toBe('12345,67890');
+      expect(parsed.ADMIN_USER_IDS).toBe('12345');
+    });
+  });
 });

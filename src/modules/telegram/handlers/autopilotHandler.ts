@@ -3,6 +3,7 @@ import { AutopilotRepository } from '../../../database/repositories/autopilotRep
 import { SniperRepository } from '../../../database/repositories/sniperRepository';
 import { z } from 'zod';
 import { liveFeedSubscribers } from '../../scanner/liveFeedState';
+import { escapeHtml } from '../formatters/messageFormatter';
 
 export async function handleAutopilotMenu(
   ctx: Context,
@@ -130,14 +131,14 @@ export async function handleAutopilotLogs(
     for (const log of logs) {
       const icon = log.action === 'BUY' ? '🟢' : log.action === 'SKIP' ? '⚪' : '🔴';
       const strategyName = log.strategy === 'NEW_TOKEN_SNIPER' ? '⚡ SNIPER' : '📈 TRENDING';
-      text += `${icon} <b>${log.action}</b> [${strategyName}] <code>${log.token_symbol || log.token_mint.slice(0, 8)}</code>\n`;
+      text += `${icon} <b>${log.action}</b> [${strategyName}] <code>${escapeHtml(log.token_symbol || log.token_mint.slice(0, 8))}</code>\n`;
       text += `├ <b>Score:</b> ${log.safety_score}/100 🛡️\n`;
       
       if (log.safety_flags && log.safety_flags.length > 0) {
-        text += `├ <b>Flags:</b> ${log.safety_flags.length > 2 ? log.safety_flags.slice(0, 2).join(', ') + ', dll' : log.safety_flags.join(', ')}\n`;
+        text += `├ <b>Flags:</b> ${log.safety_flags.length > 2 ? log.safety_flags.slice(0, 2).map(escapeHtml).join(', ') + ', dll' : log.safety_flags.map(escapeHtml).join(', ')}\n`;
       }
       
-      text += `└ <b>Catatan:</b> <i>${log.reason_summary}</i>\n\n`;
+      text += `└ <b>Catatan:</b> <i>${escapeHtml(log.reason_summary)}</i>\n\n`;
     }
   }
 

@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
-    "verify": "tsc --noEmit && vitest run && node scripts/grep-guards.mjs",
+    "test:native": "node --experimental-strip-types --test tests/native/*.test.mjs",
+    "verify": "tsc --noEmit && vitest run && npm run test:native && node scripts/grep-guards.mjs",
     "verify:full": "npm run verify && node scripts/mutation-check.mjs",
     "guards": "node scripts/grep-guards.mjs",
     "mutation": "node scripts/mutation-check.mjs"

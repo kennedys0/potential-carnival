@@ -10,6 +10,7 @@ import { sniperExitPolicy } from '../../modules/autopilot/strategyRisk';
 import { logger } from '../../utils/logger';
 import { JupiterClient } from '../../modules/trader/jupiterClient';
 import { appSettings } from '../../config/settings';
+import { escapeHtml } from '../../modules/telegram/formatters/messageFormatter';
 
 export function createMonitorWorker(
   tradeRepo: TradeRepository,
@@ -154,14 +155,14 @@ export function createMonitorWorker(
               if (status === 'SUCCESS') {
                 await botApi.sendMessage(userId, 
                   `🔔 <b>Monitor Alert!</b>\n\n` +
-                  `Posisi <b>${trade.token_symbol}</b> berhasil ditutup (${percentageToClose}%).\n` +
-                  `Alasan: ${reason}`,
+                  `Posisi <b>${escapeHtml(trade.token_symbol)}</b> berhasil ditutup (${percentageToClose}%).\n` +
+                  `Alasan: ${escapeHtml(reason)}`,
                   { parse_mode: 'HTML' }
                 );
               } else if (status === 'UNCERTAIN') {
                 await botApi.sendMessage(userId, 
                   `🔔 <b>Monitor Alert!</b>\n\n` +
-                  `Permintaan tutup <b>${trade.token_symbol}</b> (${percentageToClose}%) terkirim.\n` +
+                  `Permintaan tutup <b>${escapeHtml(trade.token_symbol)}</b> (${percentageToClose}%) terkirim.\n` +
                   `Status transaksi saat ini belum pasti (menunggu konfirmasi).`,
                   { parse_mode: 'HTML' }
                 );

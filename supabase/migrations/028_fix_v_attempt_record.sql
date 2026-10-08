@@ -127,7 +127,7 @@ BEGIN
     -- Update trade
     UPDATE trades 
     SET 
-        status = v_new_status,
+        status = v_new_status::position_status,
         pnl_percent = v_pnl_percent,
         pnl_sol = v_new_realized_pnl,
         realized_pnl_sol = v_new_realized_pnl,

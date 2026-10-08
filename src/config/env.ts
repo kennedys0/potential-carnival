@@ -12,6 +12,11 @@ const isLowEntropy = (key: string) => {
   if (uniqueChars < 8) return true;
   return false;
 };
+const hasValidIdList = (value: string) =>
+  value.split(',').map((id) => id.trim()).filter(Boolean).every((id) => /^\d+$/.test(id));
+
+const hasAtLeastOneId = (value: string) =>
+  value.split(',').map((id) => id.trim()).filter(Boolean).length > 0 && hasValidIdList(value);
 
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -40,6 +45,24 @@ export const EnvSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+}).superRefine((env, ctx) => {
+  if (env.NODE_ENV !== 'production') return;
+
+  if (!hasAtLeastOneId(env.WHITELISTED_USERS)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['WHITELISTED_USERS'],
+      message: 'WHITELISTED_USERS must contain at least one Telegram user ID in production',
+    });
+  }
+
+  if (!hasAtLeastOneId(env.ADMIN_USER_IDS)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ADMIN_USER_IDS'],
+      message: 'ADMIN_USER_IDS must contain at least one Telegram admin ID in production',
+    });
+  }
 });
 
 export type Env = z.infer<typeof EnvSchema>;

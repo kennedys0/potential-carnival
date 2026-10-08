@@ -38,6 +38,7 @@ import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsH
 import { handleHelpMenu } from './handlers/helpHandler';
 import { handleReportCommand } from './handlers/reportHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
+import { escapeHtml } from './formatters/messageFormatter';
 
 export interface BotRouteServices {
   userRepo: UserRepository;
@@ -54,6 +55,16 @@ export interface BotRouteServices {
 function cyclePreset(current: number, presets: readonly number[]): number {
   const index = presets.indexOf(Number(current));
   return presets[(index + 1) % presets.length];
+}
+function parsePositiveDecimal(input: string, max = 1000): number | null {
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/.test(input.trim())) return null;
+  const value = Number(input);
+  return Number.isFinite(value) && value > 0 && value <= max ? value : null;
+}
+
+function parsePercent(input: string): number | null {
+  const value = parsePositiveDecimal(input, 100);
+  return value === null || value > 100 ? null : value;
 }
 
 export function registerBotRoutes(
@@ -198,8 +209,8 @@ export function registerBotRoutes(
 
     const amountStr = match.toUpperCase();
     
-    const amount = amountStr === 'MAX' ? 'MAX' : parseFloat(amountStr);
-    if (amount !== 'MAX' && (isNaN(amount) || amount <= 0)) {
+    const amount = amountStr === 'MAX' ? 'MAX' : parsePositiveDecimal(amountStr);
+    if (amount !== 'MAX' && amount === null) {
       await ctx.reply('⚠️ Jumlah tidak valid. Masukkan angka yang benar atau MAX.', { parse_mode: 'HTML' });
       return;
     }
@@ -242,8 +253,8 @@ export function registerBotRoutes(
     const customBuyMint = await redis.get(`custom_buy_mint:${ctx.from.id}`);
     
     if (customBuyMint) {
-      const amount = parseFloat(text);
-      if (isNaN(amount) || amount <= 0) {
+      const amount = parsePositiveDecimal(text);
+      if (amount === null) {
         await ctx.reply('⚠️ Harap masukkan angka yang valid (contoh: 0.1 atau 2). Transaksi Custom Buy dibatalkan.');
       } else {
         await ctx.reply(`⏳ Memproses order Custom Buy ${amount} SOL...`);
@@ -338,7 +349,11 @@ export function registerBotRoutes(
       
       let amount: number | 'MAX' = 'MAX';
       if (pct !== 'MAX') {
-         const pctNum = parseFloat(pct);
+         const pctNum = parsePercent(pct);
+         if (pctNum === null) {
+           await ctx.reply('⚠️ Persentase withdrawal tidak valid.');
+           return;
+         }
          const balance = await services.walletService.getBalance(wallet.public_key);
          // leaves some room for gas (e.g. 0.002) if we were smart, but since it's a percentage of balance,
          // the percentage will be calculated. 
@@ -357,8 +372,12 @@ export function registerBotRoutes(
       await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
       const redis = getRedisConnection();
       await handleWalletWithdrawExecute(ctx, withdrawalId, services.walletService, redis);
-    } else if (data === 'withdraw_cancel') {
-      await ctx.answerCallbackQuery({ text: '❌ Penarikan dibatalkan.' });
+    } else if (data.startsWith('withdraw_cancel')) {
+      if (data.startsWith('withdraw_cancel:') && ctx.from) {
+        const withdrawalId = data.substring('withdraw_cancel:'.length);
+        await services.walletService['walletRepo'].cancelAuthorizedWithdrawal(withdrawalId, ctx.from.id);
+      }
+      await ctx.answerCallbackQuery({ text: 'Penarikan dibatalkan.' });
       await handleWalletMenu(ctx, services.walletService);
     } else if (data === 'wallet_export') {
       await ctx.answerCallbackQuery();
@@ -485,7 +504,11 @@ export function registerBotRoutes(
       await handleSettingsMenu(ctx, services.autopilotRepo);
     } else if (data.startsWith('settings_size_')) {
       if (!ctx.from) return;
-      const size = parseFloat(data.replace('settings_size_', '')) ?? 0.1;
+      const size = parsePositiveDecimal(data.replace('settings_size_', ''), 1000);
+      if (size === null) {
+        await ctx.answerCallbackQuery({ text: 'Ukuran trade tidak valid', show_alert: true });
+        return;
+      }
       await services.autopilotRepo.updateConfig(ctx.from.id, {
         sizing_params: { fixed_sol: size },
       });
@@ -537,6 +560,15 @@ export function registerBotRoutes(
       await services.sniperRepo.updateConfig(ctx.from.id, { enabled: !cfg.enabled });
       await ctx.answerCallbackQuery({ text: `Sniper ${!cfg.enabled ? 'Enabled' : 'Disabled'}` });
       await handleSniperSettings(ctx, services.sniperRepo);
+    } else if (data === 'toggle_livefeed') {
+      if (!ctx.from) return;
+      if (liveFeedSubscribers.has(ctx.from.id)) {
+        liveFeedSubscribers.delete(ctx.from.id);
+        await ctx.answerCallbackQuery({ text: '🔕 Live Feed Dimatikan', show_alert: true });
+      } else {
+        liveFeedSubscribers.add(ctx.from.id);
+        await ctx.answerCallbackQuery({ text: '🔔 Live Feed Diaktifkan', show_alert: true });
+      }
     }
 
     // 5. Token Scan Actions
@@ -550,21 +582,29 @@ export function registerBotRoutes(
       await redis.set(`custom_buy_mint:${ctx.from.id}`, mint, 'EX', 300); // 5 mins expiry
       
       await ctx.answerCallbackQuery();
-      await ctx.reply(`✍️ <b>Custom Buy</b>\n\nBerapa SOL yang ingin dialokasikan untuk membeli CA: <code>${mint}</code>?\n\n<i>(Ketik angka saja, contoh: 1.5 atau 0.02)</i>`, {
+      await ctx.reply(`✍️ <b>Custom Buy</b>\n\nBerapa SOL yang ingin dialokasikan untuk membeli CA: <code>${escapeHtml(mint)}</code>?\n\n<i>(Ketik angka saja, contoh: 1.5 atau 0.02)</i>`, {
         parse_mode: 'HTML',
         reply_markup: { force_reply: true }
       });
     } else if (data.startsWith('buy:')) {
       if (!ctx.from) return;
       const [, mint, amountStr] = data.split(':');
-      const amount = parseFloat(amountStr) ?? 0.1;
+      const amount = parsePositiveDecimal(amountStr);
+      if (amount === null) {
+        await ctx.answerCallbackQuery({ text: 'Jumlah order tidak valid', show_alert: true });
+        return;
+      }
 
       await ctx.answerCallbackQuery({ text: `⏳ Memproses order ${amount} SOL...` });
       await executeManualBuy(ctx, mint, amount, services);
     } else if (data.startsWith('sell:')) {
       if (!ctx.from) return;
       const [, tradeId, percentStr] = data.split(':');
-      const percent = parseFloat(percentStr) ?? 100;
+      const percent = parsePercent(percentStr);
+      if (percent === null) {
+        await ctx.answerCallbackQuery({ text: 'Persentase jual tidak valid', show_alert: true });
+        return;
+      }
       
       await ctx.answerCallbackQuery({ text: `⏳ Memproses penutupan posisi ${percent}%...` });
       
@@ -587,7 +627,7 @@ export function registerBotRoutes(
 
         await ctx.reply(
           `✅ <b>Posisi Berhasil Ditutup (${percent}%)!</b>\n\n` +
-          `• <b>Token:</b> ${trade.token_symbol}\n` +
+          `• <b>Token:</b> ${escapeHtml(trade.token_symbol)}\n` +
           `• <b>Entry Price:</b> $${entryPrice.toFixed(6)}\n` +
           `• <b>Exit Price:</b> $${priceUsd.toFixed(6)}\n` +
           `• <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b> (${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
@@ -602,7 +642,7 @@ export function registerBotRoutes(
         // Refresh positions list message
         await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
       } catch (err: any) {
-        await ctx.reply(`❌ <b>Gagal menutup posisi:</b> ${err.message}`, { parse_mode: 'HTML' });
+        await ctx.reply(`❌ <b>Gagal menutup posisi:</b> ${escapeHtml(err.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });
       }
     } else {
       await ctx.answerCallbackQuery();
@@ -635,7 +675,7 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
     await ctx.reply(
       `✅ <b>Order Berhasil Dieksekusi!</b>\n\n` +
       `• <b>Mode:</b> ${isDryRun ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}\n` +
-      `• <b>Token:</b> ${symbol} (<code>${mint.slice(0, 8)}...</code>)\n` +
+      `• <b>Token:</b> ${escapeHtml(symbol)} (<code>${escapeHtml(mint.slice(0, 8))}...</code>)\n` +
       `• <b>Alokasi:</b> <code>${amount} SOL</code> (${currencyService.formatIdr(amountIdr)})\n` +
       `• <b>Estimasi Token:</b> <code>${trade.token_amount.toFixed(2)}</code>\n` +
       `• <b>Entry Price:</b> $${priceUsd.toFixed(6)}\n` +
@@ -648,6 +688,6 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
       }
     );
   } catch (err: any) {
-    await ctx.reply(`❌ <b>Gagal eksekusi order:</b> ${err.message}`, { parse_mode: 'HTML' });
+    await ctx.reply(`❌ <b>Gagal eksekusi order:</b> ${escapeHtml(err.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });
   }
 }

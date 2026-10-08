@@ -54,6 +54,8 @@ export async function handleSniperSettings(
     .row()
     .text('🎚 Slippage Cap', 'sniper_settings_slippage')
     .row()
+    .text('🔔 Toggle Live Feed', 'toggle_livefeed')
+    .row()
     .text('⬅️ Back to Automation Center', 'menu_autopilot');
 
   if (ctx.callbackQuery) {

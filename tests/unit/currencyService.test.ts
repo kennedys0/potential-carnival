@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CurrencyService } from '../../src/utils/currencyService';
 
-const okResponse = (over: any = {}) => ({
+const okResponse = (rates: any[] = [
+  { symbol: 'SOLUSDT', price: '180' },
+  { symbol: 'USDTIDR', price: '16666.6666666667' },
+]) => ({
   ok: true,
   status: 200,
-  json: async () => ({ solana: { idr: 3_000_000, usd: 180 }, tether: { idr: 16_600 }, ...over }),
+  json: async () => rates,
 });
 
 describe('CurrencyService (tanpa fallback palsu)', () => {
@@ -26,7 +29,7 @@ describe('CurrencyService (tanpa fallback palsu)', () => {
     expect(svc.formatUsd(null)).toBe('N/A');
   });
 
-  it('tetap null (tidak melempar) bila CoinGecko gagal', async () => {
+  it('tetap null (tidak melempar) bila Binance gagal', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
     const svc = new CurrencyService();
     await expect(svc.fetchRates()).resolves.toBeUndefined();
@@ -38,13 +41,16 @@ describe('CurrencyService (tanpa fallback palsu)', () => {
     const svc = new CurrencyService();
     await svc.fetchRates();
     expect(svc.getUsdPerSol()).toBe(180);
-    expect(svc.getIdrPerSol()).toBe(3_000_000);
+    expect(svc.getIdrPerSol()).toBeCloseTo(3_000_000, 6);
     expect(svc.solToUsd(2)).toBe(360);
-    expect(svc.solToIdr(0.5)).toBe(1_500_000);
+    expect(svc.solToIdr(0.5)).toBeCloseTo(1_500_000, 6);
   });
 
   it('menolak respons rusak/nol (tidak menyimpan nilai tak valid)', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse({ solana: { idr: 0, usd: 0 } })));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse([
+      { symbol: 'SOLUSDT', price: '0' },
+      { symbol: 'USDTIDR', price: '0' },
+    ])));
     const svc = new CurrencyService();
     await svc.fetchRates();
     expect(svc.getUsdPerSol()).toBeNull();

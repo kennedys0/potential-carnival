@@ -100,6 +100,23 @@ export class AnalyzerService {
 ATURAN MUTLAK:
 1. JIKA VERDICT = BUY, Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk (currentPrice), dan Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
 2. key_reasons WAJIB ditulis dalam bahasa Indonesia, maksimal 5-7 kata per alasan agar singkat, padat, dan mudah dimengerti.
+3. Keluarkan HANYA JSON valid sesuai struktur berikut:
+{
+  "verdict": "BUY" | "WAIT" | "AVOID",
+  "confidence": 0-100,
+  "setup_type": "BREAKOUT" | "PULLBACK" | "MOMENTUM" | "REVERSAL" | "NONE",
+  "entry_zone": { "min_usd": number, "max_usd": number },
+  "take_profit_levels": [
+    { "level": 1, "price_usd": number, "percentage": number },
+    { "level": 2, "price_usd": number, "percentage": number }
+  ],
+  "stop_loss_usd": number,
+  "risk_reward_ratio": number,
+  "key_reasons": ["alasan 1", "alasan 2"],
+  "red_flags": ["flag 1"],
+  "invalidation_condition": "kondisi pembatalan setup",
+  "estimated_holding_time": "durasi estimasi hold"
+}
 Jangan sertakan teks apapun selain JSON yang valid.`;
 
     let attempts = 0;

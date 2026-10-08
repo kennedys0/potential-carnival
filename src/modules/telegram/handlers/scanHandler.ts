@@ -2,7 +2,7 @@ import { Context } from 'grammy';
 import { ScannerService } from '../../scanner/scannerService';
 import { SecurityFilterService } from '../../security/securityFilterService';
 import { AnalyzerService } from '../../analyzer/analyzerService';
-import { formatTokenReport } from '../formatters/messageFormatter';
+import { escapeHtml, formatTokenReport } from '../formatters/messageFormatter';
 import { createTokenKeyboard } from '../formatters/keyboardBuilder';
 
 export async function handleScanCommand(
@@ -41,7 +41,7 @@ export async function handleScanCommand(
       await ctx.api.editMessageText(
         chatId,
         activeMessageId,
-        `❌ <b>Token Tidak Ditemukan!</b>\nTidak ada pool likuiditas aktif di Solana untuk CA: <code>${tokenMint}</code>`,
+        `❌ <b>Token Tidak Ditemukan!</b>\nTidak ada pool likuiditas aktif di Solana untuk CA: <code>${escapeHtml(tokenMint)}</code>`,
         { parse_mode: 'HTML' }
       );
       return;
@@ -79,7 +79,7 @@ export async function handleScanCommand(
       await ctx.api.editMessageText(
         chatId,
         activeMessageId,
-        `⚠️ <b>Gagal memindai token:</b> ${err.message || 'Error tidak diketahui'}`,
+        `⚠️ <b>Gagal memindai token:</b> ${escapeHtml(err.message || 'Error tidak diketahui')}`,
         { parse_mode: 'HTML' }
       );
     } catch {

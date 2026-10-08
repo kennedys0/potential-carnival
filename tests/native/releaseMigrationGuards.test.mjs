@@ -28,3 +28,39 @@ test('application refuses unsupported or misleading SQL reconciliation statuses'
   assert.doesNotMatch(entry, /ALREADY_RESOLVED/);
   assert.match(entry, /throw new Error\(`Entry reconciliation rejected/);
 });
+
+test('030 locks sensitive tables and financial RPCs away from anon clients', () => {
+  const sql = load('030_security_rls_lockdown.sql');
+  for (const tableName of ['user_wallets', 'withdrawal_attempts', 'trades', 'trade_fills', 'strategy_entry_reservations']) {
+    assert.match(sql, new RegExp(`'${tableName}'`));
+  }
+  assert.match(sql, /ENABLE ROW LEVEL SECURITY/);
+  assert.match(sql, /REVOKE ALL ON TABLE public\.%I FROM anon/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION %s FROM anon/);
+  assert.match(sql, /GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public\.%I TO service_role/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION %s TO service_role/);
+});
+test('031 aligns live schema with application queries and withdrawal cancellation', () => {
+  const sql = load('031_live_schema_alignment.sql');
+  assert.match(sql, /ALTER TABLE public\.trades\s+ADD COLUMN IF NOT EXISTS updated_at/i);
+  assert.match(sql, /withdrawal_attempts_user_id_fkey/i);
+  assert.match(sql, /inventory_discrepancies_user_id_fkey/i);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA public FROM PUBLIC/i);
+  for (const indexName of [
+    'trades_user_status_idx',
+    'trades_inflight_signature_idx',
+    'exit_attempts_trade_status_idx',
+    'withdrawal_attempts_status_updated_idx',
+    'decision_logs_user_timestamp_idx',
+  ]) {
+    assert.match(sql, new RegExp(indexName));
+  }
+
+  const walletRepo = fs.readFileSync(new URL('../../src/database/repositories/walletRepository.ts', import.meta.url), 'utf8');
+  const walletHandler = fs.readFileSync(new URL('../../src/modules/telegram/handlers/walletHandler.ts', import.meta.url), 'utf8');
+  const router = fs.readFileSync(new URL('../../src/modules/telegram/router.ts', import.meta.url), 'utf8');
+  assert.match(walletRepo, /cancelAuthorizedWithdrawal/);
+  assert.match(walletRepo, /\.eq\('status', 'AUTHORIZED'\)/);
+  assert.match(walletHandler, /withdraw_cancel:\$\{withdrawalId\}/);
+  assert.match(router, /withdraw_cancel:/);
+});

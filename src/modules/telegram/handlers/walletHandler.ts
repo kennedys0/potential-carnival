@@ -3,7 +3,7 @@ import { WalletService } from '../../wallet/walletService';
 
 import { currencyService } from '../../../utils/currencyService';
 import { getRedisConnection } from '../../../queue/connection';
-import { v4 as uuidv4 } from 'uuid';
+import { escapeHtml } from '../formatters/messageFormatter';
 
 export async function handleWalletMenu(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
@@ -273,7 +273,7 @@ export async function handleWalletExportExecute(
     }, 60000);
 
   } catch (err: any) {
-    await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${err.message}`, { parse_mode: 'HTML' });
+    await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${escapeHtml(err.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });
   }
 }
 
@@ -307,7 +307,7 @@ export async function handleWalletWithdrawConfirm(
 
   const keyboard = new InlineKeyboard()
     .text('✅ Confirm Kirim', `wd_exec:${withdrawalId}`)
-    .text('❌ Cancel', 'withdraw_cancel');
+    .text('❌ Cancel', `withdraw_cancel:${withdrawalId}`);
 
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
@@ -359,7 +359,7 @@ export async function handleWalletWithdrawExecute(
 
     await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard, link_preview_options: { is_disabled: true } });
   } catch (err: any) {
-    const text = `❌ <b>Gagal Withdrawal:</b> ${err.message}`;
+    const text = `❌ <b>Gagal Withdrawal:</b> ${escapeHtml(err.message || 'Error tidak diketahui')}`;
     const keyboard = new InlineKeyboard()
       .text('💳 Kembali ke Wallet', 'menu_wallet')
       .row()
@@ -368,4 +368,3 @@ export async function handleWalletWithdrawExecute(
     await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
   }
 }
-

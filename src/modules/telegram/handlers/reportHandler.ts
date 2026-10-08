@@ -3,6 +3,7 @@ import { TradeRepository } from '../../../database/repositories/tradeRepository'
 
 import { appSettings } from '../../../config/settings';
 import { currencyService } from '../../../utils/currencyService';
+import { escapeHtml } from '../formatters/messageFormatter';
 
 export async function handleReportCommand(
   ctx: Context,
@@ -36,13 +37,13 @@ export async function handleReportCommand(
       const pnlIdr = currencyService.solToIdr(pnl);
       const idrText = pnlIdr !== null ? ` (≈ ${sign}${currencyService.formatIdr(pnlIdr)})` : '';
       
-      closedBreakdown.push(`└ ${icon} <b>${symbol}</b>: ${sign}${pnl.toFixed(4)} SOL${idrText}`);
+      closedBreakdown.push(`└ ${icon} <b>${escapeHtml(symbol)}</b>: ${sign}${pnl.toFixed(4)} SOL${idrText}`);
     }
 
     // Collect open tokens
     const openTokens = new Set<string>();
     for (const trade of openTrades) {
-      openTokens.add(trade.token_symbol || trade.token_mint.slice(0, 8));
+      openTokens.add(escapeHtml(trade.token_symbol || trade.token_mint.slice(0, 8)));
     }
 
     const todayDateStr = now.toLocaleDateString('id-ID', {
@@ -77,6 +78,6 @@ export async function handleReportCommand(
 
     await ctx.reply(text, { parse_mode: 'HTML' });
   } catch (error: any) {
-    await ctx.reply(`⚠️ Gagal mengambil report: ${error.message}`);
+    await ctx.reply(`⚠️ Gagal mengambil report: ${escapeHtml(error.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });
   }
 }

@@ -109,8 +109,8 @@ export class UserStateService {
     };
   }
 
-  async checkCircuitBreaker(userId: number, metrics: AutopilotStateMetrics): Promise<void> {
-    if (metrics.isCircuitBroken) return; // Already broken
+  async checkCircuitBreaker(userId: number, metrics: AutopilotStateMetrics): Promise<boolean> {
+    if (metrics.isCircuitBroken) return true; // Already broken
 
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
     const cbParams = config.circuit_breaker_params as any;
@@ -153,6 +153,9 @@ export class UserStateService {
         trigger_type: 'CIRCUIT_BREAKER',
         description: reason,
       });
+      return true;
     }
+
+    return false;
   }
 }

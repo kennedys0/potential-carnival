@@ -7,6 +7,7 @@ import { AutopilotRepository } from '../../database/repositories/autopilotReposi
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
+import { escapeHtml } from '../telegram/formatters/messageFormatter';
 
 export class TrendScanner {
   private intervalId?: NodeJS.Timeout;
@@ -154,7 +155,7 @@ export class TrendScanner {
               const currentState = await this.userStateService.getAutopilotState(config.user_id);
               
               // Circuit Breaker Check
-              if (currentState.isCircuitBroken) {
+              if (await this.userStateService.checkCircuitBreaker(config.user_id, currentState)) {
                 logger.debug(`Autopilot circuit broken for user ${config.user_id}, skipping.`);
                 continue;
               }
@@ -193,11 +194,11 @@ export class TrendScanner {
                   await this.botApi.sendMessage(config.user_id, 
                     `🚨 <b>AUTOPILOT EXECUTION</b> 🚨\n\n` +
                     `Sistem mendeteksi setup yang valid dan baru saja mengeksekusi <b>BUY</b>!\n\n` +
-                    `🎯 <b>Target:</b> <code>${pair.baseToken.symbol}</code>\n` +
+                    `🎯 <b>Target:</b> <code>${escapeHtml(pair.baseToken.symbol)}</code>\n` +
                     `📄 <b>CA:</b> <code>${tokenAddress}</code>\n` +
                     `🛡️ <b>Safety:</b> ${security.score}/100\n` +
-                    (security.riskFlags.length > 0 ? `⚠️ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).join(', ') + ', dll' : security.riskFlags.join(', ')}\n` : '') +
-                    `📝 <b>Analisa:</b> <i>${result.reason}</i>\n\n` +
+                    (security.riskFlags.length > 0 ? `⚠️ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).map(escapeHtml).join(', ') + ', dll' : security.riskFlags.map(escapeHtml).join(', ')}\n` : '') +
+                    `📝 <b>Analisa:</b> <i>${escapeHtml(result.reason)}</i>\n\n` +
                     `👉 Cek /positions untuk memantau performa.`,
                     { parse_mode: 'HTML' }
                   );
@@ -210,13 +211,16 @@ export class TrendScanner {
                   try {
                     await this.botApi.sendMessage(config.user_id, 
                       `📡 <b>AUTOPILOT RADAR</b>\n` +
-                      `├ <b>Token:</b> <code>${pair.baseToken.symbol}</code>\n` +
+                      `├ <b>Token:</b> <code>${escapeHtml(pair.baseToken.symbol)}</code>\n` +
                       `├ <b>CA:</b> <code>${tokenAddress}</code>\n` +
                       `├ <b>Safety:</b> ${security.score}/100 🛡️\n` +
-                      (security.riskFlags.length > 0 ? `├ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).join(', ') + ', dll' : security.riskFlags.join(', ')}\n` : '') +
+                      (security.riskFlags.length > 0 ? `├ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).map(escapeHtml).join(', ') + ', dll' : security.riskFlags.map(escapeHtml).join(', ')}\n` : '') +
                       `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                      `└ <b>Reason:</b> <i>${result.reason}</i>`,
-                      { parse_mode: 'HTML' }
+                      `└ <b>Reason:</b> <i>${escapeHtml(result.reason)}</i>`,
+                      { 
+                        parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${tokenAddress}` }]] }
+                      }
                     );
                   } catch (e) {
                     // ignore live feed errors

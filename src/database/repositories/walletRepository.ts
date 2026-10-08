@@ -98,6 +98,22 @@ export class WalletRepository {
     }
   }
 
+  async cancelAuthorizedWithdrawal(id: string, userId: number): Promise<boolean> {
+    const { data, error } = await this.db
+      .from('withdrawal_attempts')
+      .update({ status: 'CANCELLED' })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .eq('status', 'AUTHORIZED')
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to cancel withdrawal attempt: ${error.message}`);
+    }
+    return !!data;
+  }
+
   async atomicClaimWithdrawal(id: string, userId: number): Promise<any> {
     const { data, error } = await this.db.rpc('atomic_claim_withdrawal', {
       p_id: id,

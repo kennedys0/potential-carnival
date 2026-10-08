@@ -2,7 +2,7 @@ import { logger } from './logger';
 import { appSettings } from '../config/settings';
 
 /**
- * Kurs SOL/USD/IDR dari CoinGecko.
+ * Kurs SOL/USD/IDR dari Binance.
  * ATURAN: tidak ada nilai fallback/hardcode. Jika belum ada data segar, semua getter mengembalikan `null`
  * dan pemanggil WAJIB menampilkan "N/A" (tampilan) atau menolak aksi (trading).
  */

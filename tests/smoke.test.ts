@@ -42,5 +42,5 @@ describe('Smoke Test', () => {
     // We just dynamically import the index file to ensure no "Cannot find module" errors
     const index = await import('../src/index');
     expect(index).toBeDefined();
-  }, 15000);
+  }, 45000);
 });

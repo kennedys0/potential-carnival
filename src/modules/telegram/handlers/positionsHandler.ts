@@ -4,7 +4,7 @@ import { TradeRepository } from '../../../database/repositories/tradeRepository'
 import { currencyService } from '../../../utils/currencyService';
 import { ScannerService } from '../../scanner/scannerService';
 import { AccountingEngine } from '../../trader/accountingEngine.js';
-import { formatUsd } from '../formatters/messageFormatter';
+import { escapeHtml } from '../formatters/messageFormatter';
 
 export async function handlePositionsMenu(
   ctx: Context,
@@ -66,7 +66,7 @@ export async function handlePositionsMenu(
       
       const pnlIdr = currencyService.solToIdr(pnlSol);
 
-      text += `${i + 1}. ${mode} <b>${trade.token_symbol}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
+      text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
       text += `   ↳ <code>${trade.sol_amount} SOL</code> | PnL: ${pnlSol >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n\n`;
       
       keyboard.text(`${trade.token_symbol}`, `view_pos:${trade.id}`);
@@ -136,8 +136,8 @@ export async function handlePositionDetail(
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
 
   const text = `
-📈 <b>Detail Posisi: ${trade.token_symbol}</b>
-<code>${trade.token_mint}</code>
+📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
+<code>${escapeHtml(trade.token_mint)}</code>
 
 • <b>Mode:</b> ${modeBadge}
 • <b>Status:</b> <code>${trade.status}</code>

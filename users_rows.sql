@@ -1,0 +1,1 @@
+INSERT INTO public.users (telegram_id, username, role, is_whitelisted, created_at, updated_at) VALUES (5390732859, 'Muchiestz', 'user', true, '2026-10-06 15:22:57.365302+00', '2026-10-08 14:27:10.959+00');

@@ -40,7 +40,7 @@ const MUTATIONS = [
     replace: "    if ((await getRedisConnection().get('killswitch:global')) === '1') throw new KillSwitchActiveError();\n    if (!this.jupiterClient) throw new Error('Jupiter client required for live trade execution');\n    const wallet = await this.walletService.getOrCreateWallet(trade.user_id);" },
   { id: 'K1-killswitch-allows-buy', desc: 'Kill-switch tidak lagi menolak BUY',
     file: 'src/modules/trader/traderService.ts',
-    find: "isKillSwitchActive === '1' && side === 'BUY'", replace: "false && side === 'BUY'" },
+    find: "(isKillSwitchActive === '1' || isUserKillSwitchActive === '1') && side === 'BUY'", replace: "false && side === 'BUY'" },
 
   // ---------------- R3: tidak boleh ada posisi yatim ----------------
   { id: 'R3-exit-result-marks-FAILED', desc: 'Exit FAILED_ONCHAIN/UNKNOWN menandai posisi FAILED (token masih di wallet)',
@@ -49,7 +49,7 @@ const MUTATIONS = [
     replace: "status: 'FAILED' as any, last_exit_error: `Exit failed: ${result.status} - ${JSON.stringify(result.err)}`," },
   { id: 'R3-exit-throw-marks-FAILED', desc: 'Error sebelum kirim saat exit menandai posisi FAILED',
     file: 'src/modules/trader/traderService.ts',
-    find: "last_exit_error: e.message,", replace: "status: 'FAILED' as any, last_exit_error: e.message," },
+    find: "last_exit_error: failureReason,", replace: "status: 'FAILED' as any,\n          last_exit_error: failureReason," },
   { id: 'B1-buy-unknown-marks-FAILED', desc: 'Beli dengan hasil UNKNOWN langsung ditandai FAILED',
     file: 'src/modules/trader/traderService.ts',
     find: '// Leave as PENDING for reconciliation',

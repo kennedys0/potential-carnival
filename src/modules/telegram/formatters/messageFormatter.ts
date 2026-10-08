@@ -14,7 +14,9 @@ export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export function formatUsd(val: number): string {
@@ -65,8 +67,8 @@ ${ai.key_reasons.map((r) => `  - ${escapeHtml(r)}`).join('\n')}
   }
 
   return `
-🚀 <b>${pair.baseToken.name} (${pair.baseToken.symbol})</b>
-<code>${pair.baseToken.address}</code> <i>(Tap to copy)</i>
+🚀 <b>${escapeHtml(pair.baseToken.name)} (${escapeHtml(pair.baseToken.symbol)})</b>
+<code>${escapeHtml(pair.baseToken.address)}</code> <i>(Tap to copy)</i>
 
 💵 <b>Harga:</b> ${formatPrice(priceNum)} <code>(${pair.priceChange?.m5 >= 0 ? '+' : ''}${pair.priceChange?.m5 ?? 0}% 5m | ${pair.priceChange?.h1 >= 0 ? '+' : ''}${pair.priceChange?.h1 ?? 0}% 1h)</code>
 💧 <b>Likuiditas:</b> ${formatUsd(pair.liquidity?.usd ?? 0)}

@@ -512,9 +512,10 @@ export class TraderService {
   private async assertTradingAllowed(userId: number, side: 'BUY' | 'SELL', isDryRun: boolean): Promise<void> {
     const redis = getRedisConnection();
     const isKillSwitchActive = await redis.get('killswitch:global');
+    const isUserKillSwitchActive = await redis.get(`killswitch:user:${userId}`);
     
     // Kill-switch rejects BUY orders (entry), but allows SELL (exit)
-    if (isKillSwitchActive === '1' && side === 'BUY') {
+    if ((isKillSwitchActive === '1' || isUserKillSwitchActive === '1') && side === 'BUY') {
       throw new KillSwitchActiveError();
     }
     

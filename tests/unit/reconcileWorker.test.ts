@@ -47,7 +47,7 @@ describe('ReconcileWorker', () => {
           value: [{ err: { InstructionError: [0, 'error'] } }]
         })
       }),
-      getPendingWithdrawals: vi.fn().mockResolvedValue([])
+      walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
@@ -90,7 +90,7 @@ describe('ReconcileWorker', () => {
         },
         transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'token-A'] } }
       }),
-      getPendingWithdrawals: vi.fn().mockResolvedValue([])
+      walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
 
@@ -129,6 +129,7 @@ describe('ReconcileWorker', () => {
       getConnection: vi.fn().mockReturnValue({
         getParsedTokenAccountsByOwner: vi.fn().mockResolvedValue({ value: [] })
       }),
+      walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
@@ -171,7 +172,7 @@ describe('ReconcileWorker', () => {
         },
         transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'token-A'] } }
       }),
-      getPendingWithdrawals: vi.fn().mockResolvedValue([])
+      walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
