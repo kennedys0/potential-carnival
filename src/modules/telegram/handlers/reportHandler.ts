@@ -1,6 +1,8 @@
 import { Context } from 'grammy';
 import { TradeRepository } from '../../../database/repositories/tradeRepository';
 
+import { appSettings } from '../../../config/settings';
+
 export async function handleReportCommand(
   ctx: Context,
   tradeRepo: TradeRepository
@@ -8,14 +10,11 @@ export async function handleReportCommand(
   if (!ctx.from) return;
   const userId = ctx.from.id;
 
-  // Get start of day (midnight) in local time (WIB/Jakarta for example)
-  // For simplicity, we just use UTC midnight as start of day, or construct a simple ISO string
+  const tz = appSettings.DAY_BOUNDARY_TZ || 'UTC';
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfDayStr = startOfDay.toISOString();
 
   try {
-    const closedTrades = await tradeRepo.getClosedTradesSince(userId, startOfDayStr);
+    const closedTrades = await tradeRepo.getClosedTradesToday(userId, tz);
     const openTrades = await tradeRepo.getOpenTradesByUserId(userId);
 
     // Calculate total realized PnL today

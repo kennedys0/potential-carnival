@@ -71,10 +71,9 @@ export class AutopilotEngine {
       return { executed: false, reason: 'Already holding this token' };
     }
 
-    // Redis Lock to prevent double buy
-    const redis = getRedisConnection();
-    const lockKey = `lock:${userId}:${tokenMint}`;
-    const acquired = await redis.set(lockKey, '1', 'EX', 30, 'NX'); // 30 seconds lock
+    // Database Lock to prevent double buy
+    const ownerToken = crypto.randomUUID();
+    const acquired = await this.traderService['tradeRepo'].acquireBuyLock(userId, tokenMint, ownerToken, 30);
     if (!acquired) {
       return { executed: false, reason: 'Lock acquired by another process' };
     }
@@ -82,7 +81,7 @@ export class AutopilotEngine {
     try {
       return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot, source);
     } finally {
-      await redis.del(lockKey);
+      await this.traderService['tradeRepo'].releaseBuyLock(userId, tokenMint, ownerToken);
     }
   }
 
@@ -140,7 +139,7 @@ export class AutopilotEngine {
       aiParams.requireAi = appSettings.SNIPER_PARAMS.REQUIRE_AI;
     }
 
-    const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd, rawSnapshot?.indicators);
+    const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd, currentPriceUsd, rawSnapshot?.indicators);
 
     await this.logDecision(userId, tokenMint, tokenSymbol, evalResult.action, security, ai, evalResult.rulesPassed, evalResult.rulesFailed, evalResult.reason, rawSnapshot);
 

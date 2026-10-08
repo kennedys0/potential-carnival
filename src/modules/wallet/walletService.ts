@@ -102,7 +102,7 @@ export class WalletService {
     return pk;
   }
 
-  async withdrawSol(userId: number, destinationAddress: string, amountSol: number | 'MAX'): Promise<string> {
+  async withdrawSol(userId: number, destinationAddress: string, amountSol: number | 'MAX', existingWithdrawalId?: string): Promise<string> {
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar.');
     
@@ -202,18 +202,23 @@ export class WalletService {
 
       const transaction = new VersionedTransaction(finalMessage);
       
-      const idempotencyKey = `wd_${userId}_${Date.now()}`;
-      const withdrawalId = await this.walletRepo.createWithdrawalAttempt({
-        user_id: userId,
-        amount_sol: transferLamports / LAMPORTS_PER_SOL,
-        destination_address: destinationAddress,
-        status: 'PENDING',
-        idempotency_key: idempotencyKey
-      });
+      let withdrawalId = existingWithdrawalId;
+      if (!withdrawalId) {
+        const idempotencyKey = `wd_${userId}_${Date.now()}`;
+        withdrawalId = await this.walletRepo.createWithdrawalAttempt({
+          user_id: userId,
+          amount_sol: transferLamports / LAMPORTS_PER_SOL,
+          destination_address: destinationAddress,
+          status: 'PENDING',
+          idempotency_key: idempotencyKey
+        });
+      } else {
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'SUBMITTED' });
+      }
 
       const result = await TxSender.sendAndConfirm(withdrawalConnection, transaction, [keypair], {
         onSignature: async (sig) => {
-          await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { tx_signature: sig });
+          await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, { tx_signature: sig, status: 'SIGNED' });
         }
       });
       
@@ -223,7 +228,7 @@ export class WalletService {
         result.status === 'SUBMISSION_REJECTED' ||
         result.status === 'FAILED_ONCHAIN'
       ) {
-        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'FAILED' });
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, { status: 'FAILED' });
         throw new Error(`Withdrawal gagal: ${result.status} - ${JSON.stringify(result.err)}`);
       }
       
@@ -233,11 +238,11 @@ export class WalletService {
         result.status === 'CONFIRMING' ||
         result.status === 'EXPIRED'
       ) {
-        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'CONFIRMING' });
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, { status: 'CONFIRMING' });
         throw new Error(`Status transaksi tidak pasti (${result.status}). Harap cek explorer sebelum mengulang.`);
       }
 
-      await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'SUCCESS' });
+      await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, { status: 'SUCCESS' });
       return result.signature;
     } finally {
       KeypairService.clearKeypair(keypair); // zero out memory per transaction

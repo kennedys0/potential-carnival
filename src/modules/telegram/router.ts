@@ -323,18 +323,9 @@ export function registerBotRoutes(
       await ctx.answerCallbackQuery();
       await handleWalletWithdrawPrompt(ctx, services.walletService);
     } else if (data.startsWith('wd_exec:')) {
-      const payloadId = data.split(':')[1];
-      const redis = getRedisConnection();
-      const payloadStr = await redis.get(`cb:wd:${payloadId}`);
-      if (!payloadStr) {
-        await ctx.answerCallbackQuery({ text: '❌ Sesi penarikan kedaluwarsa atau tidak valid.', show_alert: true });
-        return;
-      }
-      const { address, amount } = JSON.parse(payloadStr);
+      const withdrawalId = data.substring(8);
       await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
-      await handleWalletWithdrawExecute(ctx, address, String(amount), services.walletService);
-      // Clean up payload
-      await redis.del(`cb:wd:${payloadId}`);
+      await handleWalletWithdrawExecute(ctx, withdrawalId, services.walletService);
     } else if (data === 'withdraw_cancel') {
       await ctx.answerCallbackQuery({ text: '❌ Penarikan dibatalkan.' });
       await handleWalletMenu(ctx, services.walletService);

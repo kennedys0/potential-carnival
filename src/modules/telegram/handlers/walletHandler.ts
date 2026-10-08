@@ -281,8 +281,8 @@ export async function handleWalletWithdrawConfirm(
   amount: number | 'MAX',
   walletService: WalletService
 ): Promise<void> {
-  const redis = getRedisConnection();
-  
+  if (!ctx.from) return;
+
   const text = `
 🔒 <b>Konfirmasi Withdrawal SOL</b>
 
@@ -294,12 +294,19 @@ export async function handleWalletWithdrawConfirm(
 <i>Pastikan alamat tujuan valid di jaringan Solana. Transaksi yang sudah terkirim tidak dapat dibatalkan.</i>
 `.trim();
 
-  const payloadId = uuidv4().split('-')[0]; // short id is fine for 1 hour
-  const payloadKey = `cb:wd:${payloadId}`;
-  await redis.set(payloadKey, JSON.stringify({ address, amount }), 'EX', 3600);
+  const idempotencyKey = `wd_auth_${ctx.from.id}_${Date.now()}`;
+  const amountSol = amount === 'MAX' ? -1 : amount;
+  
+  const withdrawalId = await walletService['walletRepo'].createWithdrawalAttempt({
+    user_id: ctx.from.id,
+    amount_sol: amountSol,
+    destination_address: address,
+    status: 'AUTHORIZED',
+    idempotency_key: idempotencyKey
+  });
 
   const keyboard = new InlineKeyboard()
-    .text('✅ Confirm Kirim', `wd_exec:${payloadId}`)
+    .text('✅ Confirm Kirim', `wd_exec:${withdrawalId}`)
     .text('❌ Cancel', 'withdraw_cancel');
 
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -307,29 +314,26 @@ export async function handleWalletWithdrawConfirm(
 
 export async function handleWalletWithdrawExecute(
   ctx: Context,
-  address: string,
-  amountStr: string,
+  withdrawalId: string,
   walletService: WalletService
 ): Promise<void> {
   if (!ctx.from) return;
   
+  let claimedRecord;
   try {
-    const redis = getRedisConnection();
-    const rateLimitKey = `withdraw_ratelimit:${ctx.from.id}`;
-    const isLimited = await redis.get(rateLimitKey);
+    const claimResult = await walletService['walletRepo'].atomicClaimWithdrawal(withdrawalId, ctx.from.id);
+    claimedRecord = claimResult.v_attempt;
+    const claimStatus = claimResult.status;
     
-    if (isLimited) {
-      const ttl = await redis.ttl(rateLimitKey);
-      throw new Error(`Anda baru saja melakukan withdrawal. Silakan coba lagi dalam ${Math.ceil(ttl / 60)} menit.`);
+    if (claimStatus !== 'SUCCESS' || !claimedRecord) {
+      throw new Error(`Sesi penarikan tidak valid, sudah diproses, atau dibatalkan. Status: ${claimStatus}`);
     }
 
-    const amount = amountStr === 'MAX' ? 'MAX' : parseFloat(amountStr);
+    const amount = Number(claimedRecord.amount_sol) === -1 ? 'MAX' : Number(claimedRecord.amount_sol);
+    const address = claimedRecord.destination_address;
     
     // Attempt withdrawal
-    const signature = await walletService.withdrawSol(ctx.from.id, address, amount);
-    
-    // Set rate limit (1 hour)
-    await redis.set(rateLimitKey, '1', 'EX', 3600);
+    const signature = await walletService.withdrawSol(ctx.from.id, address, amount, withdrawalId);
     
     const text = `
 ✅ <b>Withdrawal Berhasil Terkirim!</b>

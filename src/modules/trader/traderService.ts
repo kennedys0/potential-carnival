@@ -253,15 +253,27 @@ export class TraderService {
 
     if (trade.is_dry_run) {
       // Paper Trading close logic
-      const pnlPercent = ((currentPriceUsd - trade.entry_price_usd) / trade.entry_price_usd) * 100;
-      const pnlSol = trade.sol_amount * (pnlPercent / 100) * (percentageToClose / 100);
-      const newStatus = isPartial ? 'PARTIAL_EXIT' : 'CLOSED';
-      await this.tradeRepo.updateTradeStatus(trade.id, {
-        status: newStatus,
+      const tradeBalanceRaw = BigInt(trade.remaining_raw ?? trade.token_amount_raw ?? 0);
+      const amountToCloseRaw = (tradeBalanceRaw * BigInt(Math.floor(percentageToClose * 100))) / 10000n;
+      
+      const priceMultiplier = trade.entry_price_usd > 0 ? (currentPriceUsd / trade.entry_price_usd) : 1;
+      const initialSolSpent = trade.sol_amount ?? 0;
+      const initialTokenAmountRaw = BigInt(trade.token_amount_raw ?? 1);
+      
+      let solCostBasisForThisExit = 0;
+      if (initialTokenAmountRaw > 0n) {
+          solCostBasisForThisExit = (initialSolSpent * Number(amountToCloseRaw)) / Number(initialTokenAmountRaw);
+      }
+      
+      const solReceived = solCostBasisForThisExit * priceMultiplier;
+      const solReceivedLamports = Math.floor(solReceived * 1e9);
+
+      await this.tradeRepo.atomicReconcileExit(trade.id, undefined, {
+        tx_signature: `PAPER_${Date.now()}`,
         exit_price_usd: currentPriceUsd,
-        pnl_percent: pnlPercent,
-        pnl_sol: pnlSol,
-        closed_at: new Date().toISOString(),
+        token_delta_raw: amountToCloseRaw.toString(),
+        sol_delta_lamports: solReceivedLamports,
+        fee_lamports: 0,
       });
       return;
     }
@@ -272,13 +284,10 @@ export class TraderService {
     // Total token balance on chain
     const totalTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
     if (totalTokenBalance.raw === 0n) {
-      // If we are supposed to have tokens but balance is 0, mark closed
       await this.tradeRepo.updateTradeStatus(trade.id, {
-        status: 'CLOSED',
-        closed_at: new Date().toISOString(),
-        needs_attention: true, // Needs attention because tokens disappeared unexpectedly
+        needs_attention: true,
       });
-      return;
+      throw new Error(`INVENTORY_DISCREPANCY: Wallet balance is 0 but trade has remaining_raw. Will not execute sell.`);
     }
 
     const tradeBalanceRaw = BigInt(trade.remaining_raw ?? 0);
@@ -438,16 +447,7 @@ export class TraderService {
       updates.exit_price_usd = currentPriceUsd;
     }
 
-    // Edge case: if wallet is completely empty, ensure we close
-    const totalRemainingTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
-    if (totalRemainingTokenBalance.raw === 0n && acctResult.newStatus !== 'CLOSED') {
-      updates.status = 'CLOSED';
-      updates.remaining_raw = '0';
-      updates.closed_at = new Date().toISOString();
-      updates.exit_price_usd = currentPriceUsd;
-      updates.needs_attention = true;
-    }
-
+    // Removed edge case that falsely closed trades on zero balance
     if (exitAttempt.id) {
       await this.tradeRepo.atomicReconcileExit(trade.id, exitAttempt.id, updates);
     } else {

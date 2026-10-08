@@ -74,4 +74,26 @@ export class WalletRepository {
       throw new Error(`Failed to update withdrawal attempt: ${error.message}`);
     }
   }
+
+  async atomicClaimWithdrawal(id: string, userId: number): Promise<any> {
+    const { data, error } = await this.db.rpc('atomic_claim_withdrawal', {
+      p_id: id,
+      p_user_id: userId
+    });
+    
+    if (error) {
+      throw new Error(`Failed to claim withdrawal: ${error.message}`);
+    }
+    
+    return data; // returns (v_attempt, status)
+  }
+
+  async getPendingWithdrawals(): Promise<any[]> {
+    const { data, error } = await this.db
+      .from('withdrawal_attempts')
+      .select('*')
+      .in('status', ['CONFIRMING', 'SUBMITTED', 'SIGNED']);
+    if (error) return [];
+    return data;
+  }
 }

@@ -141,13 +141,8 @@ export function createReconcileWorker(
                    });
 
                    await tradeRepo.atomicReconcileExit(trade.id!, attempt.id, {
-                     status: acctResult.newStatus,
-                     pnl_percent: acctResult.pnlPercent,
-                     pnl_sol: acctResult.pnlSol,
-                     realized_pnl_sol: acctResult.realizedPnlSol,
                      tx_signature: attempt.tx_signature,
-                     remaining_raw: acctResult.remainingRaw,
-                     closed_at: acctResult.newStatus === 'CLOSED' ? new Date().toISOString() : undefined,
+                     exit_price_usd: acctResult.exitPriceUsd,
                      token_delta_raw: parseResult.tokenDeltaRaw.toString(),
                      sol_delta_lamports: Number(parseResult.solDeltaLamports),
                      fee_lamports: Number(parseResult.feeLamports),
@@ -177,7 +172,7 @@ export function createReconcileWorker(
         if (openTrades && openTrades.length > 0) {
           
           for (const t of openTrades) {
-             if (t.remaining_raw !== null && t.remaining_raw <= 0) {
+             if (t.remaining_raw !== null && BigInt(t.remaining_raw) <= 0n) {
                 await tradeRepo.updateTradeStatus(t.id!, { needs_attention: true });
                 logger.warn({ tradeId: t.id }, 'OPEN trade with remaining_raw <= 0 marked needs_attention');
              }
@@ -205,27 +200,28 @@ export function createReconcileWorker(
             }
 
             if (sumDbRaw > tokenBalanceRaw) {
-               logger.warn({ userId, tokenMint, onChain: Number(tokenBalanceRaw), dbSum: Number(sumDbRaw) }, 'Token balance deficit found. Reconciling trades (FIFO)...');
+               logger.warn({ userId, tokenMint, onChain: Number(tokenBalanceRaw), dbSum: Number(sumDbRaw) }, 'Token balance deficit found. Recording inventory discrepancy...');
                
                let deficit = sumDbRaw - tokenBalanceRaw;
                
+               // Record discrepancy instead of fabricating a SELL
+               const { error } = await tradeRepo['db'].from('inventory_discrepancies').insert({
+                 user_id: userId,
+                 token_mint: tokenMint,
+                 expected_raw: String(sumDbRaw),
+                 observed_raw: String(tokenBalanceRaw),
+                 difference_raw: String(deficit),
+                 status: 'DETECTED'
+               });
+               
+               if (error) {
+                 logger.error({ error, userId, tokenMint }, 'Failed to insert inventory discrepancy');
+               }
+               
+               // Pause conflicting trades on the affected inventory
                for (const t of trades) {
-                 if (deficit <= 0n) break;
-                 
-                 const currentRemaining = BigInt(t.remaining_raw ?? 0);
-                 if (currentRemaining > 0n) {
-                   const toDeduct = currentRemaining < deficit ? currentRemaining : deficit;
-                   const newRemaining = currentRemaining - toDeduct;
-                   deficit -= toDeduct;
-                   
-                   const updates: any = { remaining_raw: String(newRemaining), needs_attention: true };
-                   if (newRemaining <= 0n) {
-                     updates.status = 'CLOSED';
-                     updates.closed_at = new Date().toISOString();
-                   }
-                   await tradeRepo.updateTradeStatus(t.id!, updates);
-                   logger.info({ tradeId: t.id, deducted: String(toDeduct), newRemaining: String(newRemaining) }, 'Reconciled missing tokens for trade');
-                 }
+                 await tradeRepo.updateTradeStatus(t.id!, { needs_attention: true });
+                 logger.info({ tradeId: t.id }, 'Paused trade due to inventory discrepancy');
                }
             }
           }
@@ -258,7 +254,28 @@ export function createReconcileWorker(
                       }
                    }
                 }
-             }
+              }
+           }
+
+          // Withdrawal Reconciliation
+          const pendingWithdrawals = await walletService['walletRepo'].getPendingWithdrawals();
+          for (const w of pendingWithdrawals) {
+            if (w.tx_signature) {
+               const tx = await walletService.getParsedTransaction(w.tx_signature);
+               if (tx && tx.meta) {
+                  if (tx.meta.err) {
+                     await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'FAILED' });
+                  } else {
+                     await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'SUCCESS' });
+                  }
+               }
+            } else if (w.status === 'CONFIRMING' || w.status === 'SIGNED') {
+               // If it's been more than 5 minutes, mark as FAILED
+               const age = Date.now() - new Date(w.updated_at).getTime();
+               if (age > 300000) {
+                 await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'FAILED' });
+               }
+            }
           }
         }
       } catch (err) {

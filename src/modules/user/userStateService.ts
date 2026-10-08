@@ -60,25 +60,8 @@ export class UserStateService {
     // 3. Get Closed Trades Today (based on DAY_BOUNDARY_TZ)
     const tz = appSettings.DAY_BOUNDARY_TZ || 'UTC';
     
-    // Get start of day in specified timezone
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
-    const parts = formatter.formatToParts(now);
-    const year = parseInt(parts.find(p => p.type === 'year')!.value);
-    const month = parseInt(parts.find(p => p.type === 'month')!.value) - 1;
-    const day = parseInt(parts.find(p => p.type === 'day')!.value);
-    
-    // Create UTC date that corresponds to midnight in target timezone
-    const startOfDayStr = new Date(Date.UTC(year, month, day, 0, 0, 0)).toISOString();
-    // It's a rough approximation for DB query, we should ideally let DB handle timezone if possible,
-    // but we can query trades closed after startOfDay.
-    
-    const closedTrades = await this.tradeRepo.getClosedTradesSince(userId, startOfDayStr);
+    // Uses PostgreSQL timezone conversion to accurately get midnight in target timezone
+    const closedTrades = await this.tradeRepo.getClosedTradesToday(userId, tz);
     
     let dailyLossSol = 0;
     let dailyRealizedPnlSol = 0;

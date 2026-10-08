@@ -36,6 +36,7 @@ export interface TradeRecord {
   blockhash?: string | null;
   last_valid_block_height?: number | null;
   pending_since?: string | null;
+  highest_pnl_percent?: number | null;
 }
 
 export interface ExitAttemptRecord {
@@ -209,18 +210,11 @@ export class TradeRepository {
     const { error, data } = await this.db.rpc('atomic_reconcile_exit', {
       p_trade_id: tradeId,
       p_exit_attempt_id: exitAttemptId ?? null,
-      p_status: updates.status,
-      p_pnl_percent: updates.pnl_percent ?? 0,
-      p_pnl_sol: updates.pnl_sol ?? 0,
-      p_realized_pnl_sol: updates.realized_pnl_sol ?? 0,
       p_tx_signature: updates.tx_signature ?? null,
-      p_remaining_raw: updates.remaining_raw ?? 0,
-      p_closed_at: updates.closed_at ?? null,
-      p_exit_price_usd: updates.exit_price_usd ?? null,
-      p_needs_attention: updates.needs_attention ?? null,
       p_token_delta_raw: updates.token_delta_raw ? updates.token_delta_raw.toString() : 0,
       p_sol_delta_lamports: updates.sol_delta_lamports ?? 0,
-      p_fee_lamports: updates.fee_lamports ?? 0
+      p_fee_lamports: updates.fee_lamports ?? 0,
+      p_exit_price_usd: updates.exit_price_usd ?? null
     });
 
     if (error) {
@@ -257,6 +251,45 @@ export class TradeRepository {
     if (data === 'ALREADY_APPLIED' || data === 'ALREADY_RESOLVED') {
       logger.info({ tradeId, signature: updates.tx_signature }, `Entry reconciliation skipped: ${data}`);
     }
+  }
+
+  async acquireBuyLock(userId: number, tokenMint: string, ownerToken: string, ttlSeconds: number = 30): Promise<boolean> {
+    const { data, error } = await this.db.rpc('acquire_buy_lock', {
+      p_user_id: userId,
+      p_token_mint: tokenMint,
+      p_owner_token: ownerToken,
+      p_ttl_seconds: ttlSeconds
+    });
+    if (error) {
+      logger.error({ err: error, userId, tokenMint }, 'Failed to acquire buy lock');
+      return false;
+    }
+    return !!data;
+  }
+
+  async releaseBuyLock(userId: number, tokenMint: string, ownerToken: string): Promise<boolean> {
+    const { data, error } = await this.db.rpc('release_buy_lock', {
+      p_user_id: userId,
+      p_token_mint: tokenMint,
+      p_owner_token: ownerToken
+    });
+    if (error) {
+      logger.error({ err: error, userId, tokenMint }, 'Failed to release buy lock');
+      return false;
+    }
+    return !!data;
+  }
+
+  async getClosedTradesToday(userId: number, timezone: string): Promise<TradeRecord[]> {
+    const { data, error } = await this.db.rpc('get_closed_trades_today', {
+      p_user_id: userId,
+      p_timezone: timezone
+    });
+    
+    if (error) {
+      throw new Error(`Failed to getClosedTradesToday: ${error.message}`);
+    }
+    return data as TradeRecord[];
   }
 }
 

@@ -21,6 +21,7 @@ export class RuleEvaluator {
     safetyParams: AutopilotSafetyFilterParams,
     aiParams: AutopilotAiCriteriaParams,
     liquidityUsd: number,
+    currentPriceUsd: number,
     indicators?: any
   ): {
     passed: boolean;
@@ -117,6 +118,18 @@ export class RuleEvaluator {
         rulesFailed.push(`AI R:R ${ai.risk_reward_ratio} below minimum ${aiParams.minRiskReward}`);
       } else {
         rulesPassed.push(`AI R:R ${ai.risk_reward_ratio} >= ${aiParams.minRiskReward}`);
+      }
+      
+      // Deterministic validation of AI-generated financial parameters
+      if (ai.stop_loss_usd > 0 && currentPriceUsd > 0) {
+        const slDistancePct = ((currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd) * 100;
+        if (slDistancePct < 2) {
+            rulesFailed.push(`AI Stop Loss too tight: ${slDistancePct.toFixed(2)}% (min 2%)`);
+        } else if (slDistancePct > 50) {
+            rulesFailed.push(`AI Stop Loss too wide: ${slDistancePct.toFixed(2)}% (max 50%)`);
+        } else {
+            rulesPassed.push(`AI Stop Loss distance valid: ${slDistancePct.toFixed(2)}%`);
+        }
       }
     }
 

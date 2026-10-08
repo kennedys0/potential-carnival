@@ -100,14 +100,13 @@ export function createMonitorWorker(
         let reason = '';
 
         // Track highest PnL for trailing stop
-        const highestPnlKey = `monitor:highest_pnl:${positionId}`;
-        const savedHighest = await redis.get(highestPnlKey);
-        let highestPnl = savedHighest ? parseFloat(savedHighest) : pnlPercent;
+        let highestPnl = trade.highest_pnl_percent ?? pnlPercent;
         if (pnlPercent > highestPnl) {
             highestPnl = pnlPercent;
-            await redis.set(highestPnlKey, highestPnl.toString(), 'EX', 86400); // expire 1 day
+            await tradeRepo.updateTradeStatus(trade.id!, { highest_pnl_percent: highestPnl });
         }
 
+        const trailingStopEnabled = exitParams.trailing_stop_enabled ?? true;
         const trailingStopPercent = exitParams.trailing_stop_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_STOP_PERCENT; // drop distance from highest
         const trailingActivationPercent = exitParams.trailing_activation_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_ACTIVATION_PERCENT; // active only when highest > this
 
@@ -117,7 +116,7 @@ export function createMonitorWorker(
         } else if (pnlPercent >= tp2Percent) {
            percentageToClose = 100;
            reason = `TP2 Reached (+${pnlPercent.toFixed(2)}%)`;
-        } else if (highestPnl >= trailingActivationPercent && (highestPnl - pnlPercent) >= trailingStopPercent) {
+        } else if (trailingStopEnabled && highestPnl >= trailingActivationPercent && (highestPnl - pnlPercent) >= trailingStopPercent) {
            percentageToClose = 100;
            reason = `Trailing Stop Triggered (Highest: ${highestPnl.toFixed(2)}%, Current: ${pnlPercent.toFixed(2)}%)`;
         } else if (pnlPercent <= -slPercent) {
