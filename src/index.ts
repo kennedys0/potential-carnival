@@ -8,6 +8,7 @@ import { WalletRepository } from './database/repositories/walletRepository';
 import { TradeRepository } from './database/repositories/tradeRepository';
 import { AutopilotRepository } from './database/repositories/autopilotRepository';
 import { SniperRepository } from './database/repositories/sniperRepository';
+import { StrategyReservationRepository } from './database/repositories/strategyReservationRepository';
 import { getRedisConnection } from './queue/connection';
 import { createQueues } from './queue/queues';
 import { createMonitorWorker } from './queue/workers/monitorWorker';
@@ -53,6 +54,7 @@ async function main() {
   const tradeRepo = new TradeRepository(supabase);
   const autopilotRepo = new AutopilotRepository(supabase);
   const sniperRepo = new SniperRepository(supabase);
+  const strategyReservations = new StrategyReservationRepository(supabase);
 
   // Core Services
   const walletService = new WalletService(walletRepo, solanaConnection);
@@ -69,7 +71,7 @@ async function main() {
   }) : undefined;
   const analyzerService = new AnalyzerService(llmProvider);
   const traderService = new TraderService(tradeRepo, walletService, jupiterClient);
-  const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService, sniperRepo);
+  const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService, sniperRepo, strategyReservations);
 
   // BullMQ Queues & Redis
   const redis = getRedisConnection();
@@ -101,7 +103,7 @@ async function main() {
   );
 
   // BullMQ Workers
-  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api);
+  const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api, sniperRepo);
   const reconcileWorker = createReconcileWorker(tradeRepo, walletService);
 
   // Position Monitoring Scheduler (runs every minute)

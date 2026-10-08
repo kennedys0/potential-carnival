@@ -7,9 +7,18 @@ import { SniperRepository } from '../../database/repositories/sniperRepository';
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
+import { evaluatePoolAge, failClosedSniperSafety } from '../autopilot/strategyRisk';
+import { matchDiscoveredPool } from './sniperPoolSelection';
 
+const htmlEscape = (s: unknown): string => String(s).replace(/[&<>"']/g, char => (
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string,string>)[char]
+));
+
+/** Fetches new POOLS, not the largest pool of a token. Both modes use the shared execution engine. */
 export class SniperScanner {
   private intervalId?: NodeJS.Timeout;
+  private startupId?: NodeJS.Timeout;
+  private scanning = false;
 
   constructor(
     private readonly scannerService: ScannerService,
@@ -23,205 +32,116 @@ export class SniperScanner {
 
   start() {
     if (this.intervalId) return;
-    logger.info('Starting SniperScanner for Autopilot...');
-    // Scan every 1 minute for new pairs (faster than trending)
-    this.intervalId = setInterval(() => this.scanSniper(), 1 * 60 * 1000);
-    // Trigger first scan after 15 seconds
-    setTimeout(() => this.scanSniper(), 15000);
+    logger.info('Starting New Pool Sniper scanner (60-second polling)');
+    this.intervalId = setInterval(() => void this.scanSniper(), 60_000);
+    this.startupId = setTimeout(() => void this.scanSniper(), 15_000);
   }
 
   stop() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = undefined;
-    }
+    if (this.intervalId) clearInterval(this.intervalId);
+    if (this.startupId) clearTimeout(this.startupId);
+    this.intervalId = undefined;
+    this.startupId = undefined;
   }
 
   private async scanSniper() {
+    if (this.scanning) return;
+    this.scanning = true;
     try {
-      // 1. Get active autopilot users
-      const activeConfigs = await this.sniperRepo.getAllActiveConfigs();
-      if (!activeConfigs || activeConfigs.length === 0) {
-        return;
-      }
-
-      logger.info(`SniperScanner: Fetching new token profiles...`);
-
-      // 2. Fetch new tokens
-      const newProfiles = await this.scannerService.fetchNewPairs();
+      const configs = await this.sniperRepo.getAllActiveConfigs();
+      if (configs.length === 0) return;
       const redis = getRedisConnection();
+      const pools = (await this.scannerService.fetchNewPairs()).slice(0, 3);
+      const now = Date.now();
 
-      const newTokens: typeof newProfiles = [];
-      for (const t of newProfiles) {
-        const isScanned = await redis.get(`scanned_token_sniper:${t.tokenAddress}`);
-        if (!isScanned) {
-          newTokens.push(t);
-        }
-      }
-      
-      const tokensToScan = newTokens.slice(0, 15);
-      if (tokensToScan.length === 0) return;
-      
-      logger.info(`SniperScanner: Found ${tokensToScan.length} NEW unseen token profiles.`);
+      for (const candidate of pools) {
+        // Pool age cannot be inferred from token name, liquidity, or DexScreener ranking.
+        if (!candidate.poolCreatedAtMs || candidate.poolCreatedAtMs > now) continue;
+        const eligibleConfigs = configs.filter(c =>
+          evaluatePoolAge(candidate.poolCreatedAtMs, now, c.min_pool_age_seconds, c.max_pool_age_minutes) === 'READY'
+        );
+        if (eligibleConfigs.length === 0) continue;
 
-      // Ambil profile/pair DexScreener secara concurrent
-      const fetchedPairs = [];
-      const chunkSize = 3;
-      for (let i = 0; i < tokensToScan.length; i += chunkSize) {
-        const chunk = tokensToScan.slice(i, i + chunkSize);
-        const chunkPromises = chunk.map(async (t) => {
-          try {
-            return await this.scannerService.scanTokenByAddress(t.tokenAddress);
-          } catch (e) {
-            return null;
-          }
+        // Fetch exact pool and exact token, not the most liquid pool of that token.
+        const pair = matchDiscoveredPool(candidate,
+          await this.scannerService.scanSpecificPool(candidate.pairAddress));
+        if (!pair || !pair.pairCreatedAt ||
+            Math.abs(pair.pairCreatedAt - candidate.poolCreatedAtMs) > 120_000) continue;
+        const priceUsd = Number(pair.priceUsd);
+        const liquidityUsd = Number(pair.liquidity?.usd);
+        if (!Number.isFinite(priceUsd) || priceUsd <= 0 || !Number.isFinite(liquidityUsd)) continue;
+
+        // Security check uses THIS pool's liquidity, never the liquidity of an older pair.
+        const security = await this.securityService.evaluateToken(candidate.tokenAddress, {
+          liquidityUsd, marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
         });
-        const results = await Promise.all(chunkPromises);
-        fetchedPairs.push(...results.filter((p) => p !== null));
-        
-        if (i + chunkSize < tokensToScan.length) {
-          await new Promise((res) => setTimeout(res, 500));
-        }
-      }
+        if (security.isHardBlocked) continue;
+        const candles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 1);
+        const volumes = candles.slice(0, -1).map(c => c.volume);
+        const currentVolume = pair.volume?.m5 ?? candles.at(-1)?.volume ?? 0;
+        const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, volumes);
+        const ai = indicators ? await this.analyzerService.analyzeWithLlm(
+          candidate.symbol, priceUsd, indicators, security.riskFlags) : null;
 
-      // Sort by pairCreatedAt (newest first) instead of volume, because it's sniper
-      const sortedPairs = fetchedPairs.sort((a: any, b: any) => {
-        const timeA = a.pairCreatedAt ?? 0;
-        const timeB = b.pairCreatedAt ?? 0;
-        return timeB - timeA;
-      });
-
-      const topPairs = sortedPairs.slice(0, 5);
-      
-      for (const pair of topPairs) {
-        try {
-          const tokenAddress = pair.baseToken.address;
-          await redis.set(`scanned_token_sniper:${tokenAddress}`, '1', 'EX', 60 * 60); // 1 hour cache
-          
-          const priceUsd = parseFloat(pair.priceUsd || '0');
-          if (priceUsd === 0) continue;
-
-          const security = await this.securityService.evaluateToken(tokenAddress, {
-            liquidityUsd: pair.liquidity?.usd || null,
-            marketCapUsd: pair.marketCap || pair.fdv || null,
-          });
-
-          // Fetch candles (might be empty for very new pairs)
-          const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 1);
-          const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
-          const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
-          
-          const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
-          let aiAnalysis = null;
-          // Only analyze with LLM if indicators exist and LLM is enabled in Sniper mode
-          if (indicators) {
-            aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
-          }
-
-          // 4. Evaluate for all active users
-          for (const config of activeConfigs) {
-            try {
-              const currentState = await this.userStateService.getAutopilotState(config.user_id);
-              
-              if (currentState.isCircuitBroken) continue;
-
-              const rawSnapshot = {
-                tokenAddress,
-                priceUsd,
-                liquidityUsd: pair.liquidity?.usd,
-                marketCap: pair.marketCap || pair.fdv,
-                currentVolume,
-                indicators,
-                currentState,
-                isSniper: true
-              };
-
-              // We already know it's enabled because we fetched active configs
-              // const safetyParams = config.safety_params as any;
-              // if (safetyParams?.enable_sniper === false) continue;
-              
-              // Sniper risk limit check
-              const sniperState = await this.sniperRepo.getState(config.user_id);
-              if (sniperState.daily_buys_count >= config.max_buys_per_day) {
-                logger.debug(`Sniper limit reached: daily buys for user ${config.user_id}`);
-                continue;
-              }
-              if (Number(sniperState.daily_entry_sol) + config.buy_amount_sol > config.max_daily_entry_budget_sol) {
-                logger.debug(`Sniper limit reached: daily budget for user ${config.user_id}`);
-                continue;
-              }
-
-              // Evaluate Candidate via AutopilotEngine
-              // In a full refactor we would have an independent SniperEngine, but the prompt says 
-              // "Use the EXISTING verified transaction execution and reconciliation infrastructure." 
-              // and "Architecture - TWO STRATEGIES, ONE EXECUTION ENGINE".
-              // AutopilotEngine handles standard risk checks. We can override params.
-
-              const result = await this.autopilotEngine.processCandidate(
-                config.user_id,
-                tokenAddress,
-                pair.baseToken.symbol,
-                priceUsd,
-                pair.liquidity?.usd ?? 0,
-                security,
-                aiAnalysis,
-                currentState,
-                rawSnapshot,
-                'SNIPER'
-              );
-
-              if (result.executed) {
-                logger.info(`Sniper executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
-                
-                await this.sniperRepo.incrementState(config.user_id, config.buy_amount_sol);
-                
-                try {
-                  await this.botApi.sendMessage(config.user_id, 
-                    `⚡ <b>SNIPER EXECUTION</b> ⚡\n\n` +
-                    `Sistem mendeteksi token baru yang aman dan baru saja mengeksekusi <b>BUY</b>!\n\n` +
-                    `🎯 <b>Target:</b> <code>${pair.baseToken.symbol}</code>\n` +
-                    `📄 <b>CA:</b> <code>${tokenAddress}</code>\n` +
-                    `🛡️ <b>Safety:</b> ${security.score}/100\n` +
-                    (security.riskFlags.length > 0 ? `⚠️ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).join(', ') + ', dll' : security.riskFlags.join(', ')}\n` : '') +
-                    `📝 <b>Analisa:</b> <i>${result.reason}</i>\n\n` +
-                    `👉 Cek /positions untuk memantau performa.`,
-                    { parse_mode: 'HTML' }
-                  );
-                } catch (e) {
-                  // ignore
-                }
-              } else {
-                logger.debug(`Sniper skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
-                if (liveFeedSubscribers.has(config.user_id)) {
-                  try {
-                    await this.botApi.sendMessage(config.user_id, 
-                      `⚡ <b>SNIPER RADAR</b>\n` +
-                      `├ <b>Token:</b> <code>${pair.baseToken.symbol}</code>\n` +
-                      `├ <b>CA:</b> <code>${tokenAddress}</code>\n` +
-                      `├ <b>Safety:</b> ${security.score}/100 🛡️\n` +
-                      (security.riskFlags.length > 0 ? `├ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).join(', ') + ', dll' : security.riskFlags.join(', ')}\n` : '') +
-                      `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                      `└ <b>Reason:</b> <i>${result.reason}</i>`,
-                      { parse_mode: 'HTML' }
-                    );
-                  } catch (e) {
-                    // ignore live feed errors
-                  }
-                }
-              }
-            } catch (err) {
-              logger.error({ err, userId: config.user_id }, 'Error evaluating sniper candidate for user');
+        for (const config of eligibleConfigs) {
+          const doneKey = `sniper:processed:${config.user_id}:${candidate.pairAddress}`;
+          if (await redis.get(doneKey)) continue;
+          try {
+            // Re-read enabled status immediately before an entry; the engine re-checks again.
+            const latest = await this.sniperRepo.getOrCreateConfig(config.user_id);
+            if (!latest.enabled) continue;
+            if (evaluatePoolAge(candidate.poolCreatedAtMs, Date.now(), latest.min_pool_age_seconds,
+                latest.max_pool_age_minutes) !== 'READY') continue;
+            if (liquidityUsd < latest.min_liquidity_usd) continue;
+            const safetyReject = failClosedSniperSafety(security, latest.reject_unknown_critical_safety_checks);
+            if (safetyReject || (latest.require_sell_route && security.report?.find(r => r.name === 'Sell Simulation')?.value !== 'Success')) {
+              // Security conditions may change; do not permanently suppress an early pool.
+              continue;
             }
-          }
-        } catch (err) {
-          logger.error({ err }, 'Error evaluating sniper token candidate, skipping to next token');
-          continue;
-        }
 
-        await new Promise((res) => setTimeout(res, 2000));
+            const state = await this.userStateService.getAutopilotState(config.user_id);
+            if (state.isCircuitBroken) continue;
+            const result = await this.autopilotEngine.processCandidate(
+              config.user_id, candidate.tokenAddress, candidate.symbol, priceUsd,
+              liquidityUsd, security, ai, state,
+              { poolAddress: candidate.pairAddress, poolCreatedAtMs: candidate.poolCreatedAtMs,
+                tokenAddress: candidate.tokenAddress, priceUsd, liquidityUsd, indicators,
+                isSniper: true }, 'SNIPER'
+            );
+            if (result.executed) {
+              // Accepted/submitted orders must never be automatically replayed due to RPC timeout.
+              await redis.set(doneKey, '1', 'EX', 86_400);
+              if (latest.notifications_enabled) {
+                try {
+                  await this.botApi.sendMessage(config.user_id,
+                    `⚡ <b>New Pool Sniper</b>\nToken: <code>${htmlEscape(candidate.symbol)}</code>\n` +
+                    `Mint: <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
+                    `Pool: <code>${htmlEscape(candidate.pairAddress)}</code>\n` +
+                    `Status: <b>${htmlEscape(result.status ?? 'SUBMITTED')}</b>\n` +
+                    `Order: ${htmlEscape(result.reason)}\n\n` +
+                    `On-chain status can remain pending; check /positions for reconciliation.`,
+                    { parse_mode: 'HTML' });
+                } catch (error) {
+                  logger.warn({ error }, 'Sniper notification could not be delivered');
+                }
+              }
+            } else if (liveFeedSubscribers.has(config.user_id)) {
+              try {
+                await this.botApi.sendMessage(config.user_id,
+                  `⚡ <b>Sniper Radar</b>\n${htmlEscape(candidate.symbol)}\n` +
+                  `Skipped: ${htmlEscape(result.reason)}`, { parse_mode: 'HTML' });
+              } catch { /* Best effort notification. */ }
+            }
+          } catch (error) {
+            logger.error({ error, userId: config.user_id, pool: candidate.pairAddress },
+              'Sniper evaluation failed; candidate will remain retriable');
+          }
+        }
       }
-    } catch (err) {
-      logger.error({ err }, 'SniperScanner Error');
+    } catch (error) {
+      logger.error({ error }, 'New Pool Sniper scan failed');
+    } finally {
+      this.scanning = false;
     }
   }
 }

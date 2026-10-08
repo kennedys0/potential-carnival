@@ -14,8 +14,8 @@ export async function handleAutopilotMenu(
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
   const sniperConfig = await sniperRepo.getOrCreateConfig(ctx.from.id);
   
-  const trendingStatus = config.is_active ? '🟢 Running' : '⏸ Paused';
-  const sniperStatus = sniperConfig.enabled ? '🟢 Running' : '🔴 Disabled';
+  const trendingStatus = config.is_active ? '🟢 Enabled' : '⏸ Disabled';
+  const sniperStatus = sniperConfig.enabled ? '🟢 Enabled' : '🔴 Disabled';
 
   // In a real app we'd fetch actual open positions here for the stats
   const sizing = (config.sizing_params as any) || {};
@@ -69,7 +69,10 @@ export async function handleAutopilotToggle(
 
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
   const newActive = !config.is_active;
-  await autopilotRepo.updateConfig(ctx.from.id, { is_active: newActive });
+  await autopilotRepo.updateConfig(ctx.from.id, {
+    is_active: newActive,
+    safety_params: { ...config.safety_params, enable_trending: newActive },
+  });
 
   if (newActive) {
     liveFeedSubscribers.add(ctx.from.id);

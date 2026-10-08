@@ -1,4 +1,5 @@
-import { Candle } from '../analyzer/indicators/atr';
+import type { Candle } from '../analyzer/indicators/atr';
+import type { NewPoolCandidate } from './sniperPoolSelection';
 
 export class GeckoTerminalClient {
   private readonly baseUrl = 'https://api.geckoterminal.com/api/v2';
@@ -38,7 +39,7 @@ export class GeckoTerminalClient {
     }
   }
 
-  async getNewPools(network: string = 'solana', page: number = 1): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
+  async getNewPools(network: string = 'solana', page: number = 1): Promise<NewPoolCandidate[]> {
     try {
       const url = `${this.baseUrl}/networks/${network}/new_pools?page=${page}`;
       const res = await fetch(url, { headers: { 'Accept': 'application/json;version=20230302' } });
@@ -48,16 +49,28 @@ export class GeckoTerminalClient {
       const pools: any[] = data?.data ?? [];
       const included: any[] = data?.included ?? [];
       
-      const result: { tokenAddress: string; pairAddress: string; symbol: string }[] = [];
+      const result: NewPoolCandidate[] = [];
       for (const pool of pools) {
         const poolAddr = pool.attributes?.address;
         const relBaseToken = pool.relationships?.base_token?.data;
         if (!poolAddr || !relBaseToken) continue;
         const baseToken = included.find((i: any) => i.type === relBaseToken.type && i.id === relBaseToken.id);
         const tokenAddress = baseToken?.attributes?.address ?? relBaseToken.id?.split('_')[1];
+        // The quoted price belongs to the base asset. Do not snipe SOL/USDC
+        // as if it were the newly paired quote mint; reversed pools need a
+        // separate, explicitly validated quote-token normalization pipeline.
+        const settlementMints = new Set([
+          'So11111111111111111111111111111111111111112',
+          'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          'Es9vMFrzaCERzQuc2hNvZWtSz18fLo9vTjrq1xYGYz1',
+        ]);
+        if (settlementMints.has(tokenAddress)) continue;
         const symbol = baseToken?.attributes?.symbol ?? '???';
-        if (!tokenAddress) continue;
-        result.push({ tokenAddress, pairAddress: poolAddr, symbol });
+        const rawCreatedAt = pool.attributes?.pool_created_at;
+        const poolCreatedAtMs = typeof rawCreatedAt === 'string'
+          ? Date.parse(rawCreatedAt) : null;
+        if (!tokenAddress || !Number.isFinite(poolCreatedAtMs)) continue;
+        result.push({ tokenAddress, pairAddress: poolAddr, symbol, poolCreatedAtMs });
       }
       return result;
     } catch {

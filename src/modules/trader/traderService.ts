@@ -20,6 +20,7 @@ export interface OrderRequest {
   slippageBps?: number;
   ownerToken?: string;
   strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER';
+  exitPolicy?: Record<string, unknown>;
 }
 
 import { WalletService } from '../wallet/walletService';
@@ -72,6 +73,7 @@ export class TraderService {
         fee_lamports: appSettings.PAPER_TRADE_FEE_LAMPORTS,
         status: 'OPEN',
         strategy: req.strategy || 'TRENDING',
+        exit_policy_snapshot: req.exitPolicy ?? null,
       });
     }
 
@@ -93,7 +95,9 @@ export class TraderService {
     }
 
     const amountLamports = Math.floor(req.solAmount * 1_000_000_000);
-    const slippageBps = req.slippageBps || appSettings.DEFAULT_SLIPPAGE_BPS;
+    const slippageLimit = Math.min(req.slippageBps ?? appSettings.MAX_SLIPPAGE_BPS, appSettings.MAX_SLIPPAGE_BPS);
+    if (!Number.isInteger(slippageLimit) || slippageLimit < 1) throw new Error('Invalid slippage limit');
+    const slippageBps = Math.min(appSettings.DEFAULT_SLIPPAGE_BPS, slippageLimit);
 
     const initialQuote = await this.jupiterClient.getQuote(
       this.WSOL_MINT,
@@ -107,7 +111,7 @@ export class TraderService {
       throw new Error(`Entry ditolak: Price impact (${priceImpactPct.toFixed(2)}%) melebihi batas (${appSettings.MAX_PRICE_IMPACT_PCT}%)`);
     }
 
-    const dynamicSlippageBps = this.calculateDynamicSlippage(slippageBps, priceImpactPct, appSettings.MAX_SLIPPAGE_BPS);
+    const dynamicSlippageBps = this.calculateDynamicSlippage(slippageBps, priceImpactPct, slippageLimit);
     
     // Re-fetch quote with dynamic slippage
     const quote = await this.jupiterClient.getQuote(
@@ -141,6 +145,7 @@ export class TraderService {
         last_valid_block_height: lastValidBlockHeight,
         pending_since: new Date().toISOString(),
         strategy: req.strategy || 'TRENDING',
+        exit_policy_snapshot: req.exitPolicy ?? null,
       });
     } catch (e: any) {
        // Probably idempotency collision

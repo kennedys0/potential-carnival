@@ -1,8 +1,9 @@
 import { DexScreenerClient, DexScreenerPair } from './dexScreenerClient';
 import { GeckoTerminalClient } from './geckoTerminalClient';
-import { Candle } from '../analyzer/indicators/atr';
+import type { Candle } from '../analyzer/indicators/atr';
 import { Redis } from 'ioredis';
 import { appSettings } from '../../config/settings';
+import type { NewPoolCandidate } from './sniperPoolSelection';
 
 export class ScannerService {
   constructor(
@@ -15,7 +16,11 @@ export class ScannerService {
     return this.dexScreener.getTokenData(tokenAddress);
   }
 
-  async fetchNewPairs(): Promise<any[]> {
+  async scanSpecificPool(pairAddress: string): Promise<DexScreenerPair | null> {
+    return this.dexScreener.getPairByAddress(pairAddress);
+  }
+
+  async fetchNewPairs(): Promise<NewPoolCandidate[]> {
     return this.geckoTerminal.getNewPools('solana', 1);
   }
 

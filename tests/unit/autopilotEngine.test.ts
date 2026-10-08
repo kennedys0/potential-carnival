@@ -6,6 +6,8 @@ describe('AutopilotEngine', () => {
   let mockAutopilotRepo: any;
   let mockTraderService: any;
   let mockRedis: any;
+  let mockSniperRepo: any;
+  let mockReservations: any;
 
   beforeEach(() => {
     mockAutopilotRepo = {
@@ -29,6 +31,17 @@ describe('AutopilotEngine', () => {
       }
     };
 
+    mockSniperRepo = {
+      getOrCreateConfig: vi.fn().mockResolvedValue({
+        enabled: false, trading_mode: 'PAPER', buy_amount_sol: 0.01,
+        max_active_positions: 3, max_buys_per_day: 3, max_daily_entry_budget_sol: 0.03,
+      }),
+    };
+    mockReservations = {
+      reserve: vi.fn().mockResolvedValue('reservation-1'),
+      finish: vi.fn().mockResolvedValue(undefined),
+      releaseIfUnbroadcast: vi.fn().mockResolvedValue(true),
+    };
     mockRedis = {
       set: vi.fn().mockResolvedValue('OK'),
       del: vi.fn().mockResolvedValue(1),
@@ -38,7 +51,7 @@ describe('AutopilotEngine', () => {
   });
 
   it('rejects if circuit breaker is active (daily loss >= limit)', async () => {
-    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService);
+    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService, mockSniperRepo, mockReservations);
     
     const currentState = {
       openPositionsCount: 0,
@@ -59,7 +72,7 @@ describe('AutopilotEngine', () => {
   });
 
   it('rejects if token is already held', async () => {
-    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService);
+    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService, mockSniperRepo, mockReservations);
     
     const currentState = {
       openPositionsCount: 0,
@@ -82,7 +95,7 @@ describe('AutopilotEngine', () => {
 
   it('rejects if database lock cannot be acquired', async () => {
     mockTraderService.tradeRepo.acquireBuyLock.mockResolvedValue(false); // lock failed
-    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService);
+    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService, mockSniperRepo, mockReservations);
     
     const currentState = {
       openPositionsCount: 0,
@@ -110,7 +123,7 @@ describe('AutopilotEngine', () => {
       sizing_params: { max_concurrent_positions: 2 },
       circuit_breaker_params: {},
     });
-    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService);
+    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService, mockSniperRepo, mockReservations);
     
     const currentState = {
       openPositionsCount: 2, // limit is 2
@@ -132,7 +145,7 @@ describe('AutopilotEngine', () => {
   });
 
   it('executes if all checks pass', async () => {
-    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService);
+    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService, mockSniperRepo, mockReservations);
     
     const currentState = {
       openPositionsCount: 0,

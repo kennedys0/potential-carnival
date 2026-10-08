@@ -26,7 +26,7 @@ export async function handleReportCommand(
     const closedBreakdown: string[] = [];
 
     for (const trade of closedTrades) {
-      const pnl = trade.realized_pnl_sol || 0;
+      const pnl = trade.realized_pnl_sol ?? 0;
       totalRealizedPnlSol += pnl;
       
       const symbol = trade.token_symbol || trade.token_mint.slice(0, 8);

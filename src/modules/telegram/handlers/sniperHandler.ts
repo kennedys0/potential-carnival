@@ -12,7 +12,7 @@ export async function handleSniperSettings(
   const text = `
 ⚙️ <b>New Token Sniper Settings</b>
 
-• <b>Status:</b> ${config.enabled ? '🟢 Running' : '🔴 Disabled'}
+• <b>Status:</b> ${config.enabled ? '🟢 Enabled' : '🔴 Disabled'}
 • <b>Mode Eksekusi:</b> ${modeTag}
 
 <b>Trading Rules:</b>
@@ -20,11 +20,12 @@ export async function handleSniperSettings(
 • <b>Max Daily Buys:</b> ${config.max_buys_per_day}
 • <b>Max Daily Budget:</b> ${config.max_daily_entry_budget_sol} SOL
 • <b>Max Active Positions:</b> ${config.max_active_positions}
+• <b>Pool Age:</b> ${config.min_pool_age_seconds}s–${config.max_pool_age_minutes}min
 
 <b>Safety Filters:</b>
 • <b>Minimum Safety Score:</b> ${config.minimum_safety_score}/100
 • <b>Minimum Liquidity:</b> $${config.min_liquidity_usd}
-• <b>Max Slippage:</b> ${config.max_slippage_bps / 100}%
+• <b>Max Slippage:</b> ${config.max_slippage_bps / 100}% (tetap dibatasi oleh global cap)
 
 <b>Exits:</b>
 • <b>Take Profit:</b> +${config.take_profit_percent}%
@@ -41,6 +42,17 @@ export async function handleSniperSettings(
     .row()
     .text('📈 Take Profit', 'sniper_settings_tp')
     .text('📉 Stop Loss', 'sniper_settings_sl')
+    .row()
+    .text('🔢 Max Positions', 'sniper_settings_positions')
+    .text('🗓 Max Daily Buys', 'sniper_settings_daily_buys')
+    .row()
+    .text('💰 Daily Budget', 'sniper_settings_daily_budget')
+    .text('⏱ Max Pool Age', 'sniper_settings_pool_age')
+    .row()
+    .text('💧 Min Liquidity', 'sniper_settings_liquidity')
+    .text('🛡 Min Safety', 'sniper_settings_safety')
+    .row()
+    .text('🎚 Slippage Cap', 'sniper_settings_slippage')
     .row()
     .text('⬅️ Back to Automation Center', 'menu_autopilot');
 

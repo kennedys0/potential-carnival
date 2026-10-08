@@ -15,6 +15,19 @@ export interface DexScreenerPair {
 export class DexScreenerClient {
   private readonly baseUrl = 'https://api.dexscreener.com/latest/dex/tokens';
 
+  /** Fetch the specific discovered liquidity pool; never pick the most liquid pool for a sniper. */
+  async getPairByAddress(pairAddress: string): Promise<DexScreenerPair | null> {
+    try {
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${pairAddress}`);
+      if (!res.ok) return null;
+      const payload: any = await res.json();
+      const pair = (payload.pairs ?? []).find((p: any) => p.chainId === 'solana' && p.pairAddress === pairAddress);
+      return pair ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async getTokenData(tokenAddress: string): Promise<DexScreenerPair | null> {
     try {
       const res = await fetch(`${this.baseUrl}/${tokenAddress}`);
