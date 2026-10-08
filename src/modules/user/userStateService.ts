@@ -30,7 +30,7 @@ export class UserStateService {
     // 1. Get Open Positions
     // Actually we should get from positions table, but let's assume we can get from trades for now
     // Since Phase 2/3 will migrate to PENDING/OPEN/PARTIAL_EXIT.
-    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING', 'UNKNOWN', 'CONFIRMING']);
+    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING', 'RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED']);
     
     // We no longer assume PENDING trades have failed based on time. 
     // They are considered active exposure until definitively FAILED.
@@ -45,7 +45,7 @@ export class UserStateService {
     // Sum up unconfirmed SOL exposures (entries that might land)
     let unconfirmedExposureSol = 0;
     for (const t of openTrades) {
-      if (['PENDING', 'UNKNOWN', 'CONFIRMING'].includes(t.status) && t.sol_amount) {
+      if (['PENDING', 'RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED'].includes(t.status) && t.sol_amount) {
         unconfirmedExposureSol += t.sol_amount;
       }
     }

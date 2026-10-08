@@ -157,6 +157,7 @@ export class SniperScanner {
                     `Sistem mendeteksi token baru yang aman dan baru saja mengeksekusi <b>BUY</b>!\n\n` +
                     `🎯 <b>Target:</b> <code>${pair.baseToken.symbol}</code>\n` +
                     `📄 <b>CA:</b> <code>${tokenAddress}</code>\n` +
+                    `📈 <b>Chart:</b> <a href="https://dexscreener.com/solana/${tokenAddress}">DexScreener</a>\n` +
                     `🛡️ <b>Safety:</b> ${security.score}/100\n` +
                     (security.riskFlags.length > 0 ? `⚠️ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).join(', ') + ', dll' : security.riskFlags.join(', ')}\n` : '') +
                     `📝 <b>Analisa:</b> <i>${result.reason}</i>\n\n` +
@@ -174,6 +175,7 @@ export class SniperScanner {
                       `⚡ <b>SNIPER RADAR</b>\n` +
                       `├ <b>Token:</b> <code>${pair.baseToken.symbol}</code>\n` +
                       `├ <b>CA:</b> <code>${tokenAddress}</code>\n` +
+                      `├ <b>Chart:</b> <a href="https://dexscreener.com/solana/${tokenAddress}">DexScreener</a>\n` +
                       `├ <b>Safety:</b> ${security.score}/100 🛡️\n` +
                       (security.riskFlags.length > 0 ? `├ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).join(', ') + ', dll' : security.riskFlags.join(', ')}\n` : '') +
                       `├ <b>Status:</b> ⚪ SKIPPED\n` +
