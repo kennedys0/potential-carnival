@@ -68,6 +68,23 @@ export class WalletRepository {
     return record.id;
   }
 
+  async atomicCreateWithdrawal(data: { user_id: number; amount_sol: number; destination_address: string; idempotency_key: string; spendable_sol: number }): Promise<string> {
+    const { data: record, error } = await this.db.rpc('atomic_create_withdrawal', {
+      p_user_id: data.user_id,
+      p_amount_sol: data.amount_sol,
+      p_destination_address: data.destination_address,
+      p_idempotency_key: data.idempotency_key,
+      p_spendable_sol: data.spendable_sol
+    });
+    if (error) {
+      if (error.message.includes('Withdrawal sedang diproses') || error.message.includes('Saldo spendable tidak mencukupi')) {
+        throw new Error(error.message);
+      }
+      throw new Error(`Failed to atomically create withdrawal: ${error.message}`);
+    }
+    return record;
+  }
+
   async getWithdrawalAttemptById(id: string): Promise<any> {
     const { data, error } = await this.db.from('withdrawal_attempts').select('*').eq('id', id).single();
     if (error) return null;
@@ -98,7 +115,10 @@ export class WalletRepository {
     const { data, error } = await this.db
       .from('withdrawal_attempts')
       .select('*')
-      .in('status', ['CONFIRMING', 'SUBMITTED', 'SIGNED']);
+      .in('status', [
+        'CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED',
+        'CONFIRMING', 'TX_CONFIRMED', 'RECONCILING', 'PENDING', 'NEEDS_ATTENTION'
+      ]);
     if (error) return [];
     return data;
   }

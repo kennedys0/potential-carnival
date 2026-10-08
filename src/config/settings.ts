@@ -21,6 +21,7 @@ export const AppSettingsSchema = z.object({
   CONFIRMATION_RETRIES: z.number().default(3),
   CONFIRMATION_DELAY_MS: z.number().default(2000),
   MAX_PENDING_AGE_MS: z.number().default(300000),
+  TX_POLLING_TIMEOUT_MS: z.number().default(90000),
   ORPHAN_DUST_LIMIT_RAW: z.number().default(1000),
   MONITOR_PARAMS: z.object({
     DEFAULT_TP1_PERCENT: z.number().default(15),

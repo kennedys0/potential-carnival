@@ -295,15 +295,13 @@ export async function handleWalletWithdrawConfirm(
 `.trim();
 
   const idempotencyKey = `wd_auth_${ctx.from.id}_${Date.now()}`;
-  const amountSol = amount === 'MAX' ? -1 : amount;
   
-  const withdrawalId = await walletService['walletRepo'].createWithdrawalAttempt({
-    user_id: ctx.from.id,
-    amount_sol: amountSol,
-    destination_address: address,
-    status: 'AUTHORIZED',
-    idempotency_key: idempotencyKey
-  });
+  const withdrawalId = await walletService.requestWithdrawal(
+    ctx.from.id,
+    address,
+    amount,
+    idempotencyKey
+  );
 
   const keyboard = new InlineKeyboard()
     .text('✅ Confirm Kirim', `wd_exec:${withdrawalId}`)

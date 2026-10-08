@@ -134,14 +134,23 @@ export function createMonitorWorker(
           
           logger.info({ positionId, reason, percentageToClose }, 'Exiting position');
           try {
-            await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
+            const status = await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
             try {
-              await botApi.sendMessage(userId, 
-                `🔔 <b>Monitor Alert!</b>\n\n` +
-                `Posisi <b>${trade.token_symbol}</b> ditutup (${percentageToClose}%).\n` +
-                `Alasan: ${reason}`,
-                { parse_mode: 'HTML' }
-              );
+              if (status === 'SUCCESS') {
+                await botApi.sendMessage(userId, 
+                  `🔔 <b>Monitor Alert!</b>\n\n` +
+                  `Posisi <b>${trade.token_symbol}</b> berhasil ditutup (${percentageToClose}%).\n` +
+                  `Alasan: ${reason}`,
+                  { parse_mode: 'HTML' }
+                );
+              } else if (status === 'UNCERTAIN') {
+                await botApi.sendMessage(userId, 
+                  `🔔 <b>Monitor Alert!</b>\n\n` +
+                  `Permintaan tutup <b>${trade.token_symbol}</b> (${percentageToClose}%) terkirim.\n` +
+                  `Status transaksi saat ini belum pasti (menunggu konfirmasi).`,
+                  { parse_mode: 'HTML' }
+                );
+              }
             } catch (e) {
               logger.error({ err: e }, 'Gagal kirim notifikasi Monitor exit');
             }

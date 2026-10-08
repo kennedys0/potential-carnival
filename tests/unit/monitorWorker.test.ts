@@ -45,8 +45,8 @@ describe('MonitorWorker', () => {
   it('prevents double-sell by only triggering close on OPEN or PARTIAL_EXIT statuses', async () => {
     const mockTradeRepo: any = {
       getOpenTradesByUserId: vi.fn().mockResolvedValue([
-        { id: 'pos-1', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'PENDING', sol_spent_lamports: 1000000000 },
-        { id: 'pos-2', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'CLOSED', sol_spent_lamports: 1000000000 },
+        { id: 'pos-1', token_amount_raw: 1000000, remaining_raw: 1000000, entry_price_usd: 1.0, status: 'PENDING', sol_spent_lamports: 1000000000 },
+        { id: 'pos-2', token_amount_raw: 1000000, remaining_raw: 1000000, entry_price_usd: 1.0, status: 'CLOSED', sol_spent_lamports: 1000000000 },
       ]),
     };
     const mockTraderService: any = {

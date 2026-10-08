@@ -303,7 +303,7 @@ describe('TraderService', () => {
     mockRedis.get.mockResolvedValue('1');
     try {
       const { service, wallet } = exitDeps({ status: 'UNKNOWN', signature: 'sigX' });
-      await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBeUndefined();
+      await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBe('UNCERTAIN');
       expect(wallet.signAndSendVersionedTransaction).toHaveBeenCalled(); // benar-benar mencoba menjual
     } finally {
       vi.mocked(getEnv).mockReturnValue({ LIVE_TRADING_ENABLED: true } as any);
@@ -321,7 +321,7 @@ describe('TraderService', () => {
 
   it('R3: exit UNKNOWN -> posisi tetap OPEN (tanpa FAILED) menunggu rekonsiliasi', async () => {
     const { service, repo } = exitDeps({ status: 'UNKNOWN', signature: 's' });
-    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBeUndefined();
+    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBe('UNCERTAIN');
     const ups = updatesOf(repo);
     expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
     expect(ups).toContainEqual(expect.objectContaining({ last_exit_error: 'Uncertain status: UNKNOWN' }));

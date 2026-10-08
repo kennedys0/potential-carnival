@@ -1,6 +1,7 @@
 import { Connection, VersionedTransaction, Keypair, SignatureStatus } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { logger } from '../../utils/logger';
+import { appSettings } from '../../config/settings';
 
 export type TxSendStatus = 
   | 'SIGN_FAILED'
@@ -27,6 +28,7 @@ export class TxSender {
     options: {
       maxRetries?: number;
       pollingIntervalMs?: number;
+      timeoutMs?: number;
       onSignature?: (signature: string) => Promise<void>;
     } = {}
   ): Promise<TxSendResult> {
@@ -60,8 +62,9 @@ export class TxSender {
       logger.error({ err: e }, 'Failed to sendTransaction initially');
       
       const errMsg = e.message ? e.message.toLowerCase() : '';
+      // Strict matching for definite rejection to avoid false positives from generic transport errors
       const isDefiniteRejection = errMsg.includes('blockhash not found') || 
-                                  errMsg.includes('invalid') || 
+                                  errMsg.includes('invalid blockhash') || 
                                   errMsg.includes('signature verification failed');
 
       if (isDefiniteRejection) {
@@ -72,9 +75,16 @@ export class TxSender {
         return { status: 'UNKNOWN', signature, err: e };
       }
     }
+    const startTime = Date.now();
+    const timeoutMs = options.timeoutMs || appSettings.TX_POLLING_TIMEOUT_MS;
 
-    // Poll until confirmed/finalized or blockhash is invalid
+    // Poll until confirmed/finalized, blockhash is invalid, or timeout
     while (true) {
+      if (Date.now() - startTime > timeoutMs) {
+        logger.warn({ signature }, 'Polling timeout reached');
+        return { status: 'SUBMISSION_TIMEOUT', signature, err: 'Polling timeout' };
+      }
+
       const statusRes = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
       const status = statusRes.value[0];
 

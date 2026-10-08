@@ -14,7 +14,7 @@ export interface TradeRecord {
   entry_price_usd: number;
   exit_price_usd?: number | null;
   tx_signature?: string | null;
-  fee_lamports?: number;
+  fee_lamports?: number | string;
   pnl_sol?: number | null;
   pnl_percent?: number | null;
   status: 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
@@ -308,7 +308,7 @@ export class TradeRepository {
   }
 
   async getClosedTradesToday(userId: number, timezone: string): Promise<TradeRecord[]> {
-    const { data, error } = await this.db.rpc('get_closed_trades_today', {
+    const { data, error } = await this.db.rpc('get_daily_trade_stats', {
       p_user_id: userId,
       p_timezone: timezone
     });

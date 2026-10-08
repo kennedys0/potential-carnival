@@ -1,4 +1,29 @@
--- Phase 5: Strict SQL Payload Validation for Reconciliations
+-- Phase 11: Fix Daily Loss and PnL Calculation to be per-fill
+ALTER TABLE trade_fills ADD COLUMN IF NOT EXISTS realized_pnl_sol NUMERIC DEFAULT 0;
+
+CREATE OR REPLACE FUNCTION get_daily_trade_stats(p_user_id BIGINT, p_timezone TEXT)
+RETURNS TABLE (
+    trade_id UUID,
+    token_symbol TEXT,
+    token_mint TEXT,
+    pnl_sol NUMERIC,
+    realized_pnl_sol NUMERIC
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT t.id as trade_id, t.token_symbol, t.token_mint,
+           (SELECT COALESCE(SUM(f.realized_pnl_sol), 0) FROM trade_fills f WHERE f.trade_id = t.id AND f.created_at >= (NOW() AT TIME ZONE p_timezone)::DATE AT TIME ZONE p_timezone) as pnl_sol,
+           (SELECT COALESCE(SUM(f.realized_pnl_sol), 0) FROM trade_fills f WHERE f.trade_id = t.id AND f.created_at >= (NOW() AT TIME ZONE p_timezone)::DATE AT TIME ZONE p_timezone) as realized_pnl_sol
+    FROM trades t
+    WHERE t.user_id = p_user_id
+      AND EXISTS (
+          SELECT 1 FROM trade_fills f 
+          WHERE f.trade_id = t.id 
+            AND f.created_at >= (NOW() AT TIME ZONE p_timezone)::DATE AT TIME ZONE p_timezone
+      );
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION atomic_reconcile_exit(
     p_trade_id UUID,
     p_exit_attempt_id UUID,
@@ -58,10 +83,6 @@ BEGIN
         IF v_attempt.tx_signature IS NOT NULL AND p_tx_signature IS NOT NULL AND v_attempt.tx_signature != p_tx_signature THEN
             RETURN 'INVALID_EVIDENCE';
         END IF;
-
-        IF v_attempt.status = 'SUCCESS' THEN
-            -- Might be idempotent call, we verify in the fills table below
-        END IF;
     END IF;
 
     -- Sanity check inputs
@@ -73,15 +94,13 @@ BEGIN
     IF p_tx_signature IS NOT NULL THEN
         SELECT * INTO v_existing_fill FROM trade_fills WHERE trade_id = p_trade_id AND tx_signature = p_tx_signature;
         IF FOUND THEN
-            -- strict identity verification for idempotency
             IF v_existing_fill.token_delta_raw != p_token_delta_raw OR v_existing_fill.sol_delta_lamports != p_sol_delta_lamports THEN
-                RETURN 'CONFLICT'; -- Duplicate signature but different payload!
+                RETURN 'CONFLICT'; 
             END IF;
             RETURN 'ALREADY_APPLIED';
         END IF;
     END IF;
 
-    -- If attempt was already marked success but we didn't find the fill, that's an invalid state
     IF p_exit_attempt_id IS NOT NULL AND v_attempt.status = 'SUCCESS' THEN
         RETURN 'INVALID_STATE';
     END IF;
@@ -119,10 +138,10 @@ BEGIN
         v_pnl_percent := COALESCE(v_trade.pnl_percent, 0);
     END IF;
 
-    -- Record fill
+    -- Record fill (NOW with realized_pnl_sol)
     IF p_tx_signature IS NOT NULL THEN
-        INSERT INTO trade_fills (trade_id, exit_attempt_id, tx_signature, token_delta_raw, sol_delta_lamports, fee_lamports)
-        VALUES (p_trade_id, p_exit_attempt_id, p_tx_signature, p_token_delta_raw, p_sol_delta_lamports, p_fee_lamports);
+        INSERT INTO trade_fills (trade_id, exit_attempt_id, tx_signature, token_delta_raw, sol_delta_lamports, fee_lamports, realized_pnl_sol)
+        VALUES (p_trade_id, p_exit_attempt_id, p_tx_signature, p_token_delta_raw, p_sol_delta_lamports, p_fee_lamports, COALESCE(v_realized_pnl_sol, 0));
     END IF;
 
     -- Update trade

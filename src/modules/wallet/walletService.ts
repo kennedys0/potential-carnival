@@ -102,6 +102,24 @@ export class WalletService {
     return pk;
   }
 
+  async requestWithdrawal(userId: number, destinationAddress: string, amountSol: number | 'MAX', idempotencyKey: string): Promise<string> {
+    const wallet = await this.walletRepo.getWalletByUserId(userId);
+    if (!wallet) throw new Error('Wallet belum terdaftar.');
+    
+    const sourcePubkey = new PublicKey(wallet.public_key);
+    const balance = await this.connection.getBalance(sourcePubkey);
+    const spendableSol = balance / LAMPORTS_PER_SOL;
+    
+    const amount = amountSol === 'MAX' ? -1 : amountSol;
+    return this.walletRepo.atomicCreateWithdrawal({
+      user_id: userId,
+      amount_sol: amount,
+      destination_address: destinationAddress,
+      idempotency_key: idempotencyKey,
+      spendable_sol: spendableSol
+    });
+  }
+
   async withdrawSol(userId: number, destinationAddress: string, amountSol: number | 'MAX', existingWithdrawalId?: string): Promise<string> {
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar.');

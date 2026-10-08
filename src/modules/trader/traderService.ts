@@ -222,7 +222,7 @@ export class TraderService {
         status: 'OPEN',
         sol_amount: finalSolAmount,
         token_amount: finalTokenAmount,
-        fee_lamports: Number(parseResult.feeLamports),
+        fee_lamports: String(parseResult.feeLamports),
         tx_signature: signature,
         token_amount_raw: parseResult.tokenDeltaRaw.toString(),
         token_decimals: parseResult.decimals,
@@ -247,9 +247,9 @@ export class TraderService {
     }
   }
 
-  async closePosition(trade: TradeRecord, currentPriceUsd: number, percentageToClose: number = 100): Promise<void> {
+  async closePosition(trade: TradeRecord, currentPriceUsd: number, percentageToClose: number = 100): Promise<string> {
     if (!trade.id) throw new Error('Trade ID is missing');
-    if (trade.status !== 'OPEN' && trade.status !== 'PARTIAL_EXIT') return;
+    if (trade.status !== 'OPEN' && trade.status !== 'PARTIAL_EXIT') return 'SKIPPED';
     if (percentageToClose <= 0 || percentageToClose > 100) throw new Error('Invalid percentage');
 
     const pendingExits = await this.tradeRepo.getPendingExitAttempts(trade.id);
@@ -291,10 +291,10 @@ export class TraderService {
         tx_signature: `PAPER_${Date.now()}`,
         exit_price_usd: currentPriceUsd,
         token_delta_raw: amountToCloseRaw.toString(),
-        sol_delta_lamports: solReceivedLamports,
+        sol_delta_lamports: Number(solReceivedLamports),
         fee_lamports: 0,
       });
-      return;
+      return 'SUCCESS';
     }
 
     if (!this.jupiterClient) throw new Error('Jupiter client required for live trade execution');
@@ -408,7 +408,7 @@ export class TraderService {
           needs_attention: currentAttempts >= 3,
        });
        // UNKNOWN status stays PENDING
-       return; 
+       return 'UNCERTAIN';
     }
 
     // SUCCESS flow - DO NOT mark attempt SUCCESS until atomic reconciliation
@@ -418,7 +418,7 @@ export class TraderService {
     
     let solReceivedLamports = 0;
     let feeLamports = 0;
-    let tokenSpentRaw = 0;
+    let tokenSpentRaw = "0";
 
     if (tx && tx.meta) {
       const parseResult = FillParser.parseSellFill(tx, wallet.publicKey, trade.token_mint);
@@ -426,25 +426,25 @@ export class TraderService {
       if (parseResult) {
          feeLamports = Number(parseResult.feeLamports);
          solReceivedLamports = Number(parseResult.solDeltaLamports);
-         tokenSpentRaw = Number(parseResult.tokenDeltaRaw);
+         tokenSpentRaw = parseResult.tokenDeltaRaw.toString();
       }
     }
 
-    if (!tx || !tx.meta || tokenSpentRaw === 0) {
+    if (!tx || !tx.meta || tokenSpentRaw === "0") {
       await this.tradeRepo.updateTradeStatus(trade.id, {
          tx_signature: signature,
          needs_attention: true,
          last_exit_error: 'TX_CONFIRMED - FILL_RECONCILIATION_REQUIRED',
       });
       // Do NOT update exitAttempt to SUCCESS yet because we haven't reconciled the accounting!
-      return;
+      return 'UNCERTAIN';
     }
 
     const acctResult = AccountingEngine.calculateExit({
       trade,
       actualTokensSpentRaw: BigInt(tokenSpentRaw),
-      solReceivedLamports,
-      feeLamports,
+      solReceivedLamports: Number(solReceivedLamports),
+      feeLamports: Number(feeLamports),
       currentPriceUsd
     });
 
@@ -456,8 +456,8 @@ export class TraderService {
       tx_signature: signature,
       remaining_raw: acctResult.remainingRaw,
       token_delta_raw: tokenSpentRaw.toString(),
-      sol_delta_lamports: solReceivedLamports,
-      fee_lamports: feeLamports,
+      sol_delta_lamports: Number(solReceivedLamports),
+      fee_lamports: Number(feeLamports),
     };
 
     if (acctResult.newStatus === 'CLOSED') {
@@ -485,6 +485,8 @@ export class TraderService {
         logger.error({ err, tradeId: trade.id }, 'Failed to release redis lock');
       });
     }
+
+    return 'SUCCESS';
   }
 
   private async assertTradingAllowed(userId: number, side: 'BUY' | 'SELL', isDryRun: boolean): Promise<void> {
