@@ -123,9 +123,12 @@ export class UserStateService {
 
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
     const cbParams = config.circuit_breaker_params as any;
-    const maxDailyLoss = cbParams.max_daily_loss_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DAILY_LOSS_SOL;
+    const userDailyLoss = cbParams.max_daily_loss_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DAILY_LOSS_SOL;
+    const maxDailyLoss = Math.min(userDailyLoss, 5.0); // Hardcoded absolute max daily loss of 5 SOL
     const maxConsecutiveLosses = cbParams.max_consecutive_losses ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_CONSECUTIVE_LOSSES;
-    const maxDrawdownLimit = cbParams.max_drawdown_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DRAWDOWN_PERCENT;
+    
+    const userMaxDrawdown = cbParams.max_drawdown_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DRAWDOWN_PERCENT;
+    const maxDrawdownLimit = Math.min(userMaxDrawdown, 20.0); // Hardcoded absolute max drawdown of 20%
 
     let reason = '';
     if (metrics.dailyLossSol >= maxDailyLoss) {

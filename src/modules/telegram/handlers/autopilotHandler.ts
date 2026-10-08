@@ -1,6 +1,7 @@
 import { Context, InlineKeyboard } from 'grammy';
 import { AutopilotRepository } from '../../../database/repositories/autopilotRepository';
 import { z } from 'zod';
+import { liveFeedSubscribers } from '../../scanner/liveFeedState';
 
 const DisplaySafetyParamsSchema = z.object({
   min_safety_score: z.number().default(75),
@@ -89,7 +90,6 @@ export async function handleAutopilotToggle(
   const newActive = !config.is_active;
   await autopilotRepo.updateConfig(ctx.from.id, { is_active: newActive });
 
-  const { liveFeedSubscribers } = await import('../../scanner/trendScanner.js');
   if (newActive) {
     liveFeedSubscribers.add(ctx.from.id);
   } else {

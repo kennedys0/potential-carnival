@@ -150,6 +150,7 @@ describe('TraderService', () => {
     
     const mockTradeRepo: any = {
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getPendingExitAttempts: vi.fn().mockResolvedValue([]),
     };
     const service = new TraderService(mockTradeRepo, {} as any, {} as any);
     
@@ -169,6 +170,9 @@ describe('TraderService', () => {
   it('keeps status OPEN/PARTIAL_EXIT on closePosition failure and increments exit_attempts (R3 Mutation)', async () => {
     const mockTradeRepo: any = {
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      createExitAttempt: vi.fn().mockImplementation(async (a: any) => ({ id: 'mock-exit', ...a })),
+      updateExitAttempt: vi.fn().mockResolvedValue(true),
     };
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
@@ -257,7 +261,12 @@ describe('TraderService', () => {
     token_amount_raw: 10_000_000, remaining_raw: 10_000_000, exit_attempts: 0, ...over,
   });
     const exitDeps = (sendResult: any) => {
-    const repo: any = { updateTradeStatus: vi.fn().mockResolvedValue(true) };
+    const repo: any = { 
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      createExitAttempt: vi.fn().mockImplementation(async (a: any) => ({ id: 'mock-exit', ...a })),
+      updateExitAttempt: vi.fn().mockResolvedValue(true),
+    };
     const wallet: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
       getTokenBalance: vi.fn().mockResolvedValue({ raw: 10_000_000n, decimals: 6, ui: 10 }),
@@ -329,6 +338,9 @@ describe('TraderService', () => {
     const repo: any = {
       createTrade: vi.fn().mockImplementation((t) => Promise.resolve({ id: 'buy-1', ...t })),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      createExitAttempt: vi.fn().mockImplementation(async (a: any) => ({ id: 'mock-exit', ...a })),
+      updateExitAttempt: vi.fn().mockResolvedValue(true),
     };
     const wallet: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),

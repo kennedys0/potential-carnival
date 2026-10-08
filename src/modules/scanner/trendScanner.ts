@@ -6,8 +6,7 @@ import { AnalyzerService } from '../analyzer/analyzerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
-
-export const liveFeedSubscribers = new Set<number>();
+import { liveFeedSubscribers } from './liveFeedState';
 
 export class TrendScanner {
   private intervalId?: NodeJS.Timeout;
@@ -62,19 +61,8 @@ export class TrendScanner {
       logger.info(`TrendScanner: GeckoTerminal returned ${result.length} organic trending tokens.`);
       return result;
     } catch (err) {
-      logger.warn({ err }, 'TrendScanner: GeckoTerminal trending failed, falling back to DexScreener boosted');
-      // Fallback: DexScreener latest boosted (known-paid, flagged)
-      try {
-        const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
-        if (!res.ok) return [];
-        const tokens = (await res.json()) as any[];
-        return tokens
-          .filter((t: any) => t.chainId === 'solana' && t.tokenAddress)
-          .slice(0, 20)
-          .map((t: any) => ({ tokenAddress: t.tokenAddress, pairAddress: '', symbol: '' }));
-      } catch {
-        return [];
-      }
+      logger.warn({ err }, 'TrendScanner: GeckoTerminal trending failed');
+      return [];
     }
   }
 

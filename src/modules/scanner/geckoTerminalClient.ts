@@ -37,4 +37,31 @@ export class GeckoTerminalClient {
       return [];
     }
   }
+
+  async getNewPools(network: string = 'solana', page: number = 1): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
+    try {
+      const url = `${this.baseUrl}/networks/${network}/new_pools?page=${page}`;
+      const res = await fetch(url, { headers: { 'Accept': 'application/json;version=20230302' } });
+      if (!res.ok) return [];
+      
+      const data: any = await res.json();
+      const pools: any[] = data?.data ?? [];
+      const included: any[] = data?.included ?? [];
+      
+      const result: { tokenAddress: string; pairAddress: string; symbol: string }[] = [];
+      for (const pool of pools) {
+        const poolAddr = pool.attributes?.address;
+        const relBaseToken = pool.relationships?.base_token?.data;
+        if (!poolAddr || !relBaseToken) continue;
+        const baseToken = included.find((i: any) => i.type === relBaseToken.type && i.id === relBaseToken.id);
+        const tokenAddress = baseToken?.attributes?.address ?? relBaseToken.id?.split('_')[1];
+        const symbol = baseToken?.attributes?.symbol ?? '???';
+        if (!tokenAddress) continue;
+        result.push({ tokenAddress, pairAddress: poolAddr, symbol });
+      }
+      return result;
+    } catch {
+      return [];
+    }
+  }
 }

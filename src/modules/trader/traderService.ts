@@ -222,13 +222,20 @@ export class TraderService {
     if (trade.status !== 'OPEN' && trade.status !== 'PARTIAL_EXIT') return;
     if (percentageToClose <= 0 || percentageToClose > 100) throw new Error('Invalid percentage');
 
+    const pendingExits = await this.tradeRepo.getPendingExitAttempts(trade.id);
+    if (pendingExits.length > 0) {
+       throw new Error('Penutupan posisi sedang diproses (ada exit attempt pending).');
+    }
+
     const redis = getRedisConnection();
     const lockKey = `lock:trade:close:${trade.id}`;
-    // Lock for 15 seconds to prevent double-sell across webhook, API, and monitor
-    const locked = await redis.set(lockKey, 'locked', 'PX', 15000, 'NX');
+    // Lock for 60 seconds to prevent double-sell
+    const locked = await redis.set(lockKey, 'locked', 'PX', 60000, 'NX');
     if (!locked) {
-      throw new Error('Penutupan posisi sedang diproses (terkunci).');
+      throw new Error('Penutupan posisi sedang diproses (terkunci redis).');
     }
+
+    try {
 
     const isPartial = percentageToClose < 100;
 
@@ -262,17 +269,19 @@ export class TraderService {
       return;
     }
 
-    const tradeBalanceRaw = trade.remaining_raw ?? 0;
-    if (tradeBalanceRaw <= 0) {
+    const tradeBalanceRaw = BigInt(trade.remaining_raw ?? 0);
+    if (tradeBalanceRaw <= 0n) {
        throw new Error('Trade has no remaining raw tokens to close.');
     }
 
-    const calculatedAmount = Math.floor(tradeBalanceRaw * (percentageToClose / 100));
-    const amountLamports = Math.min(calculatedAmount, Number(totalTokenBalance.raw));
+    const percentBps = BigInt(Math.floor(percentageToClose * 100)); // 100% = 10000 bps
+    const calculatedAmount = (tradeBalanceRaw * percentBps) / 10000n;
+    const amountLamportsBigInt = calculatedAmount < totalTokenBalance.raw ? calculatedAmount : totalTokenBalance.raw;
 
-    if (amountLamports <= 0) {
+    if (amountLamportsBigInt <= 0n) {
       throw new Error('Calculated token amount to close is 0.');
     }
+    const amountLamports = Number(amountLamportsBigInt); // Jupiter client expects number
 
     // Increment exit attempts immediately
     const currentAttempts = (trade.exit_attempts ?? 0) + 1;
@@ -293,6 +302,16 @@ export class TraderService {
     const { transaction, lastValidBlockHeight } = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
     const blockhash = transaction.message.recentBlockhash;
     
+    // Create attempt record
+    const attemptIdempotencyKey = `exit_${trade.id}_${currentAttempts}_${Date.now()}`;
+    const exitAttempt = await this.tradeRepo.createExitAttempt({
+      trade_id: trade.id,
+      percentage: percentageToClose,
+      tokens_amount_raw: amountLamports,
+      status: 'PENDING',
+      idempotency_key: attemptIdempotencyKey
+    });
+    
     let result;
     try {
       result = await this.walletService.signAndSendVersionedTransaction(
@@ -300,6 +319,9 @@ export class TraderService {
         transaction,
         async (sig) => {
           await this.tradeRepo.updateTradeStatus(trade.id!, { pending_signature: sig });
+          if (exitAttempt.id) {
+            await this.tradeRepo.updateExitAttempt(exitAttempt.id, { tx_signature: sig });
+          }
         }
       );
     } catch (e: any) {
@@ -308,6 +330,9 @@ export class TraderService {
         last_exit_error: e.message,
         needs_attention: currentAttempts >= 3,
       });
+      if (exitAttempt.id) {
+        await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'FAILED' });
+      }
       throw e;
     }
 
@@ -316,11 +341,18 @@ export class TraderService {
           last_exit_error: result.status === 'FAILED_ONCHAIN' ? `On-chain fail: ${JSON.stringify(result.err)}` : 'Unknown status',
           needs_attention: currentAttempts >= 3,
        });
-       if (result.status === 'FAILED_ONCHAIN') throw new Error('Exit transaction failed on-chain');
-       return; // Unknown status, we keep OPEN and wait for reconciliation
+       if (result.status === 'FAILED_ONCHAIN') {
+         if (exitAttempt.id) await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'FAILED' });
+         throw new Error('Exit transaction failed on-chain');
+       }
+       // UNKNOWN status stays PENDING
+       return; 
     }
 
     // SUCCESS flow
+    if (exitAttempt.id) {
+      await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'SUCCESS' });
+    }
     const signature = result.signature;
     await new Promise((res) => setTimeout(res, 2000));
     const tx = await this.walletService.getParsedTransaction(signature);
@@ -342,21 +374,20 @@ export class TraderService {
     const solReceived = solReceivedLamports > 0 ? solReceivedLamports / 1e9 : 0;
     
     // Fallback if tokenSpentRaw is 0 (failed to parse), use amountLamports
-    const actualTokensSpent = tokenSpentRaw > 0 ? tokenSpentRaw : amountLamports;
-    const newTradeRemainingRaw = Math.max(0, tradeBalanceRaw - actualTokensSpent);
+    const actualTokensSpent = tokenSpentRaw > 0 ? BigInt(tokenSpentRaw) : amountLamportsBigInt;
+    const newTradeRemainingRaw = tradeBalanceRaw > actualTokensSpent ? tradeBalanceRaw - actualTokensSpent : 0n;
     
-    const newStatus = newTradeRemainingRaw <= 0 ? 'CLOSED' : 'PARTIAL_EXIT';
+    const newStatus = newTradeRemainingRaw <= 0n ? 'CLOSED' : 'PARTIAL_EXIT';
     
     // PnL Calculation based on proportional cost
     let realizedPnlSol = trade.realized_pnl_sol ?? 0;
     let pnlPercent = trade.pnl_percent ?? 0;
     
-    if (trade.sol_spent_lamports && trade.token_amount_raw && trade.token_amount_raw > 0) {
+    if (trade.sol_spent_lamports && trade.token_amount_raw && BigInt(trade.token_amount_raw) > 0n) {
       const solSpentLamportsBigInt = BigInt(trade.sol_spent_lamports);
-      const actualTokensSpentBigInt = BigInt(actualTokensSpent);
       const tokenAmountRawBigInt = BigInt(trade.token_amount_raw);
       
-      const costLamports = (solSpentLamportsBigInt * actualTokensSpentBigInt) / tokenAmountRawBigInt;
+      const costLamports = (solSpentLamportsBigInt * actualTokensSpent) / tokenAmountRawBigInt;
       const costSol = Number(costLamports) / 1e9;
       const feeSol = feeLamports / 1e9;
       
@@ -374,7 +405,7 @@ export class TraderService {
       pnl_sol: realizedPnlSol,
       realized_pnl_sol: realizedPnlSol,
       tx_signature: signature,
-      remaining_raw: newTradeRemainingRaw,
+      remaining_raw: Number(newTradeRemainingRaw),
     };
 
     if (newStatus === 'CLOSED') {
@@ -393,6 +424,10 @@ export class TraderService {
     }
 
     await this.tradeRepo.updateTradeStatus(trade.id, updates);
+
+    } finally {
+      await redis.del(lockKey);
+    }
   }
 
   private async assertTradingAllowed(userId: number, side: 'BUY' | 'SELL', isDryRun: boolean): Promise<void> {

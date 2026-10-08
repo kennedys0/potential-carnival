@@ -37,6 +37,7 @@ describe('ReconcileWorker', () => {
       ]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getAllPendingExitAttempts: vi.fn().mockResolvedValue([]),
     };
 
     const mockWalletService: any = {
@@ -64,6 +65,7 @@ describe('ReconcileWorker', () => {
       ]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getAllPendingExitAttempts: vi.fn().mockResolvedValue([]),
     };
 
     const mockWalletService: any = {
@@ -93,9 +95,9 @@ describe('ReconcileWorker', () => {
 
     expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-2', expect.objectContaining({
       status: 'OPEN',
-      remaining_raw: 1000000,
+      remaining_raw: '1000000',
       token_decimals: 6,
-      sol_spent_lamports: 49995000
+      sol_spent_lamports: '49995000'
     }));
   });
 
@@ -107,6 +109,7 @@ describe('ReconcileWorker', () => {
         { id: 'trade-2', user_id: 111, token_mint: 'token-A', remaining_raw: 20 },
       ]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getAllPendingExitAttempts: vi.fn().mockResolvedValue([]),
     };
 
     const mockWalletService: any = {
@@ -123,14 +126,14 @@ describe('ReconcileWorker', () => {
     // Deficit is 15.
     // trade-1 has 10. deduct 10. remaining 0 -> CLOSED
     expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-1', expect.objectContaining({
-      remaining_raw: 0,
+      remaining_raw: '0',
       status: 'CLOSED'
     }));
 
     // Remaining deficit is 5.
     // trade-2 has 20. deduct 5. remaining 15.
     expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-2', expect.objectContaining({
-      remaining_raw: 15,
+      remaining_raw: '15',
       needs_attention: true
     }));
   });

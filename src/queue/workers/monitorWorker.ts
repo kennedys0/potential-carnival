@@ -52,14 +52,14 @@ export function createMonitorWorker(
               return;
            }
 
-           const amountLamports = trade.token_amount_raw;
+           const amountLamports = Number(trade.token_amount_raw);
            const WSOL_MINT = 'So11111111111111111111111111111111111111112';
            const slippageBps = 100; // default for monitoring estimation
            
            try {
              const quote = await jupiterClient.getQuote(trade.token_mint, WSOL_MINT, amountLamports, slippageBps);
              const solToReceive = parseInt(quote.outAmount) / 1e9;
-             const solSpent = (trade.sol_spent_lamports ?? 0) / 1e9;
+             const solSpent = Number(trade.sol_spent_lamports ?? 0) / 1e9;
              
              if (solSpent <= 0) {
                 logger.warn({ positionId }, 'solSpent is 0, cannot calculate PNL');

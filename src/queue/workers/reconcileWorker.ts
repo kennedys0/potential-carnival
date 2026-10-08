@@ -65,10 +65,10 @@ export function createReconcileWorker(
                     await tradeRepo.updateTradeStatus(trade.id!, {
                       status: 'OPEN',
                       tx_signature: signature,
-                      remaining_raw: Number(parseResult.tokenDeltaRaw),
+                      remaining_raw: String(parseResult.tokenDeltaRaw),
                       token_decimals: parseResult.decimals,
-                      sol_spent_lamports: Number(parseResult.solDeltaLamports),
-                      token_amount_raw: Number(parseResult.tokenDeltaRaw),
+                      sol_spent_lamports: String(parseResult.solDeltaLamports),
+                      token_amount_raw: String(parseResult.tokenDeltaRaw),
                       fee_lamports: Number(parseResult.feeLamports),
                       sol_amount: Number(parseResult.solDeltaLamports) / 1e9,
                       token_amount: Number(parseResult.tokenDeltaRaw) / Math.pow(10, parseResult.decimals)
@@ -98,6 +98,46 @@ export function createReconcileWorker(
         }
       } catch (err) {
         logger.error({ err }, 'Failed to fetch pending trades');
+      }
+
+      // 1.5 Reconcile PENDING exit_attempts
+      try {
+        const pendingExits = await tradeRepo.getAllPendingExitAttempts();
+        for (const attempt of pendingExits) {
+          const attemptAgeMs = Date.now() - new Date(attempt.created_at || Date.now()).getTime();
+          
+          if (!attempt.tx_signature) {
+             // Failed before signature was recorded, or crashed
+             if (attemptAgeMs > 60000) { // 60 seconds timeout
+                await tradeRepo.updateExitAttempt(attempt.id!, { status: 'FAILED' });
+                logger.info({ attemptId: attempt.id }, 'Reconciled PENDING exit attempt to FAILED (timeout without signature)');
+             }
+             continue;
+          }
+          
+          const connection = walletService.getConnection();
+          const statusRes = await connection.getSignatureStatuses([attempt.tx_signature!], { searchTransactionHistory: true });
+          const status = statusRes.value[0];
+          
+          if (status) {
+             if (status.err) {
+               await tradeRepo.updateExitAttempt(attempt.id!, { status: 'FAILED' });
+               logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to FAILED on-chain');
+             } else if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+               await tradeRepo.updateExitAttempt(attempt.id!, { status: 'SUCCESS' });
+               // The actual trade update should be done by closePosition normally, or by deficit reconciliation below if it crashed before updating trades table
+               logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to SUCCESS');
+             }
+          } else {
+             // If signature not found and it's old enough, mark failed
+             if (attemptAgeMs > 120000) {
+               await tradeRepo.updateExitAttempt(attempt.id!, { status: 'FAILED' });
+               logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to FAILED (signature not found)');
+             }
+          }
+        }
+      } catch (err) {
+         logger.error({ err }, 'Failed to reconcile exit attempts');
       }
 
       // 2. Compare token balance for OPEN trades
@@ -147,13 +187,13 @@ export function createReconcileWorker(
                    const newRemaining = currentRemaining - toDeduct;
                    deficit -= toDeduct;
                    
-                   const updates: any = { remaining_raw: Number(newRemaining), needs_attention: true };
-                   if (newRemaining <= 0) {
+                   const updates: any = { remaining_raw: String(newRemaining), needs_attention: true };
+                   if (newRemaining <= 0n) {
                      updates.status = 'CLOSED';
                      updates.closed_at = new Date().toISOString();
                    }
                    await tradeRepo.updateTradeStatus(t.id!, updates);
-                   logger.info({ tradeId: t.id, deducted: toDeduct, newRemaining }, 'Reconciled missing tokens for trade');
+                   logger.info({ tradeId: t.id, deducted: String(toDeduct), newRemaining: String(newRemaining) }, 'Reconciled missing tokens for trade');
                  }
                }
             }

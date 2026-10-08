@@ -6,7 +6,7 @@ import { AnalyzerService } from '../analyzer/analyzerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
-import { liveFeedSubscribers } from './trendScanner';
+import { liveFeedSubscribers } from './liveFeedState';
 
 export class SniperScanner {
   private intervalId?: NodeJS.Timeout;

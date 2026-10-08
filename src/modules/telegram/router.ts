@@ -12,6 +12,7 @@ import { getRedisConnection } from '../../queue/connection';
 import { handleStartCommand } from './handlers/startHandler';
 import { currencyService } from '../../utils/currencyService';
 import { getEnv } from '../../config/env';
+import { liveFeedSubscribers } from '../scanner/liveFeedState';
 import {
   handleWalletMenu,
   handleWalletRefresh,
@@ -206,10 +207,6 @@ export function registerBotRoutes(
   // Command /livefeed
   bot.command('livefeed', async (ctx) => {
     if (!ctx.from) return;
-    
-    // We import liveFeedSubscribers dynamically because router.ts is imported in index.ts which imports trendScanner.ts.
-    // To avoid circular dependency issues, we can just require it
-    const { liveFeedSubscribers } = await import('../scanner/trendScanner.js');
     
     if (liveFeedSubscribers.has(ctx.from.id)) {
       liveFeedSubscribers.delete(ctx.from.id);

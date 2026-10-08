@@ -20,7 +20,8 @@ export class RuleEvaluator {
     ai: AiAnalysis | null,
     safetyParams: AutopilotSafetyFilterParams,
     aiParams: AutopilotAiCriteriaParams,
-    liquidityUsd: number
+    liquidityUsd: number,
+    indicators?: any
   ): {
     passed: boolean;
     action: 'BUY' | 'SKIP' | 'REJECT';
@@ -69,7 +70,34 @@ export class RuleEvaluator {
       if (aiParams.requireAi !== false) {
         rulesFailed.push('AI analysis unavailable');
       } else {
-        rulesPassed.push('AI skipped (not required)');
+        // Fallback mode: Use technical indicators instead of blindly passing
+        if (indicators) {
+           let fallbackPassed = true;
+           if (indicators.ema9 <= indicators.ema21) {
+              rulesFailed.push(`Fallback: EMA9 (${indicators.ema9.toFixed(4)}) <= EMA21 (${indicators.ema21.toFixed(4)})`);
+              fallbackPassed = false;
+           } else {
+              rulesPassed.push('Fallback: EMA9 > EMA21 (Bullish trend)');
+           }
+           if (indicators.rsi14 >= 70 || indicators.rsi14 <= 30) {
+              rulesFailed.push(`Fallback: RSI14 (${indicators.rsi14.toFixed(2)}) out of safe zone (30-70)`);
+              fallbackPassed = false;
+           } else {
+              rulesPassed.push('Fallback: RSI14 is safe');
+           }
+           if (indicators.volumeSpikeRatio < 1.5) {
+              rulesFailed.push(`Fallback: Volume Spike (${indicators.volumeSpikeRatio.toFixed(1)}x) < 1.5x`);
+              fallbackPassed = false;
+           } else {
+              rulesPassed.push('Fallback: Volume Spike >= 1.5x');
+           }
+           
+           if (!fallbackPassed) {
+              rulesFailed.push('Fallback indicators criteria not met');
+           }
+        } else {
+           rulesPassed.push('AI skipped (not required), no indicators available');
+        }
       }
     } else {
       if (ai.verdict !== 'BUY') {

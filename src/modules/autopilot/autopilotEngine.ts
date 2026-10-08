@@ -140,7 +140,7 @@ export class AutopilotEngine {
       aiParams.requireAi = appSettings.SNIPER_PARAMS.REQUIRE_AI;
     }
 
-    const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd);
+    const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd, rawSnapshot?.indicators);
 
     await this.logDecision(userId, tokenMint, tokenSymbol, evalResult.action, security, ai, evalResult.rulesPassed, evalResult.rulesFailed, evalResult.reason, rawSnapshot);
 

@@ -149,6 +149,21 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
         if (minTp <= currentPrice) {
           throw new Error('Inconsistent LLM output: TP <= Entry');
         }
+        
+        // Probabilistic Calibration & Hallucination Check
+        const calculatedRisk = currentPrice - analysis.stop_loss_usd;
+        const calculatedReward = minTp - currentPrice;
+        const actualRR = calculatedReward / calculatedRisk;
+        
+        if (Math.abs(analysis.risk_reward_ratio - actualRR) > 1.0) {
+           logger.warn({ claimedRR: analysis.risk_reward_ratio, actualRR }, 'AI Hallucination detected in R:R math. Calibrating...');
+           analysis.confidence = Math.max(0, analysis.confidence - 20);
+           analysis.risk_reward_ratio = actualRR;
+        }
+        
+        if (analysis.confidence > 90) {
+           analysis.confidence = 90; // Cap overconfidence
+        }
       }
 
       return analysis;

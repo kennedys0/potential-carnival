@@ -16,7 +16,7 @@ export class ScannerService {
   }
 
   async fetchNewPairs(): Promise<any[]> {
-    return this.dexScreener.getLatestTokenProfiles();
+    return this.geckoTerminal.getNewPools('solana', 1);
   }
 
   async getCandles(

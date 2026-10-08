@@ -139,7 +139,10 @@ export class WalletService {
     );
 
     try {
-      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+      const secureUrl = env.SECURE_WITHDRAWAL_RPC_URL || env.SOLANA_RPC_URL;
+      const withdrawalConnection = new Connection(secureUrl, 'confirmed');
+
+      const { blockhash, lastValidBlockHeight } = await withdrawalConnection.getLatestBlockhash('confirmed');
 
       // Calculate fee
       const tempAmount = amountSol === 'MAX' ? 1000 : Math.floor(amountSol * LAMPORTS_PER_SOL);
@@ -157,7 +160,7 @@ export class WalletService {
         instructions: tempInstructions,
       }).compileToV0Message();
       
-      const fee = await this.connection.getFeeForMessage(message, 'confirmed');
+      const fee = await withdrawalConnection.getFeeForMessage(message, 'confirmed');
       const estimatedFee = fee.value ?? 5000;
       
       let transferLamports = 0;
@@ -199,7 +202,7 @@ export class WalletService {
 
       const transaction = new VersionedTransaction(finalMessage);
 
-      const result = await TxSender.sendAndConfirm(this.connection, transaction, [keypair]);
+      const result = await TxSender.sendAndConfirm(withdrawalConnection, transaction, [keypair]);
       
       if (result.status === 'FAILED_ONCHAIN') {
         throw new Error(`Withdrawal gagal di on-chain: ${JSON.stringify(result.err)}`);

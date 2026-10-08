@@ -20,10 +20,10 @@ export interface TradeRecord {
   status: 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
   created_at?: string;
   closed_at?: string | null;
-  token_amount_raw?: number | null;
+  token_amount_raw?: string | number | null;
   token_decimals?: number | null;
-  sol_spent_lamports?: number | null;
-  sol_received_lamports?: number | null;
+  sol_spent_lamports?: string | number | null;
+  sol_received_lamports?: string | number | null;
   sol_usd_at_fill?: number | null;
   failure_reason?: string | null;
   idempotency_key?: string | null;
@@ -31,11 +31,24 @@ export interface TradeRecord {
   exit_attempts?: number;
   last_exit_error?: string | null;
   needs_attention?: boolean;
-  remaining_raw?: number | null;
+  remaining_raw?: string | number | null;
   realized_pnl_sol?: number | null;
   blockhash?: string | null;
   last_valid_block_height?: number | null;
   pending_since?: string | null;
+}
+
+export interface ExitAttemptRecord {
+  id?: string;
+  trade_id: string;
+  percentage: number;
+  tokens_amount_raw: string | number;
+  status: 'PENDING' | 'CONFIRMING' | 'SUCCESS' | 'FAILED';
+  tx_signature?: string | null;
+  idempotency_key: string;
+  worker_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export class TradeRepository {
@@ -142,4 +155,46 @@ export class TradeRepository {
 
     if (error) throw new Error(`Failed to updateTradeStatus: ${error.message}`);
   }
+
+  async getPendingExitAttempts(tradeId: string): Promise<ExitAttemptRecord[]> {
+    const { data, error } = await this.db
+      .from('exit_attempts')
+      .select('*')
+      .eq('trade_id', tradeId)
+      .eq('status', 'PENDING');
+      
+    if (error) throw new Error(`Failed to getPendingExitAttempts: ${error.message}`);
+    return (data || []) as ExitAttemptRecord[];
+  }
+
+  async getAllPendingExitAttempts(): Promise<ExitAttemptRecord[]> {
+    const { data, error } = await this.db
+      .from('exit_attempts')
+      .select('*')
+      .eq('status', 'PENDING');
+      
+    if (error) throw new Error(`Failed to getAllPendingExitAttempts: ${error.message}`);
+    return (data || []) as ExitAttemptRecord[];
+  }
+
+  async createExitAttempt(attempt: ExitAttemptRecord): Promise<ExitAttemptRecord> {
+    const { data, error } = await this.db
+      .from('exit_attempts')
+      .insert(attempt)
+      .select()
+      .single();
+
+    if (error) throw new Error(`Failed to createExitAttempt: ${error.message}`);
+    return data as ExitAttemptRecord;
+  }
+
+  async updateExitAttempt(id: string, updates: Partial<ExitAttemptRecord>): Promise<void> {
+    const { error } = await this.db
+      .from('exit_attempts')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) throw new Error(`Failed to updateExitAttempt: ${error.message}`);
+  }
 }
+

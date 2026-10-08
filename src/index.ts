@@ -26,6 +26,7 @@ import { registerBotRoutes } from './modules/telegram/router';
 import { TrendScanner } from './modules/scanner/trendScanner';
 import { SniperScanner } from './modules/scanner/sniperScanner';
 import { UserStateService } from './modules/user/userStateService';
+import { liveFeedSubscribers } from './modules/scanner/liveFeedState';
 
 async function main() {
   logger.info('Initializing Solana Scalping Bot services...');
@@ -131,7 +132,6 @@ async function main() {
 
     // Auto-subscribe all active autopilot users to live feed on startup
     const activeConfigs = await autopilotRepo.getAllActiveConfigs();
-    const { liveFeedSubscribers } = await import('./modules/scanner/trendScanner.js');
     activeConfigs.forEach(c => liveFeedSubscribers.add(c.user_id));
   }
 

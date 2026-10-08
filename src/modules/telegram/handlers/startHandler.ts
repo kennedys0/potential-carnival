@@ -1,4 +1,4 @@
-import { Context, InlineKeyboard } from 'grammy';
+import { Context, InlineKeyboard, Keyboard } from 'grammy';
 import { UserRepository } from '../../../database/repositories/userRepository';
 import { WalletService } from '../../wallet/walletService';
 
@@ -37,8 +37,7 @@ Gunakan tombol di bawah untuk navigasi cepat atau ketik /scan &lt;CA&gt; untuk m
     .text('⚙️ Settings', 'menu_settings')
     .text('❓ Bantuan', 'menu_help');
 
-  // Import Keyboard dynamically or from grammy if not imported
-  const { Keyboard } = await import('grammy');
+  // Persistent menu using regular Keyboard
   const persistentKeyboard = new Keyboard()
     .text('/scan').text('/autopilot').text('/positions').text('/livefeed')
     .row()
