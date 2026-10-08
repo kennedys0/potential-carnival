@@ -31,6 +31,7 @@ export interface DecisionLogRecord {
   token_mint: string;
   token_symbol?: string | null;
   action: 'BUY' | 'SKIP' | 'REJECT';
+  strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER';
   safety_score: number;
   safety_flags?: string[] | null;
   ai_verdict?: string | null;

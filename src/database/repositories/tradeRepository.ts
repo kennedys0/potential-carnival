@@ -21,6 +21,8 @@ export interface TradeRecord {
   pnl_sol?: number | null;
   pnl_percent?: number | null;
   status: 'RESERVED' | 'SIGNED' | 'BROADCAST_ATTEMPTED' | 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
+  strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER';
+  exit_policy_snapshot?: Record<string, unknown> | null;
   created_at?: string;
   closed_at?: string | null;
   token_amount_raw?: string | number | null;

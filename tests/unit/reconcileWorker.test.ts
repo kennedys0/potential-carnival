@@ -32,9 +32,10 @@ describe('ReconcileWorker', () => {
 
   it('reconciles PENDING trade to FAILED if on-chain failed', async () => {
     const mockTradeRepo: any = {
-      getPendingTradesWithSignature: vi.fn().mockResolvedValue([
+      getInflightTradesWithSignature: vi.fn().mockResolvedValue([
         { id: 'trade-1', pending_signature: 'sig-1' }
       ]),
+      getReservedTradesWithoutSignature: vi.fn().mockResolvedValue([]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
       getAllPendingExitAttempts: vi.fn().mockResolvedValue([]),
@@ -45,7 +46,8 @@ describe('ReconcileWorker', () => {
         getSignatureStatuses: vi.fn().mockResolvedValue({
           value: [{ err: { InstructionError: [0, 'error'] } }]
         })
-      })
+      }),
+      getPendingWithdrawals: vi.fn().mockResolvedValue([])
     };
 
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
@@ -60,9 +62,10 @@ describe('ReconcileWorker', () => {
 
   it('reconciles PENDING trade to OPEN completely if on-chain confirmed', async () => {
     const mockTradeRepo: any = {
-      getPendingTradesWithSignature: vi.fn().mockResolvedValue([
+      getInflightTradesWithSignature: vi.fn().mockResolvedValue([
         { id: 'trade-2', pending_signature: 'sig-2', user_id: 1, token_mint: 'token-A' }
       ]),
+      getReservedTradesWithoutSignature: vi.fn().mockResolvedValue([]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
       atomicReconcileEntry: vi.fn().mockResolvedValue(true),
@@ -86,7 +89,8 @@ describe('ReconcileWorker', () => {
           postTokenBalances: [{ mint: 'token-A', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
         },
         transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'token-A'] } }
-      })
+      }),
+      getPendingWithdrawals: vi.fn().mockResolvedValue([])
     };
 
 
@@ -104,7 +108,8 @@ describe('ReconcileWorker', () => {
 
   it('deducts remaining_raw correctly when token deficit is found (FIFO)', async () => {
     const mockTradeRepo: any = {
-      getPendingTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getInflightTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getReservedTradesWithoutSignature: vi.fn().mockResolvedValue([]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([
         { id: 'trade-1', user_id: 111, token_mint: 'token-A', remaining_raw: 10 },
         { id: 'trade-2', user_id: 111, token_mint: 'token-A', remaining_raw: 20 },
@@ -134,7 +139,8 @@ describe('ReconcileWorker', () => {
   });
   it('reconciles PENDING exit attempt correctly after worker crash', async () => {
     const mockTradeRepo: any = {
-      getPendingTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getInflightTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getReservedTradesWithoutSignature: vi.fn().mockResolvedValue([]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
       getAllPendingExitAttempts: vi.fn().mockResolvedValue([
@@ -164,7 +170,8 @@ describe('ReconcileWorker', () => {
           postTokenBalances: [{ mint: 'token-A', owner: '1111', uiTokenAmount: { amount: '0', decimals: 6 } }]
         },
         transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'token-A'] } }
-      })
+      }),
+      getPendingWithdrawals: vi.fn().mockResolvedValue([])
     };
 
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);

@@ -158,4 +158,35 @@ describe('MonitorWorker', () => {
       100
     );
   });
+  it('uses sniper exit snapshot instead of Trending settings', async () => {
+    const trade = {
+      id: 'sniper-position', token_mint: 'tokenS', token_symbol: 'SNIP',
+      status: 'OPEN', strategy: 'NEW_TOKEN_SNIPER', is_dry_run: true,
+      entry_price_usd: 1, highest_pnl_percent: 0,
+      exit_policy_snapshot: {
+        enabled: true, tp1_percent: 20, tp2_percent: 20, sl_percent: 10,
+        trailing_stop_enabled: false,
+      },
+    };
+    const tradeRepo: any = {
+      getOpenTradesByUserId: vi.fn().mockResolvedValue([trade]),
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const traderService: any = { closePosition: vi.fn().mockResolvedValue('SUCCESS') };
+    const scannerService: any = {
+      scanTokenByAddress: vi.fn().mockResolvedValue({ priceUsd: '1.16' }),
+    };
+    const autopilotRepo: any = {
+      getOrCreateConfig: vi.fn().mockResolvedValue({ exit_params: { tp1_percent: 10, tp2_percent: 15 } }),
+    };
+    const worker: any = createMonitorWorker(tradeRepo, traderService, scannerService,
+      autopilotRepo, {}, mockBotApi);
+    await worker.processor({ data: { positionId: trade.id, userId: 111, tokenMint: trade.token_mint } });
+    expect(traderService.closePosition).not.toHaveBeenCalled();
+    scannerService.scanTokenByAddress.mockResolvedValue({ priceUsd: '1.21' });
+    await worker.processor({ data: { positionId: trade.id, userId: 111, tokenMint: trade.token_mint } });
+    expect(traderService.closePosition).toHaveBeenCalledWith(trade, 1.21, 100);
+    expect(autopilotRepo.getOrCreateConfig).not.toHaveBeenCalled();
+  });
+
 });

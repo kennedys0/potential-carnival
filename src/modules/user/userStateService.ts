@@ -7,6 +7,8 @@ import { logger } from '../../utils/logger';
 
 export interface AutopilotStateMetrics {
   openPositionsCount: number;
+  sniperPositionsCount: number;
+  trendingPositionsCount: number;
   availableBalanceSol: number;
   dailyLossSol: number;
   consecutiveLosses: number;
@@ -30,12 +32,14 @@ export class UserStateService {
     // 1. Get Open Positions
     // Actually we should get from positions table, but let's assume we can get from trades for now
     // Since Phase 2/3 will migrate to PENDING/OPEN/PARTIAL_EXIT.
-    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING', 'RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED']);
+    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED', 'PENDING', 'OPEN', 'PARTIAL_EXIT']);
     
     // We no longer assume PENDING trades have failed based on time. 
     // They are considered active exposure until definitively FAILED.
     const openTrades = allActiveTrades;
     const openPositionsCount = openTrades.length;
+    const sniperPositionsCount = openTrades.filter(t => t.strategy === 'NEW_TOKEN_SNIPER').length;
+    const trendingPositionsCount = openTrades.filter(t => t.source === 'AUTOPILOT' && t.strategy !== 'NEW_TOKEN_SNIPER').length;
     const heldMints = openTrades.map((t) => t.token_mint);
 
     // 2. Get Balance
@@ -45,7 +49,7 @@ export class UserStateService {
     // Sum up unconfirmed SOL exposures (entries that might land)
     let unconfirmedExposureSol = 0;
     for (const t of openTrades) {
-      if (['PENDING', 'RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED'].includes(t.status) && t.sol_amount) {
+      if (['RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED', 'PENDING'].includes(t.status) && t.sol_amount) {
         unconfirmedExposureSol += t.sol_amount;
       }
     }
@@ -93,6 +97,8 @@ export class UserStateService {
 
     return {
       openPositionsCount,
+      sniperPositionsCount,
+      trendingPositionsCount,
       availableBalanceSol,
       dailyLossSol,
       consecutiveLosses,

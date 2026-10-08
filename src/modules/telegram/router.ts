@@ -2,6 +2,7 @@ import { logger } from '../../utils/logger';
 import { Bot, InlineKeyboard } from 'grammy';
 import { UserRepository } from '../../database/repositories/userRepository';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
+import { SniperRepository } from '../../database/repositories/sniperRepository';
 import { TradeRepository } from '../../database/repositories/tradeRepository';
 import { WalletService } from '../wallet/walletService';
 import { ScannerService } from '../scanner/scannerService';
@@ -27,11 +28,12 @@ import { handleScanCommand } from './handlers/scanHandler';
 import {
   handleAutopilotMenu,
   handleAutopilotToggle,
-  handleAutopilotPreset,
+  handleSniperToggle,
   handleAutopilotLogs,
   handleAutopilotStats,
 } from './handlers/autopilotHandler';
 import { handleSettingsMenu } from './handlers/settingsHandler';
+import { handleSniperSettings } from './handlers/sniperHandler';
 import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsHandler';
 import { handleHelpMenu } from './handlers/helpHandler';
 import { handleReportCommand } from './handlers/reportHandler';
@@ -40,12 +42,18 @@ import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
 export interface BotRouteServices {
   userRepo: UserRepository;
   autopilotRepo: AutopilotRepository;
+  sniperRepo: SniperRepository;
   walletService: WalletService;
   scannerService: ScannerService;
   securityService: SecurityFilterService;
   analyzerService: AnalyzerService;
   tradeRepo: TradeRepository;
   traderService: TraderService;
+}
+
+function cyclePreset(current: number, presets: readonly number[]): number {
+  const index = presets.indexOf(Number(current));
+  return presets[(index + 1) % presets.length];
 }
 
 export function registerBotRoutes(
@@ -69,7 +77,7 @@ export function registerBotRoutes(
 
   // Command /autopilot
   bot.command('autopilot', async (ctx) => {
-    await handleAutopilotMenu(ctx, services.autopilotRepo);
+    await handleAutopilotMenu(ctx, services.autopilotRepo, services.sniperRepo);
   });
 
   // Command /settings
@@ -266,10 +274,13 @@ export function registerBotRoutes(
       await handleWalletMenu(ctx, services.walletService);
     } else if (data === 'menu_autopilot') {
       await ctx.answerCallbackQuery();
-      await handleAutopilotMenu(ctx, services.autopilotRepo);
-    } else if (data === 'menu_settings') {
+      await handleAutopilotMenu(ctx, services.autopilotRepo, services.sniperRepo);
+    } else if (data === 'menu_settings' || data === 'autopilot_settings') {
       await ctx.answerCallbackQuery();
       await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'sniper_settings') {
+      await ctx.answerCallbackQuery();
+      await handleSniperSettings(ctx, services.sniperRepo);
     } else if (data === 'menu_positions') {
       await ctx.answerCallbackQuery();
       await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
@@ -364,7 +375,9 @@ export function registerBotRoutes(
         });
         return;
       }
-      await handleAutopilotToggle(ctx, services.autopilotRepo);
+      await handleAutopilotToggle(ctx, services.autopilotRepo, services.sniperRepo);
+    } else if (data === 'sniper_toggle') {
+      await handleSniperToggle(ctx, services.sniperRepo, services.autopilotRepo);
     } else if (data === 'autopilot_toggle_trending') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
@@ -373,22 +386,13 @@ export function registerBotRoutes(
         safety_params: { ...cfg.safety_params, enable_trending: !trendingEnabled },
       });
       await ctx.answerCallbackQuery({ text: `Trending Scanner ${!trendingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
-      await handleAutopilotMenu(ctx, services.autopilotRepo);
+      await handleAutopilotMenu(ctx, services.autopilotRepo, services.sniperRepo);
     } else if (data === 'autopilot_toggle_sniper') {
       if (!ctx.from) return;
-      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-      const sniperEnabled = (cfg.safety_params as any)?.enable_sniper !== false;
-      await services.autopilotRepo.updateConfig(ctx.from.id, {
-        safety_params: { ...cfg.safety_params, enable_sniper: !sniperEnabled },
-      });
-      await ctx.answerCallbackQuery({ text: `Sniper Scanner ${!sniperEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
-      await handleAutopilotMenu(ctx, services.autopilotRepo);
-    } else if (data === 'preset_conservative') {
-      await handleAutopilotPreset(ctx, 'CONSERVATIVE', services.autopilotRepo);
-    } else if (data === 'preset_moderate') {
-      await handleAutopilotPreset(ctx, 'MODERATE', services.autopilotRepo);
-    } else if (data === 'preset_aggressive') {
-      await handleAutopilotPreset(ctx, 'AGGRESSIVE', services.autopilotRepo);
+      const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+      await services.sniperRepo.updateConfig(ctx.from.id, { enabled: !cfg.enabled });
+      await ctx.answerCallbackQuery({ text: `Sniper ${!cfg.enabled ? 'Enabled' : 'Disabled'}` });
+      await handleAutopilotMenu(ctx, services.autopilotRepo, services.sniperRepo);
     } else if (data === 'autopilot_logs') {
       await ctx.answerCallbackQuery();
       await handleAutopilotLogs(ctx, services.autopilotRepo);
@@ -398,7 +402,70 @@ export function registerBotRoutes(
     }
 
     // 4. Settings Actions
-    else if (data === 'settings_toggle_mode') {
+    else if (data === 'sniper_settings_mode') {
+      if (!ctx.from) return;
+      const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+      const newMode = cfg.trading_mode === 'PAPER' ? 'LIVE' : 'PAPER';
+
+      if (newMode === 'LIVE' && !getEnv().LIVE_TRADING_ENABLED) {
+        await ctx.answerCallbackQuery({
+          text: '⚠️ LIVE TRADING saat ini dinonaktifkan secara global demi keamanan.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      await services.sniperRepo.updateConfig(ctx.from.id, { trading_mode: newMode });
+      await ctx.answerCallbackQuery({
+        text: `Mode diubah ke: ${newMode === 'PAPER' ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}`,
+      });
+      await handleSniperSettings(ctx, services.sniperRepo);
+    } else if (data === 'sniper_settings_amount') {
+      if (!ctx.from) return;
+      const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+      const current = cfg.buy_amount_sol;
+      const next = cyclePreset(current, [0.005, 0.01, 0.02, 0.03]);
+      await services.sniperRepo.updateConfig(ctx.from.id, { buy_amount_sol: next });
+      await ctx.answerCallbackQuery({ text: `Buy Amount diubah ke ${next} SOL` });
+      await handleSniperSettings(ctx, services.sniperRepo);
+    } else if (data === 'sniper_settings_tp') {
+       if (!ctx.from) return;
+       const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+       const current = cfg.take_profit_percent;
+       const next = cyclePreset(current, [10, 20, 25, 50, 100]);
+       await services.sniperRepo.updateConfig(ctx.from.id, { take_profit_percent: next });
+       await ctx.answerCallbackQuery({ text: `Take Profit diubah ke ${next}%` });
+       await handleSniperSettings(ctx, services.sniperRepo);
+    } else if (data === 'sniper_settings_sl') {
+       if (!ctx.from) return;
+       const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+       const current = cfg.stop_loss_percent;
+       const next = cyclePreset(current, [5, 8, 10, 15, 20]);
+       await services.sniperRepo.updateConfig(ctx.from.id, { stop_loss_percent: next });
+       await ctx.answerCallbackQuery({ text: `Stop Loss diubah ke ${next}%` });
+       await handleSniperSettings(ctx, services.sniperRepo);
+    } else if (data.startsWith('sniper_settings_') && [
+      'sniper_settings_positions', 'sniper_settings_daily_buys', 'sniper_settings_daily_budget',
+      'sniper_settings_pool_age', 'sniper_settings_liquidity', 'sniper_settings_safety',
+      'sniper_settings_slippage',
+    ].includes(data)) {
+      if (!ctx.from) return;
+      const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+      const mapping: Record<string, { field: keyof typeof cfg; presets: number[] }> = {
+        sniper_settings_positions: {field:'max_active_positions',presets:[1,2,3]},
+        sniper_settings_daily_buys: {field:'max_buys_per_day',presets:[1,2,3]},
+        sniper_settings_daily_budget: {field:'max_daily_entry_budget_sol',presets:[0.01,0.02,0.03,0.05,0.1]},
+        sniper_settings_pool_age: {field:'max_pool_age_minutes',presets:[1,3,5,10]},
+        sniper_settings_liquidity: {field:'min_liquidity_usd',presets:[5000,10000,25000,50000]},
+        sniper_settings_safety: {field:'minimum_safety_score',presets:[70,80,90,95]},
+        sniper_settings_slippage: {field:'max_slippage_bps',presets:[50,100,150,200]},
+      };
+      const { field, presets } = mapping[data];
+      const next = cyclePreset(Number(cfg[field]),presets);
+      await services.sniperRepo.updateConfig(ctx.from.id, { [field]: next });
+      await ctx.answerCallbackQuery({ text: `${field} set to ${next}` });
+      await handleSniperSettings(ctx, services.sniperRepo);
+    } else if (data === 'settings_toggle_mode') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
       const newMode = cfg.mode === 'PAPER' ? 'LIVE' : 'PAPER';
@@ -458,21 +525,18 @@ export function registerBotRoutes(
     } else if (data === 'settings_toggle_trending') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-      const trendingEnabled = (cfg.safety_params as any)?.enable_trending !== false;
       await services.autopilotRepo.updateConfig(ctx.from.id, {
-        safety_params: { ...cfg.safety_params, enable_trending: !trendingEnabled },
+        is_active: !cfg.is_active,
+        safety_params: { ...cfg.safety_params, enable_trending: !cfg.is_active },
       });
-      await ctx.answerCallbackQuery({ text: `Trending Scanner ${!trendingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
-      await handleSettingsMenu(ctx, services.autopilotRepo);
+      await ctx.answerCallbackQuery({ text: `Trending ${!cfg.is_active ? 'Enabled' : 'Disabled'}` });
+      await handleAutopilotMenu(ctx, services.autopilotRepo, services.sniperRepo);
     } else if (data === 'settings_toggle_sniper') {
       if (!ctx.from) return;
-      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-      const sniperEnabled = (cfg.safety_params as any)?.enable_sniper !== false;
-      await services.autopilotRepo.updateConfig(ctx.from.id, {
-        safety_params: { ...cfg.safety_params, enable_sniper: !sniperEnabled },
-      });
-      await ctx.answerCallbackQuery({ text: `Sniper Scanner ${!sniperEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
-      await handleSettingsMenu(ctx, services.autopilotRepo);
+      const cfg = await services.sniperRepo.getOrCreateConfig(ctx.from.id);
+      await services.sniperRepo.updateConfig(ctx.from.id, { enabled: !cfg.enabled });
+      await ctx.answerCallbackQuery({ text: `Sniper ${!cfg.enabled ? 'Enabled' : 'Disabled'}` });
+      await handleSniperSettings(ctx, services.sniperRepo);
     }
 
     // 5. Token Scan Actions

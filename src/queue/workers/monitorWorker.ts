@@ -5,6 +5,8 @@ import { TradeRepository } from '../../database/repositories/tradeRepository';
 import { TraderService } from '../../modules/trader/traderService';
 import { ScannerService } from '../../modules/scanner/scannerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
+import { SniperRepository } from '../../database/repositories/sniperRepository';
+import { sniperExitPolicy } from '../../modules/autopilot/strategyRisk';
 import { logger } from '../../utils/logger';
 import { JupiterClient } from '../../modules/trader/jupiterClient';
 import { appSettings } from '../../config/settings';
@@ -15,7 +17,8 @@ export function createMonitorWorker(
   scannerService: ScannerService,
   autopilotRepo: AutopilotRepository,
   jupiterClient: JupiterClient,
-  botApi: any
+  botApi: any,
+  sniperRepo?: SniperRepository
 ) {
   const redis = getRedisConnection();
 
@@ -32,7 +35,19 @@ export function createMonitorWorker(
           return;
         }
 
-        const config = await autopilotRepo.getOrCreateConfig(userId);
+        // Use immutable per-position exit policy, not current unrelated strategy settings.
+        // Legacy sniper positions without a snapshot use Sniper settings, NEVER Trending.
+        let exitParams: Record<string, any>;
+        if (trade.exit_policy_snapshot) {
+          exitParams = trade.exit_policy_snapshot;
+        } else if (trade.strategy === 'NEW_TOKEN_SNIPER') {
+          if (!sniperRepo) throw new Error('Missing sniper repository for legacy position exit policy');
+          const sniperConfig = await sniperRepo.getOrCreateConfig(userId);
+          exitParams = sniperExitPolicy(sniperConfig);
+        } else {
+          const config = await autopilotRepo.getOrCreateConfig(userId);
+          exitParams = (config.exit_params as Record<string, any>) ?? {};
+        }
         
         // Get current price
         let pnlPercent = 0;
@@ -91,7 +106,7 @@ export function createMonitorWorker(
         }
 
         // Take Profit & Stop Loss logic
-        const exitParams = (config.exit_params as any) || {};
+        if (exitParams.enabled === false) return;
         const tp1Percent = exitParams.tp1_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP1_PERCENT;
         const tp2Percent = exitParams.tp2_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP2_PERCENT;
         const slPercent = exitParams.sl_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_SL_PERCENT;

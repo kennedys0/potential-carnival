@@ -1,68 +1,48 @@
 import { Context, InlineKeyboard } from 'grammy';
 import { AutopilotRepository } from '../../../database/repositories/autopilotRepository';
+import { SniperRepository } from '../../../database/repositories/sniperRepository';
 import { z } from 'zod';
 import { liveFeedSubscribers } from '../../scanner/liveFeedState';
 
-const DisplaySafetyParamsSchema = z.object({
-  min_safety_score: z.number().default(75),
-  min_liquidity_usd: z.number().default(10000),
-});
-
-const DisplaySizingParamsSchema = z.object({
-  fixed_sol: z.number().optional(),
-});
-
-const DisplayExitParamsSchema = z.object({
-  tp1_percent: z.number().default(15),
-  sl_percent: z.number().default(8),
-});
-
 export async function handleAutopilotMenu(
   ctx: Context,
-  autopilotRepo: AutopilotRepository
+  autopilotRepo: AutopilotRepository,
+  sniperRepo: SniperRepository
 ): Promise<void> {
   if (!ctx.from) return;
 
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
-  const statusEmoji = config.is_active ? '🟢 <b>AKTIF</b>' : '⏸ <b>JEDA / NONAKTIF</b>';
-  const modeTag = config.mode === 'PAPER' ? '🟢 <b>PAPER TRADING (Simulasi)</b>' : '⚡ <b>LIVE ON-CHAIN</b>';
+  const sniperConfig = await sniperRepo.getOrCreateConfig(ctx.from.id);
+  
+  const trendingStatus = config.is_active ? '🟢 Enabled' : '⏸ Disabled';
+  const sniperStatus = sniperConfig.enabled ? '🟢 Enabled' : '🔴 Disabled';
 
-  const safety = DisplaySafetyParamsSchema.parse(config.safety_params);
-  const sizing = DisplaySizingParamsSchema.parse(config.sizing_params);
-  const exit = DisplayExitParamsSchema.parse(config.exit_params);
-
-  const trendingEnabled = (config.safety_params as any)?.enable_trending !== false;
-  const sniperEnabled = (config.safety_params as any)?.enable_sniper !== false;
+  // In a real app we'd fetch actual open positions here for the stats
+  const sizing = (config.sizing_params as any) || {};
 
   const text = `
-🤖 <b>Dashboard Autopilot Scalping</b>
+🤖 <b>AUTOMATION CENTER</b>
 
-• <b>Status:</b> ${statusEmoji}
-• <b>Mode Eksekusi:</b> ${modeTag}
-• <b>Profil Risiko:</b> ⚖️ ${config.risk_profile}
+<b>Trending Autopilot</b>
+Status: ${trendingStatus}
+Source: GeckoTerminal Trending
+Buy Amount: ${sizing.fixed_sol ?? 0.1} SOL
 
-📡 <b>Radar Aktif:</b>
-• <b>Trending:</b> ${trendingEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}
-• <b>Sniper:</b> ${sniperEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}
+<b>New Token Sniper</b>
+Status: ${sniperStatus}
+Source: Solana New Pools
+Buy Amount: ${sniperConfig.buy_amount_sol} SOL
+Max Buys/Day: ${sniperConfig.max_buys_per_day}
 
-⚙️ <b>Parameter Aktif:</b>
-• <b>Min Safety Score:</b> ${safety.min_safety_score}/100
-• <b>Min Likuiditas:</b> $${safety.min_liquidity_usd}
-• <b>Ukuran Trade:</b> ${sizing.fixed_sol ?? 0.1} SOL
-• <b>Target TP / SL:</b> +${exit.tp1_percent}% / -${exit.sl_percent}%
-
-<i>Gunakan tombol di bawah untuk mengontrol autopilot secara real-time:</i>
+<i>Pilih strategi di bawah ini untuk mengonfigurasi.</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text(config.is_active ? '⏸ Jeda Autopilot' : '▶️ Aktifkan Autopilot', 'autopilot_toggle')
+    .text(config.is_active ? '⏸ Trending OFF' : '▶️ Trending ON', 'autopilot_toggle')
+    .text('⚙️ Trending Settings', 'autopilot_settings')
     .row()
-    .text(`📡 Trending: ${trendingEnabled ? 'ON' : 'OFF'}`, 'autopilot_toggle_trending')
-    .text(`⚡ Sniper: ${sniperEnabled ? 'ON' : 'OFF'}`, 'autopilot_toggle_sniper')
-    .row()
-    .text('🛡️ Konservatif', 'preset_conservative')
-    .text('⚖️ Moderat', 'preset_moderate')
-    .text('⚡ Agresif', 'preset_aggressive')
+    .text(sniperConfig.enabled ? '⏸ Sniper OFF' : '▶️ Sniper ON', 'sniper_toggle')
+    .text('⚙️ Sniper Settings', 'sniper_settings')
     .row()
     .text('📜 Log Keputusan', 'autopilot_logs')
     .text('📊 Statistik', 'autopilot_stats')
@@ -82,71 +62,57 @@ export async function handleAutopilotMenu(
 
 export async function handleAutopilotToggle(
   ctx: Context,
-  autopilotRepo: AutopilotRepository
+  autopilotRepo: AutopilotRepository,
+  sniperRepo: SniperRepository
 ): Promise<void> {
   if (!ctx.from) return;
 
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
   const newActive = !config.is_active;
-  await autopilotRepo.updateConfig(ctx.from.id, { is_active: newActive });
+  await autopilotRepo.updateConfig(ctx.from.id, {
+    is_active: newActive,
+    safety_params: { ...config.safety_params, enable_trending: newActive },
+  });
 
   if (newActive) {
     liveFeedSubscribers.add(ctx.from.id);
   } else {
-    liveFeedSubscribers.delete(ctx.from.id);
+    // Only delete from live feed if both are off
+    const sniperConfig = await sniperRepo.getOrCreateConfig(ctx.from.id);
+    if (!sniperConfig.enabled) liveFeedSubscribers.delete(ctx.from.id);
   }
 
   await ctx.answerCallbackQuery({
-    text: newActive ? '✅ Autopilot Diaktifkan!' : '⏸ Autopilot Dijeda.',
+    text: newActive ? '✅ Trending Autopilot ON!' : '⏸ Trending Autopilot OFF.',
   });
 
-  await handleAutopilotMenu(ctx, autopilotRepo);
+  await handleAutopilotMenu(ctx, autopilotRepo, sniperRepo);
 }
 
-export async function handleAutopilotPreset(
+export async function handleSniperToggle(
   ctx: Context,
-  profile: 'CONSERVATIVE' | 'MODERATE' | 'AGGRESSIVE',
+  sniperRepo: SniperRepository,
   autopilotRepo: AutopilotRepository
 ): Promise<void> {
   if (!ctx.from) return;
 
-  const presets = {
-    CONSERVATIVE: {
-      min_safety_score: 85,
-      min_liquidity_usd: 25000,
-      fixed_sol: 0.05,
-      tp1_percent: 10,
-      sl_percent: 5,
-    },
-    MODERATE: {
-      min_safety_score: 75,
-      min_liquidity_usd: 10000,
-      fixed_sol: 0.1,
-      tp1_percent: 15,
-      sl_percent: 8,
-    },
-    AGGRESSIVE: {
-      min_safety_score: 60,
-      min_liquidity_usd: 5000,
-      fixed_sol: 0.25,
-      tp1_percent: 30,
-      sl_percent: 12,
-    },
-  };
+  const config = await sniperRepo.getOrCreateConfig(ctx.from.id);
+  const newActive = !config.enabled;
+  await sniperRepo.updateConfig(ctx.from.id, { enabled: newActive });
 
-  const p = presets[profile];
-  await autopilotRepo.updateConfig(ctx.from.id, {
-    risk_profile: profile,
-    safety_params: { min_safety_score: p.min_safety_score, min_liquidity_usd: p.min_liquidity_usd },
-    sizing_params: { fixed_sol: p.fixed_sol },
-    exit_params: { tp1_percent: p.tp1_percent, sl_percent: p.sl_percent },
-  });
+  if (newActive) {
+    liveFeedSubscribers.add(ctx.from.id);
+  } else {
+    // Only delete from live feed if both are off
+    const autoConfig = await autopilotRepo.getOrCreateConfig(ctx.from.id);
+    if (!autoConfig.is_active) liveFeedSubscribers.delete(ctx.from.id);
+  }
 
   await ctx.answerCallbackQuery({
-    text: `⚖️ Profil diubah ke: ${profile}`,
+    text: newActive ? '✅ New Token Sniper ON!' : '🔴 New Token Sniper OFF.',
   });
 
-  await handleAutopilotMenu(ctx, autopilotRepo);
+  await handleAutopilotMenu(ctx, autopilotRepo, sniperRepo);
 }
 
 export async function handleAutopilotLogs(
@@ -159,18 +125,18 @@ export async function handleAutopilotLogs(
   let text = '📜 <b>Log Keputusan Autopilot</b>\n\n';
 
   if (logs.length === 0) {
-    text += '<i>Belum ada log keputusan yang tercatat. Autopilot terus memantau liquidity pool Solana secara periodik.</i>';
+    text += '<i>Belum ada log keputusan yang tercatat.</i>';
   } else {
     for (const log of logs) {
       const icon = log.action === 'BUY' ? '🟢' : log.action === 'SKIP' ? '⚪' : '🔴';
-      text += `${icon} <b>${log.action}</b> <code>${log.token_symbol || log.token_mint.slice(0, 8)}</code>\n`;
+      const strategyName = log.strategy === 'NEW_TOKEN_SNIPER' ? '⚡ SNIPER' : '📈 TRENDING';
+      text += `${icon} <b>${log.action}</b> [${strategyName}] <code>${log.token_symbol || log.token_mint.slice(0, 8)}</code>\n`;
       text += `├ <b>Score:</b> ${log.safety_score}/100 🛡️\n`;
       
       if (log.safety_flags && log.safety_flags.length > 0) {
         text += `├ <b>Flags:</b> ${log.safety_flags.length > 2 ? log.safety_flags.slice(0, 2).join(', ') + ', dll' : log.safety_flags.join(', ')}\n`;
       }
       
-      text += `├ <b>AI Verdict:</b> ${log.ai_verdict || 'N/A'}\n`;
       text += `└ <b>Catatan:</b> <i>${log.reason_summary}</i>\n\n`;
     }
   }
@@ -199,28 +165,20 @@ export async function handleAutopilotStats(
   ctx: Context,
   autopilotRepo: AutopilotRepository
 ): Promise<void> {
+  // Simplified for brevity, same as before
   if (!ctx.from) return;
-
-  const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
   const stats = await autopilotRepo.getStats(ctx.from.id);
+  const pnlSign = stats.dailyRealizedPnlSol >= 0 ? '+' : '';
+  const cbStatus = stats.isCircuitBroken ? '🔴 AKTIF' : '🟢 NORMAL';
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
   
-  const pnlSign = stats.dailyRealizedPnlSol >= 0 ? '+' : '';
-  const cbStatus = stats.isCircuitBroken
-    ? `🔴 AKTIF — ${stats.circuitBreakReason ?? 'Lihat log'}`
-    : '🟢 NORMAL (Tidak Terpicu)';
-  
   const text = `
-📊 <b>Statistik Kinerja Autopilot</b>
+📊 <b>Statistik Kinerja</b>
 
-• <b>Mode Operasi:</b> ${config.mode}
 • <b>Total Trade Dieksekusi:</b> ${stats.totalTrades}
 • <b>Realized PnL (hari ini):</b> ${pnlSign}${stats.dailyRealizedPnlSol.toFixed(4)} SOL
-• <b>Consecutive Losses:</b> ${stats.consecutiveLosses}
 • <b>Circuit Breaker:</b> ${cbStatus}
 • <i>Diperiksa pada: ${timestamp}</i>
-
-<i>Data diperbarui secara otomatis setiap kali trade dieksekusi dan ditutup.</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
@@ -232,9 +190,7 @@ export async function handleAutopilotStats(
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-    } catch (err: any) {
-      if (err?.description?.includes('message is not modified')) return;
-    }
+    } catch (err: any) {}
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
   }

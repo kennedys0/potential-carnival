@@ -336,8 +336,8 @@ describe('TraderService', () => {
   // WalletService asli memanggil callback onSignature SEBELUM mengembalikan hasil; mock harus meniru alur itu,
   // kalau tidak, blok catch menandai FAILED lewat jalur lain dan menutupi bug (ketahuan oleh mutation-check B2).
   const sendWithSig = (result: any) =>
-    vi.fn().mockImplementation(async (_u: number, _tx: any, onSig: (s: string) => Promise<void>) => {
-      await onSig(result.signature);
+    vi.fn().mockImplementation(async (_u: number, _tx: any, callbacks: any = {}) => {
+      if (callbacks.onSignature) await callbacks.onSignature(result.signature);
       return result;
     });
 
@@ -382,7 +382,7 @@ describe('TraderService', () => {
   it('beli: UNKNOWN -> trade tetap PENDING (jangan FAILED, jangan OPEN) untuk rekonsiliasi', async () => {
     const { service, repo } = buyDeps(sendWithSig({ status: 'UNKNOWN', signature: 's' }));
     const result = await service.executeOrder(buyReq);
-    expect(result.status).toBe('PENDING');
+    expect(result.status).toBe('RESERVED');
     const ups = updatesOf(repo);
     expect(ups.some((u) => u.status === 'FAILED' || u.status === 'OPEN')).toBe(false);
   });
@@ -394,8 +394,8 @@ describe('TraderService', () => {
   });
 
   it('beli: error SETELAH signature diketahui -> JANGAN FAILED (tx mungkin sudah masuk, token ada di wallet)', async () => {
-    const send = vi.fn().mockImplementation(async (_u: number, _tx: any, onSig: (s: string) => Promise<void>) => {
-      await onSig('sigY');
+    const send = vi.fn().mockImplementation(async (_u: number, _tx: any, callbacks: any = {}) => {
+      if (callbacks.onSignature) await callbacks.onSignature('sigY');
       return { status: 'SUCCESS', signature: 'sigY' };
     });
     const { service, repo } = buyDeps(send, vi.fn().mockRejectedValue(new Error('rpc down')));

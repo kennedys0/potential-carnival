@@ -40,6 +40,14 @@ export const AppSettingsSchema = z.object({
     DEFAULT_PERCENT_BALANCE: z.number().default(10),
     DEFAULT_RISK_PERCENT: z.number().default(2),
   }).default({}),
+  STRATEGY_RESERVATION_PARAMS: z.object({
+    DEFAULT_TRENDING_MAX_POSITIONS: z.number().default(3),
+    DEFAULT_SNIPER_MAX_POSITIONS: z.number().default(3),
+    DEFAULT_SNIPER_DAILY_BUYS: z.number().default(3),
+    DEFAULT_SNIPER_DAILY_BUDGET_SOL: z.number().default(0.03),
+    MAX_TRENDING_DAILY_BUYS: z.number().default(100),
+    MAX_TRENDING_DAILY_BUDGET_SOL: z.number().default(10),
+  }).default({}),
   SNIPER_PARAMS: z.object({
     MIN_SAFETY_SCORE: z.number().default(50),
     ALLOWED_LEVELS: z.array(z.string()).default(['SAFE', 'CAUTION']),
