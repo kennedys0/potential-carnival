@@ -9,6 +9,7 @@ import { PublicKey } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { FillParser } from '../../modules/trader/fillParser.js';
 import { AccountingEngine } from '../../modules/trader/accountingEngine.js';
+import { verifyWithdrawalTransfer } from '../../modules/wallet/withdrawalVerification.js';
 
 export function createReconcileWorker(
   tradeRepo: TradeRepository,
@@ -294,37 +295,17 @@ export function createReconcileWorker(
                   if (tx.meta.err) {
                      await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'FAILED' });
                   } else {
-                     // Verify the explicit transfer instructions
-                     let exactLamportsSent = 0;
-                     if (tx.transaction.message.instructions) {
-                         for (const ix of tx.transaction.message.instructions as any[]) {
-                             if (ix.program === 'system' && ix.parsed && ix.parsed.type === 'transfer') {
-                                 if (ix.parsed.info.destination === w.destination_address) {
-                                     exactLamportsSent += Number(ix.parsed.info.lamports || 0);
-                                 }
-                             }
-                         }
-                     }
-                     
-                     let isValidTransfer = false;
-                     
-                     if (w.expected_lamports) {
-                         const expected = parseInt(w.expected_lamports, 10);
-                         if (exactLamportsSent === expected) {
-                             isValidTransfer = true;
-                         }
-                     } else if (w.amount_sol === -1) {
-                         // Legacy MAX without expected_lamports
-                         if (exactLamportsSent > 0) {
-                             isValidTransfer = true;
-                         }
-                     } else {
-                         const expectedLamports = Math.floor(w.amount_sol * 1e9);
-                         if (exactLamportsSent === expectedLamports) {
-                             isValidTransfer = true;
-                         }
-                     }
-                     
+                     // Verify exactly one authorized top-level transfer with an exact
+                     // integer amount, wallet source, destination and fee payer.
+                     // Missing legacy MAX amounts remain unresolved, never presumed valid.
+                     const withdrawalWallet = await walletService.getOrCreateWallet(w.user_id);
+                     const isValidTransfer = verifyWithdrawalTransfer(
+                       tx,
+                       withdrawalWallet.publicKey,
+                       w.destination_address,
+                       w.expected_lamports,
+                     );
+
                      if (isValidTransfer) {
                          await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'SUCCESS' });
                      } else {

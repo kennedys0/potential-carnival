@@ -1,3 +1,6 @@
+
+> **Safety patch notice (2026-10-08):** Read [`SECURITY_PATCH_NOTES.md`](SECURITY_PATCH_NOTES.md) before migrations or live trading. The migration sequence now includes `027_final_entry_integrity.sql`. Live remains disabled until integration verification.
+
 # 🚀 Solana Scalping Telegram Bot & Autopilot
 
 [![Node](https://img.shields.io/badge/node-v22%2B%20LTS-blue.svg)](https://nodejs.org/)
@@ -158,7 +161,7 @@ solana-scalping/
 │   └── migrations/
 │       ├── 001_initial_schema.sql # DDL lengkap tabel Supabase (PostgreSQL)
 │       ├── ...                    # Migrasi struktur fase 2 - 8 (Atomic Reconcile, Fills, dll)
-│       └── 018_round9_sql_validation.sql # Migrasi integritas finansial & daily loss (Fase 9)
+│       └── 027_final_entry_integrity.sql # Rekonsiliasi BUY ketat (patch keamanan)
 ├── src/
 │   ├── index.ts                  # Bootstrapper utama & graceful shutdown
 │   ├── config/
@@ -267,7 +270,7 @@ LIVE_TRADING_ENABLED=false
 1. Masuk ke Dashboard Supabase Anda.
 2. Buka menu **SQL Editor**.
 3. Buka dan eksekusi setiap file `.sql` di dalam folder `supabase/migrations/` secara berurutan.
-4. Mulai dari `001_initial_schema.sql` hingga migrasi terbaru (saat ini `018_round9_sql_validation.sql`). Eksekusi berurutan sangat krusial untuk integritas database.
+4. Mulai dari `001_initial_schema.sql` hingga migrasi terbaru (saat ini `027_final_entry_integrity.sql`). Eksekusi berurutan sangat krusial untuk integritas database.
 
 ---
 

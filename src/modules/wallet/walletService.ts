@@ -5,6 +5,7 @@ import { KeypairService } from './keypairService';
 import { WalletRepository } from '../../database/repositories/walletRepository';
 import { getEnv } from '../../config/env';
 import { TxSender, TxSendResult } from './txSender';
+import { verifyWithdrawalTransfer } from './withdrawalVerification.js';
 
 export class WalletService {
   constructor(
@@ -276,6 +277,31 @@ export class WalletService {
       ) {
         await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, { status: 'CONFIRMING' });
         throw new Error(`Status transaksi tidak pasti (${result.status}). Harap cek explorer sebelum mengulang.`);
+      }
+
+      // A confirmed signature does not prove that the authorized withdrawal
+      // instruction transferred the exact SOL amount to its intended recipient.
+      // The recovery worker can finish this later if transaction metadata is not
+      // yet indexed or RPC is temporarily unavailable.
+      let parsedWithdrawal = null;
+      try {
+        parsedWithdrawal = await withdrawalConnection.getParsedTransaction(result.signature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+      } catch {
+        // Preserve durable execution ownership; never send an immediate replacement.
+      }
+      if (!parsedWithdrawal || !verifyWithdrawalTransfer(
+        parsedWithdrawal,
+        sourcePubkey.toBase58(),
+        finalDestAddress,
+        transferLamports.toString(),
+      )) {
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, {
+          status: parsedWithdrawal ? 'NEEDS_ATTENTION' : 'CONFIRMING',
+        });
+        throw new Error('Withdrawal confirmed but exact transfer evidence is not yet reconciled. Do not retry this withdrawal.');
       }
 
       await this.walletRepo.updateWithdrawalAttempt(withdrawalId!, { status: 'SUCCESS' });

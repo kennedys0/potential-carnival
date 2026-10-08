@@ -1,3 +1,4 @@
+-- Forward-only override for databases that already applied the unsafe 025 migration.
 -- Security boundary: a successful live BUY may be finalized ONLY from verified,
 -- previously persisted signature evidence and an exact, nonnegative fill.
 -- This function is a database consistency gate, NOT an independent on-chain verifier.

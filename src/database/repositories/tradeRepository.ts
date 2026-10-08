@@ -269,12 +269,12 @@ export class TradeRepository {
       throw new Error(`Failed to atomic_reconcile_entry: ${error.message}`);
     }
 
-    if (data === 'ALREADY_APPLIED' || data === 'ALREADY_RESOLVED') {
+    if (data === 'ALREADY_APPLIED') {
       logger.info({ tradeId, signature: updates.tx_signature }, `Entry reconciliation skipped: ${data}`);
       return;
     }
 
-    if (data === 'APPLIED' || data === 'RESOLVED') {
+    if (data === 'APPLIED') {
       return;
     }
 
