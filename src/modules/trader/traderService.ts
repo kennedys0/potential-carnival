@@ -363,6 +363,7 @@ export class TraderService {
         trade.user_id, 
         transaction,
         async (sig) => {
+          trade.pending_signature = sig; // update in memory
           await this.tradeRepo.updateTradeStatus(trade.id!, { pending_signature: sig });
           if (exitAttempt.id) {
             await this.tradeRepo.updateExitAttempt(exitAttempt.id, { tx_signature: sig });
@@ -370,13 +371,18 @@ export class TraderService {
         }
       );
     } catch (e: any) {
-      // Failed before sending
-      await this.tradeRepo.updateTradeStatus(trade.id, {
-        last_exit_error: e.message,
-        needs_attention: currentAttempts >= 3,
-      });
-      if (exitAttempt.id) {
-        await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'FAILED' });
+      const failureReason = e.message || 'Unknown execution error';
+      // Only fail it if we are sure it didn't hit the network, otherwise keep PENDING
+      if (!trade.pending_signature || trade.pending_signature === 'SIGN_FAILED') {
+        await this.tradeRepo.updateTradeStatus(trade.id, {
+          last_exit_error: failureReason,
+          needs_attention: currentAttempts >= 3,
+        });
+        if (exitAttempt.id) {
+          await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'FAILED' });
+        }
+      } else {
+        logger.warn({ tradeId: trade.id, err: e }, 'Exception occurred after signing, leaving exit attempt as PENDING to prevent double-sell');
       }
       throw e;
     }

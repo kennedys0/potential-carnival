@@ -101,6 +101,27 @@ export function createReconcileWorker(
         logger.error({ err }, 'Failed to fetch pending trades');
       }
 
+      // 1.2 Reconcile Pre-Broadcast PENDING trades
+      try {
+        const preBroadcastTrades = await tradeRepo.getPendingTradesWithoutSignature();
+        for (const trade of preBroadcastTrades) {
+          const pendingSince = trade.pending_since ? new Date(trade.pending_since).getTime() : new Date(trade.created_at || Date.now()).getTime();
+          const ageMs = Date.now() - pendingSince;
+          
+          // If it's been PENDING without signature for more than 2 minutes (120000 ms),
+          // it means the process crashed before generating a signature.
+          if (ageMs > 120000) {
+             await tradeRepo.updateTradeStatus(trade.id!, {
+                status: 'FAILED',
+                failure_reason: 'Reconciled: Pre-broadcast failure (no signature generated)'
+             });
+             logger.info({ tradeId: trade.id }, 'Reconciled pre-broadcast PENDING trade to FAILED to release lock');
+          }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Failed to reconcile pre-broadcast pending trades');
+      }
+
       // 1.5 Reconcile PENDING exit_attempts
       try {
         const pendingExits = await tradeRepo.getAllPendingExitAttempts();
@@ -272,7 +293,36 @@ export function createReconcileWorker(
                   if (tx.meta.err) {
                      await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'FAILED' });
                   } else {
-                     await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'SUCCESS' });
+                     // Verify the effect of the transfer
+                     const destIndex = tx.transaction.message.accountKeys.findIndex((k: any) => 
+                        (typeof k.pubkey === 'string' ? k.pubkey : k.pubkey.toBase58()) === w.destination_address
+                     );
+                     
+                     let isValidTransfer = false;
+                     if (destIndex !== -1) {
+                         const preBalance = tx.meta.preBalances[destIndex];
+                         const postBalance = tx.meta.postBalances[destIndex];
+                         const actualReceivedLamports = postBalance - preBalance;
+                         
+                         if (w.amount_sol === -1) {
+                             if (actualReceivedLamports > 0) {
+                                 isValidTransfer = true;
+                             }
+                         } else {
+                             const expectedLamports = Math.floor(w.amount_sol * 1e9);
+                             // allow up to 10000 lamports difference for potential floating point/rent inaccuracies
+                             if (actualReceivedLamports >= expectedLamports - 10000) {
+                                 isValidTransfer = true;
+                             }
+                         }
+                     }
+                     
+                     if (isValidTransfer) {
+                         await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'SUCCESS' });
+                     } else {
+                         logger.error({ attemptId: w.id, signature: w.tx_signature }, 'Withdrawal tx successful but destination did not receive expected funds. Marking NEEDS_ATTENTION.');
+                         await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'NEEDS_ATTENTION' });
+                     }
                   }
                }
             } else if (['CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED', 'CONFIRMING', 'PENDING', 'UNKNOWN', 'EXPIRED'].includes(w.status)) {

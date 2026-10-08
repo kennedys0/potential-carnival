@@ -79,6 +79,13 @@ export class AutopilotEngine {
     }
 
     try {
+      // Re-verify after lock acquisition to prevent race condition from stale snapshot
+      const activeTrades = await this.traderService['tradeRepo'].getTradesByStatuses(userId, ['PENDING', 'OPEN', 'PARTIAL_EXIT']);
+      if (activeTrades.some((t: any) => t.token_mint === tokenMint)) {
+        await this.logDecision(userId, tokenMint, tokenSymbol, 'SKIP', security, ai, ['Token is already held (Atomic check)'], [], 'Skipped because already held (atomic)', rawSnapshot);
+        return { executed: false, reason: 'Already holding this token (atomic check)' };
+      }
+
       return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot, source, ownerToken);
     } finally {
       await this.traderService['tradeRepo'].releaseBuyLock(userId, tokenMint, ownerToken);

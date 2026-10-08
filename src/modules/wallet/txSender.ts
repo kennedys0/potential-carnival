@@ -74,7 +74,14 @@ export class TxSender {
         return { status: 'SUBMISSION_TIMEOUT', signature, err: 'Polling timeout' };
       }
 
-      const statusRes = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+      let statusRes;
+      try {
+        statusRes = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+      } catch (err: any) {
+        logger.warn({ err, signature }, 'RPC error fetching signature statuses during polling, will retry');
+        await new Promise(resolve => setTimeout(resolve, pollingIntervalMs));
+        continue;
+      }
       const status = statusRes.value[0];
 
       if (status) {
@@ -89,12 +96,26 @@ export class TxSender {
       }
 
       // Check if blockhash is still valid
-      const isValid = await connection.isBlockhashValid(recentBlockhash, { commitment: 'confirmed' });
+      let isValid;
+      try {
+        isValid = await connection.isBlockhashValid(recentBlockhash, { commitment: 'confirmed' });
+      } catch (err: any) {
+        logger.warn({ err, signature }, 'RPC error checking blockhash validity, will retry');
+        await new Promise(resolve => setTimeout(resolve, pollingIntervalMs));
+        continue;
+      }
+
       if (!isValid.value) {
         logger.warn({ signature }, 'Blockhash expired while waiting for confirmation');
         
         // Final check just in case it got confirmed exactly when blockhash expired
-        const finalCheck = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+        let finalCheck;
+        try {
+          finalCheck = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+        } catch (err: any) {
+          logger.warn({ err, signature }, 'RPC error during final check. Returning UNKNOWN.');
+          return { status: 'UNKNOWN', signature, err: err.message };
+        }
         const finalStatus = finalCheck.value[0];
         
         if (finalStatus) {

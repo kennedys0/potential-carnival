@@ -94,6 +94,19 @@ export class TradeRepository {
     return data || [];
   }
 
+  async getPendingTradesWithoutSignature(): Promise<TradeRecord[]> {
+    const { data, error } = await this.db
+      .from('trades')
+      .select('*')
+      .eq('status', 'PENDING')
+      .is('pending_signature', null);
+      
+    if (error) {
+      throw new Error(`Failed to get pending trades without signature: ${error.message}`);
+    }
+    return (data || []) as TradeRecord[];
+  }
+
   async getOpenTradesOrderedFIFO(): Promise<any[]> {
     const { data, error } = await this.db
       .from('trades')
