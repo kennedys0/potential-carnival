@@ -157,7 +157,8 @@ solana-scalping/
 ├── supabase/
 │   └── migrations/
 │       ├── 001_initial_schema.sql # DDL lengkap tabel Supabase (PostgreSQL)
-│       └── 002_round2_fixes.sql   # Migrasi struktur lanjutan (Fase 2)
+│       ├── ...                    # Migrasi struktur fase 2 - 8 (Atomic Reconcile, Fills, dll)
+│       └── 018_round9_sql_validation.sql # Migrasi integritas finansial & daily loss (Fase 9)
 ├── src/
 │   ├── index.ts                  # Bootstrapper utama & graceful shutdown
 │   ├── config/
@@ -265,8 +266,8 @@ LIVE_TRADING_ENABLED=false
 ### 4. Eksekusi Database Migration di Supabase
 1. Masuk ke Dashboard Supabase Anda.
 2. Buka menu **SQL Editor**.
-3. Buka file [`supabase/migrations/001_initial_schema.sql`](file:///e:/Coding/solana-scalping/supabase/migrations/001_initial_schema.sql), salin isinya, dan jalankan (Run) di SQL Editor.
-4. Ulangi langkah yang sama untuk file [`supabase/migrations/002_round2_fixes.sql`](file:///e:/Coding/solana-scalping/supabase/migrations/002_round2_fixes.sql).
+3. Buka dan eksekusi setiap file `.sql` di dalam folder `supabase/migrations/` secara berurutan.
+4. Mulai dari `001_initial_schema.sql` hingga migrasi terbaru (saat ini `018_round9_sql_validation.sql`). Eksekusi berurutan sangat krusial untuk integritas database.
 
 ---
 
