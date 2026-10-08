@@ -5,6 +5,7 @@ import { RuleEvaluator } from './ruleEvaluator';
 import { CircuitBreaker, CircuitBreakerState } from './circuitBreaker';
 import { RiskManager } from './riskManager';
 import { TraderService } from '../trader/traderService';
+import { SniperRepository } from '../../database/repositories/sniperRepository';
 import { getRedisConnection } from '../../queue/connection';
 import { z } from 'zod';
 import { appSettings } from '../../config/settings';
@@ -39,7 +40,8 @@ const CircuitBreakerParamsSchema = z.object({
 export class AutopilotEngine {
   constructor(
     private readonly autopilotRepo: AutopilotRepository,
-    private readonly traderService: TraderService
+    private readonly traderService: TraderService,
+    private readonly sniperRepo: SniperRepository
   ) {}
 
   async processCandidate(
@@ -60,14 +62,21 @@ export class AutopilotEngine {
     rawSnapshot?: any,
     source: 'TRENDING' | 'SNIPER' = 'TRENDING'
   ): Promise<{ executed: boolean; reason: string }> {
-    const config = await this.autopilotRepo.getOrCreateConfig(userId);
-
-    if (!config.is_active) {
-      return { executed: false, reason: 'Autopilot is inactive for user' };
+    let config: any;
+    if (source === 'SNIPER') {
+      config = await this.sniperRepo.getOrCreateConfig(userId);
+      if (!config.enabled) {
+        return { executed: false, reason: 'Sniper is disabled for user' };
+      }
+    } else {
+      config = await this.autopilotRepo.getOrCreateConfig(userId);
+      if (!config.is_active) {
+        return { executed: false, reason: 'Autopilot is inactive for user' };
+      }
     }
 
     if (currentState.heldMints?.includes(tokenMint)) {
-      await this.logDecision(userId, tokenMint, tokenSymbol, 'SKIP', security, ai, ['Token is already held'], [], 'Skipped because already held', rawSnapshot);
+      await this.logDecision(userId, tokenMint, tokenSymbol, 'SKIP', security, ai, ['Token is already held'], [], 'Skipped because already held', rawSnapshot, source);
       return { executed: false, reason: 'Already holding this token' };
     }
 
@@ -82,7 +91,7 @@ export class AutopilotEngine {
       // Re-verify after lock acquisition to prevent race condition from stale snapshot
       const activeTrades = await this.traderService['tradeRepo'].getTradesByStatuses(userId, ['PENDING', 'OPEN', 'PARTIAL_EXIT']);
       if (activeTrades.some((t: any) => t.token_mint === tokenMint)) {
-        await this.logDecision(userId, tokenMint, tokenSymbol, 'SKIP', security, ai, ['Token is already held (Atomic check)'], [], 'Skipped because already held (atomic)', rawSnapshot);
+        await this.logDecision(userId, tokenMint, tokenSymbol, 'SKIP', security, ai, ['Token is already held (Atomic check)'], [], 'Skipped because already held (atomic)', rawSnapshot, source);
         return { executed: false, reason: 'Already holding this token (atomic check)' };
       }
 
@@ -101,7 +110,7 @@ export class AutopilotEngine {
     security: SecurityScoreResult,
     ai: AiAnalysis | null,
     currentState: any,
-    config: AutopilotConfigRecord,
+    config: any,
     rawSnapshot: any,
     source: 'TRENDING' | 'SNIPER',
     ownerToken: string
@@ -118,7 +127,7 @@ export class AutopilotEngine {
     };
     const cbCheck = CircuitBreaker.isBreached(cbLimits, cbState);
     if (cbCheck.isBreached) {
-      await this.logDecision(userId, tokenMint, tokenSymbol, 'REJECT', security, ai, [], ['Circuit Breaker'], `Circuit breaker active: ${cbCheck.reason}`, rawSnapshot);
+      await this.logDecision(userId, tokenMint, tokenSymbol, 'REJECT', security, ai, [], ['Circuit Breaker'], `Circuit breaker active: ${cbCheck.reason}`, rawSnapshot, source);
       return { executed: false, reason: `Circuit breaker active: ${cbCheck.reason}` };
     }
 
@@ -139,17 +148,18 @@ export class AutopilotEngine {
     };
 
     if (source === 'SNIPER') {
+      // Sniper config parsing
       safetyParams = {
-        minSafetyScore: appSettings.SNIPER_PARAMS.MIN_SAFETY_SCORE,
+        minSafetyScore: config.minimum_safety_score ?? appSettings.SNIPER_PARAMS.MIN_SAFETY_SCORE,
         allowedLevels: appSettings.SNIPER_PARAMS.ALLOWED_LEVELS,
-        minLiquidityUsd: appSettings.SNIPER_PARAMS.MIN_LIQUIDITY_USD,
+        minLiquidityUsd: config.min_liquidity_usd ?? appSettings.SNIPER_PARAMS.MIN_LIQUIDITY_USD,
       };
       aiParams.requireAi = appSettings.SNIPER_PARAMS.REQUIRE_AI;
     }
 
     const evalResult = RuleEvaluator.evaluate(security, ai, safetyParams, aiParams, liquidityUsd, currentPriceUsd, rawSnapshot?.indicators);
 
-    await this.logDecision(userId, tokenMint, tokenSymbol, evalResult.action, security, ai, evalResult.rulesPassed, evalResult.rulesFailed, evalResult.reason, rawSnapshot);
+    await this.logDecision(userId, tokenMint, tokenSymbol, evalResult.action, security, ai, evalResult.rulesPassed, evalResult.rulesFailed, evalResult.reason, rawSnapshot, source);
 
     if (!evalResult.passed) {
       return { executed: false, reason: evalResult.reason };
@@ -159,21 +169,25 @@ export class AutopilotEngine {
     const sizingConf = SizingParamsSchema.parse(config.sizing_params || {});
     let orderSol = 0;
     
-    if (sizingConf.mode === 'FIXED_SOL') {
-      orderSol = sizingConf.fixed_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_FIXED_SOL;
-    } else if (sizingConf.mode === 'PERCENT_BALANCE') {
-      orderSol = (currentState.availableBalanceSol * (sizingConf.percent_balance ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_PERCENT_BALANCE)) / 100;
-    } else if (sizingConf.mode === 'RISK_BASED') {
-      if (ai && ai.stop_loss_usd > 0 && currentPriceUsd > ai.stop_loss_usd) {
-        const slDistance = (currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd;
-        orderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_RISK_PERCENT)) / 100) / slDistance;
-      } else {
-        return { executed: false, reason: 'Risk based sizing failed: invalid SL' };
+    if (source === 'SNIPER') {
+       orderSol = config.buy_amount_sol ?? 0.01;
+       sizingConf.max_concurrent_positions = config.max_active_positions ?? 3;
+    } else {
+      if (sizingConf.mode === 'FIXED_SOL') {
+        orderSol = sizingConf.fixed_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_FIXED_SOL;
+      } else if (sizingConf.mode === 'PERCENT_BALANCE') {
+        orderSol = (currentState.availableBalanceSol * (sizingConf.percent_balance ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_PERCENT_BALANCE)) / 100;
+      } else if (sizingConf.mode === 'RISK_BASED') {
+        if (ai && ai.stop_loss_usd > 0 && currentPriceUsd > ai.stop_loss_usd) {
+          const slDistance = (currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd;
+          orderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_RISK_PERCENT)) / 100) / slDistance;
+        } else {
+          return { executed: false, reason: 'Risk based sizing failed: invalid SL' };
+        }
       }
-    }
-    
-    if (sizingConf.max_size_per_trade && orderSol > sizingConf.max_size_per_trade) {
-      orderSol = sizingConf.max_size_per_trade;
+      if (sizingConf.max_size_per_trade && orderSol > sizingConf.max_size_per_trade) {
+        orderSol = sizingConf.max_size_per_trade;
+      }
     }
 
     const riskCheck = RiskManager.canOpenNewPosition(
@@ -191,7 +205,7 @@ export class AutopilotEngine {
     }
 
     // 4. Execute Order (Paper or Live mode)
-    const isDryRun = config.mode === 'PAPER';
+    const isDryRun = source === 'SNIPER' ? (config.trading_mode === 'PAPER') : (config.mode === 'PAPER');
     await this.traderService.executeOrder({
       userId,
       tokenMint,
@@ -201,6 +215,7 @@ export class AutopilotEngine {
       isDryRun,
       source: 'AUTOPILOT',
       ownerToken: ownerToken,
+      strategy: source === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING',
     });
 
     return { executed: true, reason: `Order placed successfully in ${config.mode} mode` };
@@ -216,7 +231,8 @@ export class AutopilotEngine {
     rulesPassed: string[],
     rulesFailed: string[],
     reason: string,
-    rawSnapshot: any
+    rawSnapshot: any,
+    strategy: 'TRENDING' | 'SNIPER' = 'TRENDING'
   ) {
     const fullSnapshot = {
       ...rawSnapshot,
@@ -237,6 +253,7 @@ export class AutopilotEngine {
       rules_failed: rulesFailed,
       reason_summary: reason,
       raw_snapshot: fullSnapshot,
+      strategy: strategy === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING',
     });
   }
 }

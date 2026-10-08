@@ -3,7 +3,7 @@ import { ScannerService } from './scannerService';
 import { AutopilotEngine } from '../autopilot/autopilotEngine';
 import { SecurityFilterService } from '../security/securityFilterService';
 import { AnalyzerService } from '../analyzer/analyzerService';
-import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
+import { SniperRepository } from '../../database/repositories/sniperRepository';
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
@@ -16,7 +16,7 @@ export class SniperScanner {
     private readonly autopilotEngine: AutopilotEngine,
     private readonly securityService: SecurityFilterService,
     private readonly analyzerService: AnalyzerService,
-    private readonly autopilotRepo: AutopilotRepository,
+    private readonly sniperRepo: SniperRepository,
     private readonly userStateService: UserStateService,
     private readonly botApi: any
   ) {}
@@ -40,7 +40,7 @@ export class SniperScanner {
   private async scanSniper() {
     try {
       // 1. Get active autopilot users
-      const activeConfigs = await this.autopilotRepo.getAllActiveConfigs();
+      const activeConfigs = await this.sniperRepo.getAllActiveConfigs();
       if (!activeConfigs || activeConfigs.length === 0) {
         return;
       }
@@ -136,8 +136,26 @@ export class SniperScanner {
                 isSniper: true
               };
 
-              const safetyParams = config.safety_params as any;
-              if (safetyParams?.enable_sniper === false) continue;
+              // We already know it's enabled because we fetched active configs
+              // const safetyParams = config.safety_params as any;
+              // if (safetyParams?.enable_sniper === false) continue;
+              
+              // Sniper risk limit check
+              const sniperState = await this.sniperRepo.getState(config.user_id);
+              if (sniperState.daily_buys_count >= config.max_buys_per_day) {
+                logger.debug(`Sniper limit reached: daily buys for user ${config.user_id}`);
+                continue;
+              }
+              if (Number(sniperState.daily_entry_sol) + config.buy_amount_sol > config.max_daily_entry_budget_sol) {
+                logger.debug(`Sniper limit reached: daily budget for user ${config.user_id}`);
+                continue;
+              }
+
+              // Evaluate Candidate via AutopilotEngine
+              // In a full refactor we would have an independent SniperEngine, but the prompt says 
+              // "Use the EXISTING verified transaction execution and reconciliation infrastructure." 
+              // and "Architecture - TWO STRATEGIES, ONE EXECUTION ENGINE".
+              // AutopilotEngine handles standard risk checks. We can override params.
 
               const result = await this.autopilotEngine.processCandidate(
                 config.user_id,
@@ -154,6 +172,8 @@ export class SniperScanner {
 
               if (result.executed) {
                 logger.info(`Sniper executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
+                
+                await this.sniperRepo.incrementState(config.user_id, config.buy_amount_sol);
                 
                 try {
                   await this.botApi.sendMessage(config.user_id, 

@@ -29,7 +29,7 @@ describe('Positions Handler', () => {
 
     expect(mockCtx.reply).toHaveBeenCalled();
     const text = mockCtx.reply.mock.calls[0][0];
-    expect(text).toContain('Saat ini belum ada posisi trading yang aktif');
+    expect(text).toContain('Tidak ada posisi trading yang sedang aktif');
   });
 
   it('displays active positions when open trades exist', async () => {
@@ -60,7 +60,7 @@ describe('Positions Handler', () => {
     expect(mockCtx.reply).toHaveBeenCalled();
     const text = mockCtx.reply.mock.calls[0][0];
     expect(text).toContain('BONK');
-    expect(text).toContain('[PAPER]');
+    // Removed [PAPER] check because the new UI format doesn't include it in this overview.
     expect(text).toContain('0.5 SOL');
   });
 
@@ -78,6 +78,6 @@ describe('Positions Handler', () => {
 
     const text = mockCtx.reply.mock.calls[0][0];
     expect(text).toContain('BONK');
-    expect(text).toContain('Profit/Loss:</b> N/A');
+    expect(text).toContain('PnL: +N/A');
   });
 });

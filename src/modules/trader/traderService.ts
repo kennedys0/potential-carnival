@@ -19,6 +19,7 @@ export interface OrderRequest {
   source: 'MANUAL' | 'AUTOPILOT';
   slippageBps?: number;
   ownerToken?: string;
+  strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER';
 }
 
 import { WalletService } from '../wallet/walletService';
@@ -70,6 +71,7 @@ export class TraderService {
         entry_price_usd: req.currentPriceUsd,
         fee_lamports: appSettings.PAPER_TRADE_FEE_LAMPORTS,
         status: 'OPEN',
+        strategy: req.strategy || 'TRENDING',
       });
     }
 
@@ -138,6 +140,7 @@ export class TraderService {
         blockhash,
         last_valid_block_height: lastValidBlockHeight,
         pending_since: new Date().toISOString(),
+        strategy: req.strategy || 'TRENDING',
       });
     } catch (e: any) {
        // Probably idempotency collision

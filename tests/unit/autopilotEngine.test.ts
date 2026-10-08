@@ -25,6 +25,7 @@ describe('AutopilotEngine', () => {
       tradeRepo: {
         acquireBuyLock: vi.fn().mockResolvedValue(true),
         releaseBuyLock: vi.fn().mockResolvedValue(true),
+        getTradesByStatuses: vi.fn().mockResolvedValue([]),
       }
     };
 
