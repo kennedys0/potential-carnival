@@ -58,6 +58,6 @@ describe('TxSender', () => {
     };
 
     const result = await TxSender.sendAndConfirm(mockConnection, mockTx, [], { pollingIntervalMs: 1 });
-    expect(result.status).toBe('UNKNOWN');
+    expect(result.status).toBe('EXPIRED');
   });
 });

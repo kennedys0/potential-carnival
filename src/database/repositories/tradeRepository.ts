@@ -196,5 +196,29 @@ export class TradeRepository {
 
     if (error) throw new Error(`Failed to updateExitAttempt: ${error.message}`);
   }
+
+  async atomicReconcileExit(
+    tradeId: string,
+    exitAttemptId: string | undefined,
+    updates: Partial<TradeRecord>
+  ): Promise<void> {
+    const { error } = await this.db.rpc('atomic_reconcile_exit', {
+      p_trade_id: tradeId,
+      p_exit_attempt_id: exitAttemptId || null,
+      p_status: updates.status,
+      p_pnl_percent: updates.pnl_percent || 0,
+      p_pnl_sol: updates.pnl_sol || 0,
+      p_realized_pnl_sol: updates.realized_pnl_sol || 0,
+      p_tx_signature: updates.tx_signature || null,
+      p_remaining_raw: updates.remaining_raw || 0,
+      p_closed_at: updates.closed_at || null,
+      p_exit_price_usd: updates.exit_price_usd || null,
+      p_needs_attention: updates.needs_attention || null
+    });
+
+    if (error) {
+      throw new Error(`Failed to atomic_reconcile_exit: ${error.message}`);
+    }
+  }
 }
 

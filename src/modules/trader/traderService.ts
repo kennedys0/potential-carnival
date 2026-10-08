@@ -6,6 +6,7 @@ import { LiveTradingDisabledError, KillSwitchActiveError } from '../../utils/err
 import crypto from 'crypto';
 import { FillParser } from './fillParser.js';
 import { currencyService } from '../../utils/currencyService';
+import { logger } from '../../utils/logger';
 
 export interface OrderRequest {
   userId: number;
@@ -147,15 +148,25 @@ export class TraderService {
         }
       );
 
-      if (result.status === 'FAILED_ONCHAIN') {
+      if (
+        result.status === 'SIGN_FAILED' ||
+        result.status === 'PERSISTENCE_FAILED' ||
+        result.status === 'SUBMISSION_REJECTED' ||
+        result.status === 'FAILED_ONCHAIN'
+      ) {
         await this.tradeRepo.updateTradeStatus(tradeRecord.id!, {
           status: 'FAILED',
-          failure_reason: `On-chain failure: ${JSON.stringify(result.err)}`,
+          failure_reason: `Failure: ${result.status} - ${JSON.stringify(result.err)}`,
         });
-        throw new Error('On-chain transaction failed');
+        throw new Error(`On-chain transaction failed: ${result.status}`);
       }
 
-      if (result.status === 'UNKNOWN') {
+      if (
+        result.status === 'UNKNOWN' ||
+        result.status === 'SUBMISSION_TIMEOUT' ||
+        result.status === 'CONFIRMING' ||
+        result.status === 'EXPIRED'
+      ) {
         // Leave as PENDING for reconciliation
         return tradeRecord;
       }
@@ -194,10 +205,10 @@ export class TraderService {
         token_amount: finalTokenAmount,
         fee_lamports: Number(parseResult.feeLamports),
         tx_signature: signature,
-        token_amount_raw: Number(parseResult.tokenDeltaRaw),
+        token_amount_raw: parseResult.tokenDeltaRaw.toString(),
         token_decimals: parseResult.decimals,
-        sol_spent_lamports: Number(parseResult.solDeltaLamports),
-        remaining_raw: Number(parseResult.tokenDeltaRaw),
+        sol_spent_lamports: parseResult.solDeltaLamports.toString(),
+        remaining_raw: parseResult.tokenDeltaRaw.toString(),
       };
 
       await this.tradeRepo.updateTradeStatus(tradeRecord.id!, updates);
@@ -229,8 +240,9 @@ export class TraderService {
 
     const redis = getRedisConnection();
     const lockKey = `lock:trade:close:${trade.id}`;
-    // Lock for 60 seconds to prevent double-sell
-    const locked = await redis.set(lockKey, 'locked', 'PX', 60000, 'NX');
+    const ownerToken = crypto.randomUUID();
+    // Lock for 60 seconds to prevent double-sell with unique owner token
+    const locked = await redis.set(lockKey, ownerToken, 'PX', 60000, 'NX');
     if (!locked) {
       throw new Error('Penutupan posisi sedang diproses (terkunci redis).');
     }
@@ -336,23 +348,37 @@ export class TraderService {
       throw e;
     }
 
-    if (result.status === 'FAILED_ONCHAIN' || result.status === 'UNKNOWN') {
+    if (
+      result.status === 'SIGN_FAILED' ||
+      result.status === 'PERSISTENCE_FAILED' ||
+      result.status === 'SUBMISSION_REJECTED' ||
+      result.status === 'FAILED_ONCHAIN'
+    ) {
        await this.tradeRepo.updateTradeStatus(trade.id, {
-          last_exit_error: result.status === 'FAILED_ONCHAIN' ? `On-chain fail: ${JSON.stringify(result.err)}` : 'Unknown status',
+          last_exit_error: `Exit failed: ${result.status} - ${JSON.stringify(result.err)}`,
           needs_attention: currentAttempts >= 3,
        });
-       if (result.status === 'FAILED_ONCHAIN') {
-         if (exitAttempt.id) await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'FAILED' });
-         throw new Error('Exit transaction failed on-chain');
+       if (exitAttempt.id) {
+         await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'FAILED' });
        }
+       throw new Error(`Exit transaction failed: ${result.status}`);
+    }
+
+    if (
+      result.status === 'UNKNOWN' ||
+      result.status === 'SUBMISSION_TIMEOUT' ||
+      result.status === 'CONFIRMING' ||
+      result.status === 'EXPIRED'
+    ) {
+       await this.tradeRepo.updateTradeStatus(trade.id, {
+          last_exit_error: `Uncertain status: ${result.status}`,
+          needs_attention: currentAttempts >= 3,
+       });
        // UNKNOWN status stays PENDING
        return; 
     }
 
-    // SUCCESS flow
-    if (exitAttempt.id) {
-      await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'SUCCESS' });
-    }
+    // SUCCESS flow - DO NOT mark attempt SUCCESS until atomic reconciliation
     const signature = result.signature;
     await new Promise((res) => setTimeout(res, 2000));
     const tx = await this.walletService.getParsedTransaction(signature);
@@ -371,10 +397,19 @@ export class TraderService {
       }
     }
 
+    if (!tx || !tx.meta || tokenSpentRaw === 0) {
+      await this.tradeRepo.updateTradeStatus(trade.id, {
+         tx_signature: signature,
+         needs_attention: true,
+         last_exit_error: 'TX_CONFIRMED - FILL_RECONCILIATION_REQUIRED',
+      });
+      // Do NOT update exitAttempt to SUCCESS yet because we haven't reconciled the accounting!
+      return;
+    }
+
     const solReceived = solReceivedLamports > 0 ? solReceivedLamports / 1e9 : 0;
     
-    // Fallback if tokenSpentRaw is 0 (failed to parse), use amountLamports
-    const actualTokensSpent = tokenSpentRaw > 0 ? BigInt(tokenSpentRaw) : amountLamportsBigInt;
+    const actualTokensSpent = BigInt(tokenSpentRaw);
     const newTradeRemainingRaw = tradeBalanceRaw > actualTokensSpent ? tradeBalanceRaw - actualTokensSpent : 0n;
     
     const newStatus = newTradeRemainingRaw <= 0n ? 'CLOSED' : 'PARTIAL_EXIT';
@@ -405,7 +440,7 @@ export class TraderService {
       pnl_sol: realizedPnlSol,
       realized_pnl_sol: realizedPnlSol,
       tx_signature: signature,
-      remaining_raw: Number(newTradeRemainingRaw),
+      remaining_raw: newTradeRemainingRaw.toString(),
     };
 
     if (newStatus === 'CLOSED') {
@@ -417,16 +452,30 @@ export class TraderService {
     const totalRemainingTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
     if (totalRemainingTokenBalance.raw === 0n && newStatus !== 'CLOSED') {
       updates.status = 'CLOSED';
-      updates.remaining_raw = 0;
+      updates.remaining_raw = '0';
       updates.closed_at = new Date().toISOString();
       updates.exit_price_usd = currentPriceUsd;
       updates.needs_attention = true;
     }
 
-    await this.tradeRepo.updateTradeStatus(trade.id, updates);
+    if (exitAttempt.id) {
+      await this.tradeRepo.atomicReconcileExit(trade.id, exitAttempt.id, updates);
+    } else {
+      await this.tradeRepo.updateTradeStatus(trade.id, updates);
+    }
 
     } finally {
-      await redis.del(lockKey);
+      // Atomic compare-and-delete to ensure we only release our own lock
+      const luaScript = `
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("del", KEYS[1])
+        else
+            return 0
+        end
+      `;
+      await redis.eval(luaScript, 1, lockKey, ownerToken).catch(err => {
+        logger.error({ err, tradeId: trade.id }, 'Failed to release redis lock');
+      });
     }
   }
 

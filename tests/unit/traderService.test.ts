@@ -22,6 +22,7 @@ const mockRedis = {
   get: vi.fn(),
   set: vi.fn(),
   del: vi.fn(),
+  eval: vi.fn().mockResolvedValue(1),
 };
 
 vi.mock('../../src/queue/connection', () => ({
@@ -173,6 +174,7 @@ describe('TraderService', () => {
       getPendingExitAttempts: vi.fn().mockResolvedValue([]),
       createExitAttempt: vi.fn().mockImplementation(async (a: any) => ({ id: 'mock-exit', ...a })),
       updateExitAttempt: vi.fn().mockResolvedValue(true),
+      atomicReconcileExit: vi.fn().mockResolvedValue(true),
     };
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
@@ -266,6 +268,7 @@ describe('TraderService', () => {
       getPendingExitAttempts: vi.fn().mockResolvedValue([]),
       createExitAttempt: vi.fn().mockImplementation(async (a: any) => ({ id: 'mock-exit', ...a })),
       updateExitAttempt: vi.fn().mockResolvedValue(true),
+      atomicReconcileExit: vi.fn().mockResolvedValue(true),
     };
     const wallet: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
@@ -288,7 +291,10 @@ describe('TraderService', () => {
     };
     return { repo, wallet, jup, service: new TraderService(repo, wallet, jup) };
   };
-  const updatesOf = (repo: any): any[] => repo.updateTradeStatus.mock.calls.map((c: any) => c[1]);
+  const updatesOf = (repo: any): any[] => [
+    ...repo.updateTradeStatus.mock.calls.map((c: any) => c[1]),
+    ...(repo.atomicReconcileExit?.mock.calls.map((c: any) => c[2]) || [])
+  ];
 
   it('R2: exit LIVE tetap berjalan saat LIVE_TRADING_ENABLED=false DAN kill-switch aktif', async () => {
     vi.mocked(getEnv).mockReturnValue({ LIVE_TRADING_ENABLED: false } as any);
@@ -304,7 +310,7 @@ describe('TraderService', () => {
 
   it('R3: exit FAILED_ONCHAIN -> posisi TIDAK jadi FAILED, exit_attempts naik', async () => {
     const { service, repo } = exitDeps({ status: 'FAILED_ONCHAIN', signature: 's', err: { InstructionError: [0, 'Custom'] } });
-    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).rejects.toThrow('Exit transaction failed on-chain');
+    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).rejects.toThrowError(/Exit transaction failed: FAILED_ONCHAIN/);
     const ups = updatesOf(repo);
     expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
     expect(ups).toContainEqual(expect.objectContaining({ exit_attempts: 1 }));
@@ -316,7 +322,7 @@ describe('TraderService', () => {
     await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBeUndefined();
     const ups = updatesOf(repo);
     expect(ups.some((u) => u.status === 'FAILED')).toBe(false);
-    expect(ups).toContainEqual(expect.objectContaining({ last_exit_error: 'Unknown status' }));
+    expect(ups).toContainEqual(expect.objectContaining({ last_exit_error: 'Uncertain status: UNKNOWN' }));
   });
 
   it('R3: percobaan exit ke-3 yang gagal menyalakan needs_attention', async () => {
@@ -341,6 +347,7 @@ describe('TraderService', () => {
       getPendingExitAttempts: vi.fn().mockResolvedValue([]),
       createExitAttempt: vi.fn().mockImplementation(async (a: any) => ({ id: 'mock-exit', ...a })),
       updateExitAttempt: vi.fn().mockResolvedValue(true),
+      atomicReconcileExit: vi.fn().mockResolvedValue(true),
     };
     const wallet: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
@@ -459,7 +466,7 @@ describe('TraderService', () => {
     let ups = updatesOf(repo);
     let pnlUpdate1 = ups.find(u => u.pnl_sol !== undefined);
     expect(pnlUpdate1).toBeDefined();
-    expect(pnlUpdate1!.remaining_raw).toBe(initialRaw / 2);
+    expect(pnlUpdate1!.remaining_raw).toBe(String(initialRaw / 2));
     // Cost for 50% is 1 SOL. Received 1 SOL (net). Fee is 0.000005. PnL = 0.
     expect(pnlUpdate1!.realized_pnl_sol).toBeCloseTo(0.0, 5);
     
@@ -482,7 +489,7 @@ describe('TraderService', () => {
     ups = updatesOf(deps2.repo);
     const pnlUpdate2 = ups.find(u => u.status === 'CLOSED');
     expect(pnlUpdate2).toBeDefined();
-    expect(pnlUpdate2!.remaining_raw).toBe(0);
+    expect(pnlUpdate2!.remaining_raw).toBe('0');
     expect(pnlUpdate2!.closed_at).toBeDefined(); // should be fully closed
     // 2nd exit cost = 1 SOL. Received 1.5 SOL (net). Fee = 0.000005. Realized this time = +0.5.
     // Total realized = 0.0 + 0.5 = 0.5.

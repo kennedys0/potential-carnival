@@ -2,7 +2,16 @@ import { Connection, VersionedTransaction, Keypair, SignatureStatus } from '@sol
 import bs58 from 'bs58';
 import { logger } from '../../utils/logger';
 
-export type TxSendStatus = 'SUCCESS' | 'FAILED_ONCHAIN' | 'UNKNOWN' | 'NOT_SENT';
+export type TxSendStatus = 
+  | 'SIGN_FAILED'
+  | 'PERSISTENCE_FAILED'
+  | 'SUBMISSION_REJECTED'
+  | 'SUBMISSION_TIMEOUT'
+  | 'CONFIRMING'
+  | 'SUCCESS'
+  | 'FAILED_ONCHAIN'
+  | 'EXPIRED'
+  | 'UNKNOWN';
 
 export interface TxSendResult {
   status: TxSendStatus;
@@ -21,34 +30,35 @@ export class TxSender {
       onSignature?: (signature: string) => Promise<void>;
     } = {}
   ): Promise<TxSendResult> {
-    const { maxRetries = 3, pollingIntervalMs = 2000, onSignature } = options;
+    const { pollingIntervalMs = 2000, onSignature } = options;
 
     try {
       transaction.sign(signers);
     } catch (e) {
       logger.error({ err: e }, 'Failed to sign transaction');
-      // If sign fails, no signature is generated, but we MUST return a string, maybe fake or throw?
-      // Wait, "Dilarang signature: '' yang ambigu." We can just throw or return NOT_SENT with a placeholder.
-      // But actually, we don't even have a tx signature. Let's return 'NOT_SENT_SIGN_FAILED' as signature so it's not empty, or throw.
-      return { status: 'NOT_SENT', signature: 'SIGN_FAILED', err: e };
+      return { status: 'SIGN_FAILED', signature: '', err: e };
     }
 
     const signature = bs58.encode(transaction.signatures[0]);
     const recentBlockhash = transaction.message.recentBlockhash;
     
     if (onSignature) {
-      await onSignature(signature).catch(e => logger.error({ err: e }, 'onSignature callback failed'));
+      try {
+        await onSignature(signature);
+      } catch (e) {
+        logger.error({ err: e }, 'onSignature callback failed - persisting signature aborted');
+        return { status: 'PERSISTENCE_FAILED', signature, err: e };
+      }
     }
 
     try {
       await connection.sendTransaction(transaction, {
-        maxRetries,
+        maxRetries: 0,
         preflightCommitment: 'confirmed',
       });
     } catch (e: any) {
       logger.error({ err: e }, 'Failed to sendTransaction initially');
-      // sendTransaction might fail before even going to the network (e.g. preflight failure)
-      return { status: 'NOT_SENT', signature, err: e };
+      return { status: 'SUBMISSION_REJECTED', signature, err: e };
     }
 
     // Poll until confirmed/finalized or blockhash is invalid
@@ -83,7 +93,7 @@ export class TxSender {
            }
         }
         
-        return { status: 'UNKNOWN', signature, err: 'Blockhash expired' };
+        return { status: 'EXPIRED', signature, err: 'Blockhash expired' };
       }
 
       await new Promise(resolve => setTimeout(resolve, pollingIntervalMs));

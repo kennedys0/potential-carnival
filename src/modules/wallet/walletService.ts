@@ -204,12 +204,22 @@ export class WalletService {
 
       const result = await TxSender.sendAndConfirm(withdrawalConnection, transaction, [keypair]);
       
-      if (result.status === 'FAILED_ONCHAIN') {
-        throw new Error(`Withdrawal gagal di on-chain: ${JSON.stringify(result.err)}`);
+      if (
+        result.status === 'SIGN_FAILED' ||
+        result.status === 'PERSISTENCE_FAILED' ||
+        result.status === 'SUBMISSION_REJECTED' ||
+        result.status === 'FAILED_ONCHAIN'
+      ) {
+        throw new Error(`Withdrawal gagal: ${result.status} - ${JSON.stringify(result.err)}`);
       }
       
-      if (result.status === 'UNKNOWN') {
-        throw new Error('Status transaksi tidak diketahui (mungkin expired/timeout), cek explorer.');
+      if (
+        result.status === 'UNKNOWN' ||
+        result.status === 'SUBMISSION_TIMEOUT' ||
+        result.status === 'CONFIRMING' ||
+        result.status === 'EXPIRED'
+      ) {
+        throw new Error(`Status transaksi tidak pasti (${result.status}). Harap cek explorer sebelum mengulang.`);
       }
 
       return result.signature;
