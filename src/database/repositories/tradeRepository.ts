@@ -1,6 +1,9 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { logger } from '../../utils/logger';
 
+const SELECT_TRADES_SAFE = '*, remaining_raw:remaining_raw::text, token_amount_raw:token_amount_raw::text, sol_spent_lamports:sol_spent_lamports::text, sol_received_lamports:sol_received_lamports::text, fee_lamports:fee_lamports::text';
+const SELECT_EXIT_ATTEMPTS_SAFE = '*, tokens_amount_raw:tokens_amount_raw::text';
+
 export interface TradeRecord {
   id?: string;
   user_id: number;
@@ -59,7 +62,7 @@ export class TradeRepository {
     const { data, error } = await this.db
       .from('trades')
       .insert(trade)
-      .select()
+      .select(SELECT_TRADES_SAFE)
       .single();
 
     if (error) throw new Error(`Failed to createTrade: ${error.message}`);
@@ -73,7 +76,7 @@ export class TradeRepository {
   async getTradesByStatuses(userId: number, statuses: string[]): Promise<TradeRecord[]> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .eq('user_id', userId)
       .in('status', statuses);
 
@@ -84,7 +87,7 @@ export class TradeRepository {
   async getPendingTradesWithSignature(): Promise<any[]> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .eq('status', 'PENDING')
       .not('pending_signature', 'is', null);
     
@@ -97,7 +100,7 @@ export class TradeRepository {
   async getPendingTradesWithoutSignature(): Promise<TradeRecord[]> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .eq('status', 'PENDING')
       .is('pending_signature', null);
       
@@ -110,7 +113,7 @@ export class TradeRepository {
   async getOpenTradesOrderedFIFO(): Promise<any[]> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .in('status', ['OPEN', 'PARTIAL_EXIT'])
       .order('created_at', { ascending: true });
       
@@ -123,7 +126,7 @@ export class TradeRepository {
   async getClosedTradesSince(userId: number, sinceStr: string): Promise<TradeRecord[]> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .eq('user_id', userId)
       .eq('status', 'CLOSED')
       .gte('closed_at', sinceStr);
@@ -135,7 +138,7 @@ export class TradeRepository {
   async getRecentClosedTrades(userId: number, limit: number = 10): Promise<TradeRecord[]> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .eq('user_id', userId)
       .eq('status', 'CLOSED')
       .order('closed_at', { ascending: false })
@@ -148,7 +151,7 @@ export class TradeRepository {
   async getTradeById(id: string): Promise<TradeRecord | null> {
     const { data, error } = await this.db
       .from('trades')
-      .select('*')
+      .select(SELECT_TRADES_SAFE)
       .eq('id', id)
       .single();
 
@@ -171,7 +174,7 @@ export class TradeRepository {
   async getPendingExitAttempts(tradeId: string): Promise<ExitAttemptRecord[]> {
     const { data, error } = await this.db
       .from('exit_attempts')
-      .select('*')
+      .select(SELECT_EXIT_ATTEMPTS_SAFE)
       .eq('trade_id', tradeId)
       .eq('status', 'PENDING');
       
@@ -182,7 +185,7 @@ export class TradeRepository {
   async getAllPendingExitAttempts(): Promise<ExitAttemptRecord[]> {
     const { data, error } = await this.db
       .from('exit_attempts')
-      .select('*')
+      .select(SELECT_EXIT_ATTEMPTS_SAFE)
       .eq('status', 'PENDING');
       
     if (error) throw new Error(`Failed to getAllPendingExitAttempts: ${error.message}`);
@@ -193,7 +196,7 @@ export class TradeRepository {
     const { data, error } = await this.db
       .from('exit_attempts')
       .insert(attempt)
-      .select()
+      .select(SELECT_EXIT_ATTEMPTS_SAFE)
       .single();
 
     if (error) throw new Error(`Failed to createExitAttempt: ${error.message}`);

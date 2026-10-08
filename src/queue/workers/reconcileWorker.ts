@@ -305,7 +305,12 @@ export function createReconcileWorker(
                          const postBalance = tx.meta.postBalances[destIndex];
                          const actualReceivedLamports = postBalance - preBalance;
                          
-                         if (w.amount_sol === -1) {
+                         if (w.expected_lamports) {
+                             const expected = parseInt(w.expected_lamports, 10);
+                             if (actualReceivedLamports >= expected - 10000) {
+                                 isValidTransfer = true;
+                             }
+                         } else if (w.amount_sol === -1) {
                              if (actualReceivedLamports > 0) {
                                  isValidTransfer = true;
                              }

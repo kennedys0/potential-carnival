@@ -242,10 +242,14 @@ export class WalletService {
           amount_sol: transferLamports / LAMPORTS_PER_SOL,
           destination_address: finalDestAddress,
           status: 'PENDING',
-          idempotency_key: idempotencyKey
+          idempotency_key: idempotencyKey,
+          expected_lamports: transferLamports.toString()
         });
       } else {
-        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'SUBMITTED' });
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { 
+          status: 'SUBMITTED',
+          expected_lamports: transferLamports.toString()
+        });
       }
 
       const result = await TxSender.sendAndConfirm(withdrawalConnection, transaction, [keypair], {

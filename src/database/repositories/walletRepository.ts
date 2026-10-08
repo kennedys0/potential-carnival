@@ -57,7 +57,7 @@ export class WalletRepository {
     return true;
   }
 
-  async createWithdrawalAttempt(data: { user_id: number; amount_sol: number; destination_address: string; status: string; idempotency_key: string }): Promise<string> {
+  async createWithdrawalAttempt(data: { user_id: number; amount_sol: number; destination_address: string; status: string; idempotency_key: string; expected_lamports?: string }): Promise<string> {
     const { data: record, error } = await this.db.from('withdrawal_attempts').insert(data).select('id').single();
     if (error) {
       if (error.code === '23505') { // unique violation
@@ -91,7 +91,7 @@ export class WalletRepository {
     return data;
   }
 
-  async updateWithdrawalAttempt(id: string, updates: { status?: string; tx_signature?: string }): Promise<void> {
+  async updateWithdrawalAttempt(id: string, updates: { status?: string; tx_signature?: string; expected_lamports?: string }): Promise<void> {
     const { error } = await this.db.from('withdrawal_attempts').update(updates).eq('id', id);
     if (error) {
       throw new Error(`Failed to update withdrawal attempt: ${error.message}`);
