@@ -89,8 +89,7 @@ export class TradeRepository {
       .not('pending_signature', 'is', null);
     
     if (error) {
-      logger.error({ error }, 'Failed to get pending trades with signature');
-      return [];
+      throw new Error(`Failed to get pending trades with signature: ${error.message}`);
     }
     return data || [];
   }
@@ -103,8 +102,7 @@ export class TradeRepository {
       .order('created_at', { ascending: true });
       
     if (error) {
-      logger.error({ error }, 'Failed to get open trades ordered FIFO');
-      return [];
+      throw new Error(`Failed to get open trades ordered FIFO: ${error.message}`);
     }
     return data || [];
   }

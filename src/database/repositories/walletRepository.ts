@@ -119,7 +119,9 @@ export class WalletRepository {
         'CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED',
         'CONFIRMING', 'TX_CONFIRMED', 'RECONCILING', 'PENDING', 'NEEDS_ATTENTION'
       ]);
-    if (error) return [];
+    if (error) {
+      throw new Error(`Database error on getPendingWithdrawals: ${error.message}`);
+    }
     return data;
   }
 }
