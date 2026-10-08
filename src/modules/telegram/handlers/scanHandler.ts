@@ -4,13 +4,15 @@ import { SecurityFilterService } from '../../security/securityFilterService';
 import { AnalyzerService } from '../../analyzer/analyzerService';
 import { escapeHtml, formatTokenReport } from '../formatters/messageFormatter';
 import { createTokenKeyboard } from '../formatters/keyboardBuilder';
+import { AutopilotRepository } from '../../../database/repositories/autopilotRepository';
 
 export async function handleScanCommand(
   ctx: Context,
   tokenMint: string,
   scannerService: ScannerService,
   securityService: SecurityFilterService,
-  analyzerService: AnalyzerService
+  analyzerService: AnalyzerService,
+  autopilotRepo: AutopilotRepository
 ): Promise<void> {
   const isCallback = !!ctx.callbackQuery;
   const callbackMessageId = isCallback && ctx.callbackQuery?.message
@@ -64,8 +66,11 @@ export async function handleScanCommand(
        aiAnalysis = await analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
     }
 
+    const config = await autopilotRepo.getOrCreateConfig(ctx.from!.id);
+    const isDryRun = config.mode === 'PAPER';
+
     const reportText = formatTokenReport(pair, security, aiAnalysis, !!indicators);
-    const keyboard = createTokenKeyboard(tokenMint, true);
+    const keyboard = createTokenKeyboard(tokenMint, isDryRun);
 
     await ctx.api.editMessageText(chatId, activeMessageId, reportText, {
       parse_mode: 'HTML',

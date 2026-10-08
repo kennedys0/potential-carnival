@@ -149,7 +149,7 @@ export function registerBotRoutes(
       );
       return;
     }
-    await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService);
+    await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService, services.autopilotRepo);
   });
 
   // Command /set_withdraw_address
@@ -266,7 +266,7 @@ export function registerBotRoutes(
 
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
     if (solanaAddressRegex.test(text) && !text.startsWith('/')) {
-      await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService);
+      await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService, services.autopilotRepo);
       return;
     }
     await next();
@@ -574,7 +574,7 @@ export function registerBotRoutes(
     // 5. Token Scan Actions
     else if (data.startsWith('refresh:')) {
       const tokenMint = data.split(':')[1];
-      await handleScanCommand(ctx, tokenMint, services.scannerService, services.securityService, services.analyzerService);
+      await handleScanCommand(ctx, tokenMint, services.scannerService, services.securityService, services.analyzerService, services.autopilotRepo);
     } else if (data.startsWith('buy_custom:')) {
       if (!ctx.from) return;
       const mint = data.split(':')[1];

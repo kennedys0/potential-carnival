@@ -59,6 +59,13 @@ export function createTelegramBot(token?: string): Bot {
   });
 
   bot.catch((err) => {
+    // Ignore harmless callback query timeout errors
+    if (
+      err.message && 
+      err.message.includes('query is too old and response timeout expired')
+    ) {
+      return;
+    }
     logger.error({ err }, 'Grammy unhandled bot error');
   });
 
