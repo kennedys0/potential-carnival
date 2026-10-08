@@ -94,7 +94,10 @@ BEGIN
     IF p_tx_signature IS NOT NULL THEN
         SELECT * INTO v_existing_fill FROM trade_fills WHERE trade_id = p_trade_id AND tx_signature = p_tx_signature;
         IF FOUND THEN
-            IF v_existing_fill.token_delta_raw != p_token_delta_raw OR v_existing_fill.sol_delta_lamports != p_sol_delta_lamports THEN
+            IF v_existing_fill.token_delta_raw != p_token_delta_raw OR 
+               v_existing_fill.sol_delta_lamports != p_sol_delta_lamports OR
+               v_existing_fill.fee_lamports != p_fee_lamports OR
+               (v_existing_fill.exit_attempt_id IS DISTINCT FROM p_exit_attempt_id) THEN
                 RETURN 'CONFLICT'; 
             END IF;
             RETURN 'ALREADY_APPLIED';

@@ -59,21 +59,10 @@ export class TxSender {
         preflightCommitment: 'confirmed',
       });
     } catch (e: any) {
-      logger.error({ err: e }, 'Failed to sendTransaction initially');
-      
-      const errMsg = e.message ? e.message.toLowerCase() : '';
-      // Strict matching for definite rejection to avoid false positives from generic transport errors
-      const isDefiniteRejection = errMsg.includes('blockhash not found') || 
-                                  errMsg.includes('invalid blockhash') || 
-                                  errMsg.includes('signature verification failed');
-
-      if (isDefiniteRejection) {
-        return { status: 'SUBMISSION_REJECTED', signature, err: e };
-      } else {
-        // TCP timeout, rate limit, internal server error, or other ambiguous errors
-        // We cannot guarantee the network didn't receive it!
-        return { status: 'UNKNOWN', signature, err: e };
-      }
+      logger.error({ err: e }, 'Failed to sendTransaction initially. Treating as UNCERTAIN and proceeding to poll.');
+      // Konservatif: Jika ada error saat sendTransaction (termasuk timeout/network),
+      // transaksi MUNGKIN sudah ter-broadcast ke jaringan. 
+      // Kita lanjutkan ke proses polling untuk memastikan status akhirnya via getSignatureStatuses.
     }
     const startTime = Date.now();
     const timeoutMs = options.timeoutMs || appSettings.TX_POLLING_TIMEOUT_MS;

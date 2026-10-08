@@ -88,10 +88,10 @@ export function createReconcileWorker(
                  const isValid = await connection.isBlockhashValid(trade.blockhash, { commitment: 'confirmed' });
                  if (!isValid.value) {
                    await tradeRepo.updateTradeStatus(trade.id!, {
-                     status: 'FAILED',
-                     failure_reason: `Signature lost and blockhash expired`,
+                     needs_attention: true,
+                     failure_reason: `Signature status unknown and blockhash expired (Escalated)`,
                    });
-                   logger.info({ tradeId: trade.id }, 'Reconciled PENDING trade to FAILED (blockhash expired)');
+                   logger.warn({ tradeId: trade.id }, 'Reconciled PENDING trade to NEEDS_ATTENTION (blockhash expired but outcome unproven)');
                  }
                }
              }
@@ -275,7 +275,7 @@ export function createReconcileWorker(
                      await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'SUCCESS' });
                   }
                }
-            } else if (w.status === 'CONFIRMING' || w.status === 'SIGNED') {
+            } else if (['CREATED', 'AUTHORIZED', 'CLAIMED', 'SIGNED', 'SUBMITTED', 'CONFIRMING', 'PENDING'].includes(w.status)) {
                // If it's been more than 5 minutes, mark as NEEDS_ATTENTION for investigation
                const age = Date.now() - new Date(w.updated_at).getTime();
                if (age > 300000) {

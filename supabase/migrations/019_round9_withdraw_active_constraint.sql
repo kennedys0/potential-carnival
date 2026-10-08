@@ -4,7 +4,7 @@ DROP INDEX IF EXISTS unique_active_withdrawal;
 -- Prevent multiple active withdrawal attempts per user (any state that is not a terminal state)
 CREATE UNIQUE INDEX unique_active_withdrawal 
 ON withdrawal_attempts (user_id) 
-WHERE status NOT IN ('SUCCESS', 'FAILED', 'CANCELLED', 'EXPIRED', 'RECONCILED', 'UNKNOWN');
+WHERE status NOT IN ('SUCCESS', 'FAILED', 'CANCELLED', 'RECONCILED');
 
 -- Atomic creation function with spendable SOL check
 CREATE OR REPLACE FUNCTION atomic_create_withdrawal(
@@ -22,7 +22,7 @@ BEGIN
     SELECT COUNT(*) INTO v_active_count 
     FROM withdrawal_attempts 
     WHERE user_id = p_user_id 
-    AND status NOT IN ('SUCCESS', 'FAILED', 'CANCELLED', 'EXPIRED', 'RECONCILED', 'UNKNOWN');
+    AND status NOT IN ('SUCCESS', 'FAILED', 'CANCELLED', 'RECONCILED');
 
     IF v_active_count > 0 THEN
         RAISE EXCEPTION 'Withdrawal sedang diproses atau sudah pernah dikirim.';
