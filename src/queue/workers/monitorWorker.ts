@@ -53,6 +53,7 @@ export function createMonitorWorker(
         // Get current price
         let pnlPercent = 0;
         let currentPriceUsd = 0;
+        let pnlSol = 0;
 
         if (trade.is_dry_run) {
            const pair = await scannerService.scanTokenByAddress(tokenMint);
@@ -61,6 +62,7 @@ export function createMonitorWorker(
            if (currentPriceUsd <= 0) return;
            const entryPrice = trade.entry_price_usd;
            pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
+           pnlSol = (trade.sol_amount || 0) * (pnlPercent / 100);
         } else {
            // Live trading: use Jupiter Quote
            if (!trade.remaining_raw) {
@@ -98,6 +100,7 @@ export function createMonitorWorker(
                 return;
              }
 
+             pnlSol = solToReceive - solSpent;
              pnlPercent = ((solToReceive - solSpent) / solSpent) * 100;
              currentPriceUsd = trade.entry_price_usd * (solToReceive / solSpent);
            } catch (e) {
@@ -152,18 +155,30 @@ export function createMonitorWorker(
           try {
             const status = await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
             try {
+              const statusEmoji = pnlPercent >= 0 ? '🟢' : '🔴';
+              const actionTitle = pnlPercent >= 0 ? 'TAKE PROFIT REACHED' : 'STOP LOSS TRIGGERED';
+              
+              const pnlIdr = pnlSol * 2500000;
+              const sign = pnlSol >= 0 ? '+' : '';
+              const idrFormatted = Math.abs(pnlIdr).toLocaleString('id-ID', { style: 'currency', currency: 'IDR' });
+
               if (status === 'SUCCESS') {
                 await botApi.sendMessage(userId, 
-                  `🔔 <b>Monitor Alert!</b>\n\n` +
-                  `Posisi <b>${escapeHtml(trade.token_symbol)}</b> berhasil ditutup (${percentageToClose}%).\n` +
+                  `${statusEmoji} <b>${actionTitle}</b>\n\n` +
+                  `Token: <b>${escapeHtml(trade.token_symbol)}</b>\n` +
+                  `Status: Tertutup (${percentageToClose}%)\n` +
+                  `Entry: $${trade.entry_price_usd.toFixed(6)}\n` +
+                  `Exit: $${currentPriceUsd.toFixed(6)}\n` +
+                  `PnL: ${sign}${pnlSol.toFixed(4)} SOL (${sign}${idrFormatted})\n\n` +
                   `Alasan: ${escapeHtml(reason)}`,
                   { parse_mode: 'HTML' }
                 );
               } else if (status === 'UNCERTAIN') {
                 await botApi.sendMessage(userId, 
-                  `🔔 <b>Monitor Alert!</b>\n\n` +
-                  `Permintaan tutup <b>${escapeHtml(trade.token_symbol)}</b> (${percentageToClose}%) terkirim.\n` +
-                  `Status transaksi saat ini belum pasti (menunggu konfirmasi).`,
+                  `⏳ <b>CLOSE POSITION SENT</b>\n\n` +
+                  `Token: <b>${escapeHtml(trade.token_symbol)}</b>\n` +
+                  `Status: Menunggu Konfirmasi Jaringan\n` +
+                  `Alasan: ${escapeHtml(reason)}`,
                   { parse_mode: 'HTML' }
                 );
               }

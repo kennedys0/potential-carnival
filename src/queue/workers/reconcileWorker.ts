@@ -205,6 +205,7 @@ export function createReconcileWorker(
           // Group by user_id and token_mint
           const groups = new Map<string, typeof openTrades>();
           for (const t of openTrades) {
+            if (t.is_dry_run) continue; // Do not compare on-chain inventory for Paper Trades
             const key = `${t.user_id}:${t.token_mint}`;
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key)!.push(t);

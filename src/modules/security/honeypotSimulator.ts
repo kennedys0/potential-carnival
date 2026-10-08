@@ -65,6 +65,16 @@ export class HoneypotSimulator {
         priceImpactPct: { value: priceImpact, status: 'OK', source: 'Jupiter Quote API' },
       };
     } catch (err: any) {
+      const isRateLimit = err?.response?.status === 429 || err?.status === 429 || err.message?.includes('429');
+      if (isRateLimit) {
+        logger.warn('Jupiter API rate limit reached (429). Cannot simulate sell.');
+        return {
+          canSell: { value: null, status: 'UNAVAILABLE', source: 'Jupiter Rate Limited' },
+          effectiveTaxPercent: { value: null, status: 'UNAVAILABLE', source: 'Jupiter Rate Limited' },
+          priceImpactPct: { value: null, status: 'UNAVAILABLE', source: 'Jupiter Rate Limited' },
+        };
+      }
+
       const isRouteError = err.name === 'ResponseError' || err.message?.includes('Response returned an error code') || err.message?.includes('Failed to get quote');
       if (isRouteError) {
         logger.debug({ err: err.message }, 'Jupiter API refused simulation (likely no route or liquidity)');

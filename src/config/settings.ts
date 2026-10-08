@@ -31,7 +31,7 @@ export const AppSettingsSchema = z.object({
     DEFAULT_TRAILING_ACTIVATION_PERCENT: z.number().default(20),
   }).default({}),
   AUTOPILOT_PARAMS: z.object({
-    DEFAULT_MIN_RESERVE_SOL: z.number().default(0.05),
+    DEFAULT_MIN_RESERVE_SOL: z.number().default(0.03),
     DEFAULT_BUDGET_SOL: z.number().default(1000.0), // reasonable explicit budget instead of Infinity
     DEFAULT_MAX_DAILY_LOSS_SOL: z.number().default(1.0),
     DEFAULT_MAX_CONSECUTIVE_LOSSES: z.number().default(10),

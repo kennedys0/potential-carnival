@@ -77,7 +77,7 @@ export class ScoreCalculator {
 
     addReport('Sell Simulation', input.sellSimulationSuccess, input.sellSimulationSuccess.value ? 'Success' : 'Failed');
     if (input.sellSimulationSuccess.status === 'UNAVAILABLE') {
-      hardBlockReasons.push('Sell simulation route data UNAVAILABLE');
+      riskFlags.push('Sell simulation route data UNAVAILABLE');
     } else if (!input.sellSimulationSuccess.value) {
       hardBlockReasons.push('Sell simulation failed (Honeypot risk)');
     }

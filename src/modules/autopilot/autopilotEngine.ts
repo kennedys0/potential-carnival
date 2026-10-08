@@ -32,7 +32,7 @@ const SizingParamsSchema = z.object({
   risk_percent: z.number().optional(),
   max_size_per_trade: z.number().optional(),
   max_concurrent_positions: z.number().default(3),
-  min_reserve_sol: z.number().default(0.05),
+  min_reserve_sol: z.number().default(0.03),
 });
 
 const CircuitBreakerParamsSchema = z.object({
