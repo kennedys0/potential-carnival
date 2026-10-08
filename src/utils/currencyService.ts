@@ -29,28 +29,33 @@ export class CurrencyService {
 
     try {
       const response = await fetch(
-        'https://api.coingecko.com/api/v3/simple/price?ids=solana,tether&vs_currencies=idr,usd',
+        'https://api.binance.com/api/v3/ticker/price?symbols=%5B%22SOLUSDT%22,%22USDTIDR%22%5D',
         { signal: AbortSignal.timeout(appSettings.CURRENCY_FETCH_TIMEOUT_MS) },
       );
       if (!response.ok) {
-        throw new Error(`CoinGecko returned status: ${response.status}`);
+        throw new Error(`Binance returned status: ${response.status}`);
       }
-      const data = (await response.json()) as any;
+      const data = (await response.json()) as any[];
 
-      const idrSol = data?.solana?.idr;
-      const usdSol = data?.solana?.usd;
-      const idrUsd = data?.tether?.idr;
-      if (!CurrencyService.valid(idrSol) || !CurrencyService.valid(usdSol) || !CurrencyService.valid(idrUsd)) {
-        throw new Error('CoinGecko response missing/invalid rate fields');
+      const solData = data.find(d => d.symbol === 'SOLUSDT');
+      const idrData = data.find(d => d.symbol === 'USDTIDR');
+      
+      const usdSol = solData ? parseFloat(solData.price) : null;
+      const idrUsd = idrData ? parseFloat(idrData.price) : null;
+      
+      if (!CurrencyService.valid(usdSol) || !CurrencyService.valid(idrUsd)) {
+        throw new Error('Binance response missing/invalid rate fields');
       }
+
+      const idrSol = usdSol * idrUsd;
 
       this.idrPerSol = idrSol;
       this.usdPerSol = usdSol;
       this.idrPerUsd = idrUsd;
       this.lastSuccessAt = now;
-      logger.info({ idrPerUsd: idrUsd, idrPerSol: idrSol, usdPerSol: usdSol }, 'Currency rates updated from CoinGecko');
+      logger.info({ idrPerUsd: idrUsd, idrPerSol: idrSol, usdPerSol: usdSol }, 'Currency rates updated from Binance');
     } catch (err: any) {
-      logger.error({ err }, 'Failed to fetch currency rates from CoinGecko');
+      logger.error({ err }, 'Failed to fetch currency rates from Binance');
     }
   }
 
