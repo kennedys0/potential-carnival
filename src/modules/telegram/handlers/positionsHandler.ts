@@ -13,7 +13,14 @@ export async function handlePositionsMenu(
 ): Promise<void> {
   if (!ctx.from) return;
 
-  const openTrades = await tradeRepo.getOpenTradesByUserId(ctx.from.id);
+  const openTrades = await tradeRepo.getTradesByStatuses(ctx.from.id, [
+    'RESERVED',
+    'SIGNED',
+    'BROADCAST_ATTEMPTED',
+    'PENDING',
+    'OPEN',
+    'PARTIAL_EXIT',
+  ]);
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
 
   const keyboard = new InlineKeyboard();
@@ -52,7 +59,9 @@ export async function handlePositionsMenu(
       let pnlSol = 0;
       let pnlIcon = '➖';
       
-      if (currentPriceUsd > 0 && trade.entry_price_usd > 0) {
+      const isPending = !['OPEN', 'PARTIAL_EXIT'].includes(trade.status);
+
+      if (!isPending && currentPriceUsd > 0 && trade.entry_price_usd > 0) {
         const liveAcct = AccountingEngine.calculateLiveValuation({
           trade,
           currentPriceUsd
@@ -66,8 +75,13 @@ export async function handlePositionsMenu(
       
       const pnlIdr = currencyService.solToIdr(pnlSol);
 
-      text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
-      text += `   ↳ <code>${trade.sol_amount} SOL</code> | PnL: ${pnlSol >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n\n`;
+      if (isPending) {
+         text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ⏳ <b>${trade.status}</b>\n`;
+         text += `   ↳ <code>Membeli...</code> | Harap tunggu konfirmasi\n\n`;
+      } else {
+         text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
+         text += `   ↳ <code>${trade.sol_amount} SOL</code> | PnL: ${pnlSol >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n\n`;
+      }
       
       keyboard.text(`${trade.token_symbol}`, `view_pos:${trade.id}`);
       if ((i + 1) % 2 === 0) keyboard.row();
@@ -121,7 +135,9 @@ export async function handlePositionDetail(
   let pnlUsd = 0;
   let pnlIdr: number | null = 0;
   
-  if (currentPriceUsd > 0 && trade.entry_price_usd > 0) {
+  const isPending = !['OPEN', 'PARTIAL_EXIT'].includes(trade.status);
+  
+  if (!isPending && currentPriceUsd > 0 && trade.entry_price_usd > 0) {
     const liveAcct = AccountingEngine.calculateLiveValuation({
       trade,
       currentPriceUsd
@@ -135,7 +151,18 @@ export async function handlePositionDetail(
   const pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
 
-  const text = `
+  const text = isPending ? `
+📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
+<code>${escapeHtml(trade.token_mint)}</code>
+
+• <b>Mode:</b> ${modeBadge}
+• <b>Status:</b> ⏳ <code>${trade.status}</code>
+• <b>Alokasi:</b> ${trade.sol_amount} SOL
+
+<i>Order Anda sedang diproses dan menunggu konfirmasi jaringan. Silakan refresh dalam beberapa detik.</i>
+
+<i>Diperbarui: ${timestamp}</i>
+`.trim() : `
 📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
 <code>${escapeHtml(trade.token_mint)}</code>
 
@@ -152,9 +179,11 @@ export async function handlePositionDetail(
 <i>Diperbarui: ${timestamp}</i>
 `.trim();
 
-  const keyboard = new InlineKeyboard()
-    .text('🔴 Jual Semua (100%)', `sell:${trade.id}:100`)
-    .row()
+  const keyboard = new InlineKeyboard();
+  if (!isPending) {
+    keyboard.text('🔴 Jual Semua (100%)', `sell:${trade.id}:100`).row();
+  }
+  keyboard
     .text('🔄 Refresh', `view_pos:${trade.id}`)
     .text('🔙 Kembali', 'menu_positions');
 
