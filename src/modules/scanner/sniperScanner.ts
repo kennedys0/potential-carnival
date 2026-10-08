@@ -112,11 +112,7 @@ export class SniperScanner {
           const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
           
           const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
-          let aiAnalysis = null;
-          // Only analyze with LLM if indicators exist and LLM is enabled in Sniper mode
-          if (indicators) {
-            aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
-          }
+          let aiAnalysis = null; // Removed AI analysis for Sniper mode to speed up execution
 
           // 4. Evaluate for all active users
           for (const config of activeConfigs) {
