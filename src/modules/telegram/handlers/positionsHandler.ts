@@ -3,6 +3,7 @@ import { TradeRepository } from '../../../database/repositories/tradeRepository'
 
 import { currencyService } from '../../../utils/currencyService';
 import { ScannerService } from '../../scanner/scannerService';
+import { AccountingEngine } from '../../trader/accountingEngine.js';
 
 export async function handlePositionsMenu(
   ctx: Context,
@@ -53,8 +54,7 @@ export async function handlePositionsMenu(
       
       if (currentPriceUsd > 0 && entryPrice > 0) {
         // Use AccountingEngine for accurate live PnL instead of naive price differences
-        const acct = await import('../../trader/accountingEngine.js');
-        const liveAcct = acct.AccountingEngine.calculateLiveValuation({
+        const liveAcct = AccountingEngine.calculateLiveValuation({
           trade,
           currentPriceUsd
         });

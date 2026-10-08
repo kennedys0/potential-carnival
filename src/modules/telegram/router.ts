@@ -325,7 +325,8 @@ export function registerBotRoutes(
     } else if (data.startsWith('wd_exec:')) {
       const withdrawalId = data.substring(8);
       await ctx.answerCallbackQuery({ text: '⏳ Memproses penarikan...' });
-      await handleWalletWithdrawExecute(ctx, withdrawalId, services.walletService);
+      const redis = getRedisConnection();
+      await handleWalletWithdrawExecute(ctx, withdrawalId, services.walletService, redis);
     } else if (data === 'withdraw_cancel') {
       await ctx.answerCallbackQuery({ text: '❌ Penarikan dibatalkan.' });
       await handleWalletMenu(ctx, services.walletService);

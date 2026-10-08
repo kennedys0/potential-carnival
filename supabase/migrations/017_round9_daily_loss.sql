@@ -5,7 +5,7 @@ BEGIN
     SELECT *
     FROM trades
     WHERE user_id = p_user_id
-      AND status = 'CLOSED'
+      AND status IN ('CLOSED', 'PARTIAL_EXIT')
       AND closed_at >= (NOW() AT TIME ZONE p_timezone)::DATE AT TIME ZONE p_timezone;
 END;
 $$ LANGUAGE plpgsql;

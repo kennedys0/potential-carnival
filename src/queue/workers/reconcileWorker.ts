@@ -8,6 +8,7 @@ import { appSettings } from '../../config/settings';
 import { PublicKey } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { FillParser } from '../../modules/trader/fillParser.js';
+import { AccountingEngine } from '../../modules/trader/accountingEngine.js';
 
 export function createReconcileWorker(
   tradeRepo: TradeRepository,
@@ -107,10 +108,10 @@ export function createReconcileWorker(
           const attemptAgeMs = Date.now() - new Date(attempt.created_at || Date.now()).getTime();
           
           if (!attempt.tx_signature) {
-             // Failed before signature was recorded, or crashed
+             // We don't know if it was broadcasted before crash. Do NOT mark FAILED.
              if (attemptAgeMs > 60000) { // 60 seconds timeout
-                await tradeRepo.updateExitAttempt(attempt.id!, { status: 'FAILED' });
-                logger.info({ attemptId: attempt.id }, 'Reconciled PENDING exit attempt to FAILED (timeout without signature)');
+                await tradeRepo.updateTradeStatus(attempt.trade_id, { needs_attention: true });
+                logger.warn({ attemptId: attempt.id, tradeId: attempt.trade_id }, 'Exit attempt stalled without signature for >60s. Marked trade NEEDS_ATTENTION');
              }
              continue;
           }
@@ -256,8 +257,13 @@ export function createReconcileWorker(
                 }
               }
            }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Failed to fetch open trades');
+      }
 
-          // Withdrawal Reconciliation
+      // Withdrawal Reconciliation (Independent workflow, runs regardless of open positions)
+      try {
           const pendingWithdrawals = await walletService['walletRepo'].getPendingWithdrawals();
           for (const w of pendingWithdrawals) {
             if (w.tx_signature) {
@@ -270,16 +276,16 @@ export function createReconcileWorker(
                   }
                }
             } else if (w.status === 'CONFIRMING' || w.status === 'SIGNED') {
-               // If it's been more than 5 minutes, mark as FAILED
+               // If it's been more than 5 minutes, mark as NEEDS_ATTENTION for investigation
                const age = Date.now() - new Date(w.updated_at).getTime();
                if (age > 300000) {
-                 await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'FAILED' });
+                 await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'NEEDS_ATTENTION' });
+                 logger.warn({ attemptId: w.id }, 'Withdrawal stalled without signature for >5 mins. Marked NEEDS_ATTENTION');
                }
             }
           }
-        }
       } catch (err) {
-        logger.error({ err }, 'Failed to fetch open trades');
+          logger.error({ err }, 'Failed to reconcile withdrawals');
       }
       
     } catch (e) {

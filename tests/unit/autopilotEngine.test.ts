@@ -22,6 +22,10 @@ describe('AutopilotEngine', () => {
 
     mockTraderService = {
       executeOrder: vi.fn().mockResolvedValue({}),
+      tradeRepo: {
+        acquireBuyLock: vi.fn().mockResolvedValue(true),
+        releaseBuyLock: vi.fn().mockResolvedValue(true),
+      }
     };
 
     mockRedis = {
@@ -75,8 +79,8 @@ describe('AutopilotEngine', () => {
     expect(mockAutopilotRepo.saveDecisionLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'SKIP' }));
   });
 
-  it('rejects if redis lock cannot be acquired', async () => {
-    mockRedis.set.mockResolvedValue(null); // lock failed
+  it('rejects if database lock cannot be acquired', async () => {
+    mockTraderService.tradeRepo.acquireBuyLock.mockResolvedValue(false); // lock failed
     const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService);
     
     const currentState = {

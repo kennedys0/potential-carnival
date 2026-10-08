@@ -5,6 +5,7 @@ import { getRedisConnection } from '../../queue/connection';
 import { LiveTradingDisabledError, KillSwitchActiveError } from '../../utils/errors';
 import crypto from 'crypto';
 import { FillParser } from './fillParser.js';
+import { AccountingEngine } from './accountingEngine.js';
 import { currencyService } from '../../utils/currencyService';
 import { logger } from '../../utils/logger';
 
@@ -17,6 +18,7 @@ export interface OrderRequest {
   isDryRun: boolean;
   source: 'MANUAL' | 'AUTOPILOT';
   slippageBps?: number;
+  ownerToken?: string;
 }
 
 import { WalletService } from '../wallet/walletService';
@@ -47,6 +49,11 @@ export class TraderService {
         throw new Error('Kurs SOL/USD tidak tersedia; trade paper ditolak (bot tidak memakai harga palsu). Coba lagi sebentar lagi.');
       }
       const tokenAmount = req.currentPriceUsd > 0 ? (req.solAmount * usdPerSol) / req.currentPriceUsd : 0;
+      
+      const tokenDecimals = 6; // Standard simulation decimals
+      const tokenAmountRaw = Math.floor(tokenAmount * (10 ** tokenDecimals)).toString();
+      const solSpentLamports = Math.floor(req.solAmount * 1e9);
+
       return this.tradeRepo.createTrade({
         user_id: req.userId,
         token_mint: req.tokenMint,
@@ -56,6 +63,10 @@ export class TraderService {
         is_dry_run: true,
         sol_amount: req.solAmount,
         token_amount: tokenAmount,
+        token_amount_raw: tokenAmountRaw,
+        remaining_raw: tokenAmountRaw,
+        token_decimals: tokenDecimals,
+        sol_spent_lamports: solSpentLamports,
         entry_price_usd: req.currentPriceUsd,
         fee_lamports: appSettings.PAPER_TRADE_FEE_LAMPORTS,
         status: 'OPEN',
@@ -134,6 +145,14 @@ export class TraderService {
     }
 
     try {
+      if (req.ownerToken) {
+        const isValid = await this.tradeRepo.verifyBuyLock(req.userId, req.tokenMint, req.ownerToken);
+        if (!isValid) {
+          await this.tradeRepo.updateTradeStatus(tradeRecord.id!, { status: 'FAILED', failure_reason: 'BUY lock expired or stolen before broadcast. Fenced.' });
+          throw new Error('BUY lock expired or stolen before broadcast. Fenced.');
+        }
+      }
+
       // Sign and send via WalletService safely
       const result = await this.walletService.signAndSendVersionedTransaction(
         req.userId, 
@@ -421,7 +440,6 @@ export class TraderService {
       return;
     }
 
-    const { AccountingEngine } = await import('./accountingEngine.js');
     const acctResult = AccountingEngine.calculateExit({
       trade,
       actualTokensSpentRaw: BigInt(tokenSpentRaw),

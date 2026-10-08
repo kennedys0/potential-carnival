@@ -315,12 +315,19 @@ export async function handleWalletWithdrawConfirm(
 export async function handleWalletWithdrawExecute(
   ctx: Context,
   withdrawalId: string,
-  walletService: WalletService
+  walletService: WalletService,
+  redis: any
 ): Promise<void> {
   if (!ctx.from) return;
   
   let claimedRecord;
   try {
+    const cooldownKey = `withdraw_cooldown:${ctx.from.id}`;
+    const inCooldown = await redis.get(cooldownKey);
+    if (inCooldown) {
+      throw new Error(`Wallet sedang dalam masa cooldown 24 jam setelah perubahan alamat penarikan demi keamanan.`);
+    }
+
     const claimResult = await walletService['walletRepo'].atomicClaimWithdrawal(withdrawalId, ctx.from.id);
     claimedRecord = claimResult.v_attempt;
     const claimStatus = claimResult.status;

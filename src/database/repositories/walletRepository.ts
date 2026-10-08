@@ -68,6 +68,12 @@ export class WalletRepository {
     return record.id;
   }
 
+  async getWithdrawalAttemptById(id: string): Promise<any> {
+    const { data, error } = await this.db.from('withdrawal_attempts').select('*').eq('id', id).single();
+    if (error) return null;
+    return data;
+  }
+
   async updateWithdrawalAttempt(id: string, updates: { status?: string; tx_signature?: string }): Promise<void> {
     const { error } = await this.db.from('withdrawal_attempts').update(updates).eq('id', id);
     if (error) {

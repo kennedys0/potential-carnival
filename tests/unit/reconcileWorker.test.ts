@@ -111,6 +111,11 @@ describe('ReconcileWorker', () => {
       ]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
       getAllPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      db: {
+        from: vi.fn().mockReturnValue({
+          insert: vi.fn().mockResolvedValue({ error: null })
+        })
+      }
     };
 
     const mockWalletService: any = {
@@ -124,19 +129,8 @@ describe('ReconcileWorker', () => {
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
     await worker.processor({});
 
-    // Deficit is 15.
-    // trade-1 has 10. deduct 10. remaining 0 -> CLOSED
-    expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-1', expect.objectContaining({
-      remaining_raw: '0',
-      status: 'CLOSED'
-    }));
-
-    // Remaining deficit is 5.
-    // trade-2 has 20. deduct 5. remaining 15.
-    expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-2', expect.objectContaining({
-      remaining_raw: '15',
-      needs_attention: true
-    }));
+    // Deficit is 15. Expected to record inventory discrepancy, NOT modify trade directly
+    expect(mockTradeRepo.db.from).toHaveBeenCalledWith('inventory_discrepancies');
   });
   it('reconciles PENDING exit attempt correctly after worker crash', async () => {
     const mockTradeRepo: any = {
@@ -177,8 +171,8 @@ describe('ReconcileWorker', () => {
     await worker.processor({});
 
     expect(mockTradeRepo.atomicReconcileExit).toHaveBeenCalledWith('trade-1', 'exit-1', expect.objectContaining({
-      status: 'CLOSED',
-      remaining_raw: '0',
+      tx_signature: 'sig-1',
+      token_delta_raw: '1000000',
     }));
   });
 });

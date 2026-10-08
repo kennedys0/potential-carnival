@@ -38,3 +38,23 @@ BEGIN
     RETURN v_deleted;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION verify_buy_lock(p_user_id BIGINT, p_token_mint TEXT, p_owner_token UUID)
+RETURNS BOOLEAN AS $$
+DECLARE
+    v_owner UUID;
+BEGIN
+    -- Delete expired locks to be safe
+    DELETE FROM trade_buy_locks WHERE expires_at < NOW();
+
+    SELECT owner_token INTO v_owner
+    FROM trade_buy_locks
+    WHERE user_id = p_user_id AND token_mint = p_token_mint;
+
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+
+    RETURN v_owner = p_owner_token;
+END;
+$$ LANGUAGE plpgsql;

@@ -79,7 +79,7 @@ export class AutopilotEngine {
     }
 
     try {
-      return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot, source);
+      return await this.evaluateAndExecute(userId, tokenMint, tokenSymbol, currentPriceUsd, liquidityUsd, security, ai, currentState, config, rawSnapshot, source, ownerToken);
     } finally {
       await this.traderService['tradeRepo'].releaseBuyLock(userId, tokenMint, ownerToken);
     }
@@ -96,7 +96,8 @@ export class AutopilotEngine {
     currentState: any,
     config: AutopilotConfigRecord,
     rawSnapshot: any,
-    source: 'TRENDING' | 'SNIPER'
+    source: 'TRENDING' | 'SNIPER',
+    ownerToken: string
   ): Promise<{ executed: boolean; reason: string }> {
     // 1. Circuit Breaker Check
     const cbConfig = CircuitBreakerParamsSchema.parse(config.circuit_breaker_params || {});
@@ -192,6 +193,7 @@ export class AutopilotEngine {
       currentPriceUsd,
       isDryRun,
       source: 'AUTOPILOT',
+      ownerToken: ownerToken,
     });
 
     return { executed: true, reason: `Order placed successfully in ${config.mode} mode` };

@@ -153,6 +153,7 @@ describe('TraderService', () => {
     const mockTradeRepo: any = {
       updateTradeStatus: vi.fn().mockResolvedValue(true),
       getPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      atomicReconcileExit: vi.fn().mockResolvedValue(true),
     };
     const service = new TraderService(mockTradeRepo, {} as any, {} as any);
     

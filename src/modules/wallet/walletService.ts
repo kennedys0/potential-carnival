@@ -106,11 +106,25 @@ export class WalletService {
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar.');
     
+    let finalDestAddress = destinationAddress;
+    let finalAmountSol = amountSol;
+    
+    if (existingWithdrawalId) {
+      const record = await this.walletRepo.getWithdrawalAttemptById(existingWithdrawalId);
+      if (!record) throw new Error('Data withdrawal tidak ditemukan.');
+      finalDestAddress = record.destination_address;
+      finalAmountSol = record.amount_sol === -1 ? 'MAX' : record.amount_sol;
+    }
+
     let destPubkey: PublicKey;
     try {
-      destPubkey = new PublicKey(destinationAddress);
+      destPubkey = new PublicKey(finalDestAddress);
     } catch {
       throw new Error('Alamat Solana tujuan tidak valid.');
+    }
+
+    if (wallet.owner_pubkey && destPubkey.toBase58() !== wallet.owner_pubkey) {
+      throw new Error('Alamat tujuan tidak cocok dengan Owner Pubkey yang terdaftar (Security Policy).');
     }
 
     if (destPubkey.toBase58() === wallet.public_key) {
@@ -145,7 +159,7 @@ export class WalletService {
       const { blockhash, lastValidBlockHeight } = await withdrawalConnection.getLatestBlockhash('confirmed');
 
       // Calculate fee
-      const tempAmount = amountSol === 'MAX' ? 1000 : Math.floor(amountSol * LAMPORTS_PER_SOL);
+      const tempAmount = finalAmountSol === 'MAX' ? 1000 : Math.floor(finalAmountSol * LAMPORTS_PER_SOL);
       const tempInstructions = [
         SystemProgram.transfer({
           fromPubkey: sourcePubkey,
@@ -173,10 +187,10 @@ export class WalletService {
         throw new Error('Saldo terlalu kecil (minimal butuh 0.01 SOL sisa untuk rent).');
       }
 
-      if (amountSol === 'MAX') {
+      if (finalAmountSol === 'MAX') {
         transferLamports = safeMaxLamports;
       } else {
-        transferLamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+        transferLamports = Math.floor(finalAmountSol * LAMPORTS_PER_SOL);
         if (transferLamports > safeMaxLamports) {
            throw new Error(`Jumlah terlalu besar. Maksimum yang diizinkan (safe limit): ${(safeMaxLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
         }
@@ -208,7 +222,7 @@ export class WalletService {
         withdrawalId = await this.walletRepo.createWithdrawalAttempt({
           user_id: userId,
           amount_sol: transferLamports / LAMPORTS_PER_SOL,
-          destination_address: destinationAddress,
+          destination_address: finalDestAddress,
           status: 'PENDING',
           idempotency_key: idempotencyKey
         });

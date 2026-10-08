@@ -38,6 +38,8 @@ vi.mock('../../src/queue/connection', () => ({
 describe('MonitorWorker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRedis.set.mockResolvedValue('OK');
+    mockRedis.get.mockResolvedValue(null);
   });
 
   it('prevents double-sell by only triggering close on OPEN or PARTIAL_EXIT statuses', async () => {
@@ -72,7 +74,7 @@ describe('MonitorWorker', () => {
   it('prevents double-sell by local redis lock (kills M1-monitor-no-lock)', async () => {
     const mockTradeRepo: any = {
       getOpenTradesByUserId: vi.fn().mockResolvedValue([
-        { id: 'pos-lock', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'OPEN', sol_spent_lamports: 1000000000 },
+        { id: 'pos-lock', token_amount_raw: 1000000, remaining_raw: '1000000', entry_price_usd: 1.0, status: 'OPEN', sol_spent_lamports: 1000000000 },
       ]),
     };
     const mockTraderService: any = {

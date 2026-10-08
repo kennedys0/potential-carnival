@@ -223,7 +223,14 @@ export class TradeRepository {
 
     if (data === 'ALREADY_APPLIED') {
       logger.info({ tradeId, exitAttemptId, signature: updates.tx_signature }, 'Reconciliation skipped: Already applied (idempotency)');
+      return;
     }
+
+    if (data === 'APPLIED') {
+      return;
+    }
+
+    throw new Error(`Reconciliation rejected by database constraints: ${data}`);
   }
 
   async atomicReconcileEntry(
@@ -250,7 +257,14 @@ export class TradeRepository {
 
     if (data === 'ALREADY_APPLIED' || data === 'ALREADY_RESOLVED') {
       logger.info({ tradeId, signature: updates.tx_signature }, `Entry reconciliation skipped: ${data}`);
+      return;
     }
+
+    if (data === 'APPLIED' || data === 'RESOLVED') {
+      return;
+    }
+
+    throw new Error(`Entry reconciliation rejected by database constraints: ${data}`);
   }
 
   async acquireBuyLock(userId: number, tokenMint: string, ownerToken: string, ttlSeconds: number = 30): Promise<boolean> {
@@ -275,6 +289,19 @@ export class TradeRepository {
     });
     if (error) {
       logger.error({ err: error, userId, tokenMint }, 'Failed to release buy lock');
+      return false;
+    }
+    return !!data;
+  }
+
+  async verifyBuyLock(userId: number, tokenMint: string, ownerToken: string): Promise<boolean> {
+    const { data, error } = await this.db.rpc('verify_buy_lock', {
+      p_user_id: userId,
+      p_token_mint: tokenMint,
+      p_owner_token: ownerToken
+    });
+    if (error) {
+      logger.error({ err: error, userId, tokenMint }, 'Failed to verify buy lock');
       return false;
     }
     return !!data;
