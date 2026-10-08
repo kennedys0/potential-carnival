@@ -100,7 +100,7 @@ describe('MonitorWorker', () => {
   it('prevents double-sell gracefully if traderService throws terkunci', async () => {
     const mockTradeRepo: any = {
       getOpenTradesByUserId: vi.fn().mockResolvedValue([
-        { id: 'pos-lock', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'OPEN', sol_spent_lamports: 1000000000 },
+        { id: 'pos-lock', token_amount_raw: 1000000, remaining_raw: '1000000', entry_price_usd: 1.0, status: 'OPEN', sol_spent_lamports: 1000000000 },
       ]),
     };
     const mockTraderService: any = {
@@ -126,7 +126,7 @@ describe('MonitorWorker', () => {
   it('allows TP2 for PARTIAL_EXIT but ignores TP1', async () => {
     const mockTradeRepo: any = {
       getOpenTradesByUserId: vi.fn().mockResolvedValue([
-        { id: 'pos-3', token_amount_raw: 1000000, entry_price_usd: 1.0, status: 'PARTIAL_EXIT', sol_spent_lamports: 1000000000 },
+        { id: 'pos-3', token_amount_raw: 1000000, remaining_raw: '1000000', entry_price_usd: 1.0, status: 'PARTIAL_EXIT', sol_spent_lamports: 1000000000 },
       ]),
     };
     const mockTraderService: any = {

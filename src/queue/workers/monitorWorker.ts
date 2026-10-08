@@ -47,19 +47,35 @@ export function createMonitorWorker(
            pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
         } else {
            // Live trading: use Jupiter Quote
-           if (!trade.token_amount_raw) {
-              logger.warn({ positionId }, 'Missing token_amount_raw on live trade');
+           if (!trade.remaining_raw) {
+              logger.warn({ positionId }, 'Missing remaining_raw on live trade');
               return;
            }
-
-           const amountLamports = Number(trade.token_amount_raw);
+           
+           const remainingBigInt = BigInt(trade.remaining_raw);
+           if (remainingBigInt <= 0n) return;
+           
+           if (remainingBigInt > 9007199254740991n) {
+              logger.error({ positionId, remaining: trade.remaining_raw }, 'Remaining tokens too large for safe integer conversion during monitoring');
+              return;
+           }
+           const amountLamports = Number(remainingBigInt);
            const WSOL_MINT = 'So11111111111111111111111111111111111111112';
            const slippageBps = 100; // default for monitoring estimation
            
            try {
              const quote = await jupiterClient.getQuote(trade.token_mint, WSOL_MINT, amountLamports, slippageBps);
              const solToReceive = parseInt(quote.outAmount) / 1e9;
-             const solSpent = Number(trade.sol_spent_lamports ?? 0) / 1e9;
+             
+             // Calculate cost basis proportional to remaining_raw
+             if (!trade.sol_spent_lamports || !trade.token_amount_raw || BigInt(trade.token_amount_raw) === 0n) {
+                logger.warn({ positionId }, 'Missing initial cost basis data');
+                return;
+             }
+             const initialSolSpent = BigInt(trade.sol_spent_lamports);
+             const initialTokenAmount = BigInt(trade.token_amount_raw);
+             const costBasisLamports = (initialSolSpent * remainingBigInt) / initialTokenAmount;
+             const solSpent = Number(costBasisLamports) / 1e9;
              
              if (solSpent <= 0) {
                 logger.warn({ positionId }, 'solSpent is 0, cannot calculate PNL');

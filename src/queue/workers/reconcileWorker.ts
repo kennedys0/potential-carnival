@@ -62,7 +62,7 @@ export function createReconcileWorker(
                  const parseResult = FillParser.parseBuyFill(tx, wallet.publicKey, trade.token_mint);
                  
                  if (parseResult && parseResult.tokenDeltaRaw > 0n) {
-                    await tradeRepo.updateTradeStatus(trade.id!, {
+                    await tradeRepo.atomicReconcileEntry(trade.id!, {
                       status: 'OPEN',
                       tx_signature: signature,
                       remaining_raw: String(parseResult.tokenDeltaRaw),
@@ -124,15 +124,46 @@ export function createReconcileWorker(
                await tradeRepo.updateExitAttempt(attempt.id!, { status: 'FAILED' });
                logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to FAILED on-chain');
              } else if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
-               await tradeRepo.updateExitAttempt(attempt.id!, { status: 'SUCCESS' });
-               // The actual trade update should be done by closePosition normally, or by deficit reconciliation below if it crashed before updating trades table
-               logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to SUCCESS');
+               const tx = await walletService.getParsedTransaction(attempt.tx_signature!);
+               const trade = await tradeRepo.getTradeById(attempt.trade_id);
+               if (tx && tx.meta && trade) {
+                 const wallet = await walletService.getOrCreateWallet(trade.user_id);
+                 const parseResult = FillParser.parseSellFill(tx, wallet.publicKey, trade.token_mint);
+                 
+                 if (parseResult && parseResult.tokenDeltaRaw > 0n) {
+                   const { AccountingEngine } = await import('../../modules/trader/accountingEngine.js');
+                   
+                   const acctResult = AccountingEngine.calculateExit({
+                     trade,
+                     actualTokensSpentRaw: parseResult.tokenDeltaRaw,
+                     solReceivedLamports: Number(parseResult.solDeltaLamports),
+                     feeLamports: Number(parseResult.feeLamports),
+                   });
+
+                   await tradeRepo.atomicReconcileExit(trade.id!, attempt.id, {
+                     status: acctResult.newStatus,
+                     pnl_percent: acctResult.pnlPercent,
+                     pnl_sol: acctResult.pnlSol,
+                     realized_pnl_sol: acctResult.realizedPnlSol,
+                     tx_signature: attempt.tx_signature,
+                     remaining_raw: acctResult.remainingRaw,
+                     closed_at: acctResult.newStatus === 'CLOSED' ? new Date().toISOString() : undefined,
+                     token_delta_raw: parseResult.tokenDeltaRaw.toString(),
+                     sol_delta_lamports: Number(parseResult.solDeltaLamports),
+                     fee_lamports: Number(parseResult.feeLamports),
+                   });
+                   logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to SUCCESS with accounting');
+                 } else {
+                   logger.warn({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Failed to parse sell fill during reconciliation');
+                 }
+               }
              }
           } else {
-             // If signature not found and it's old enough, mark failed
+             // If signature not found and it's old enough, escalate instead of assuming failure
              if (attemptAgeMs > 120000) {
-               await tradeRepo.updateExitAttempt(attempt.id!, { status: 'FAILED' });
-               logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to FAILED (signature not found)');
+               // Do not mark FAILED. Mark trade as needs_attention to escalate.
+               await tradeRepo.updateTradeStatus(attempt.trade_id, { needs_attention: true });
+               logger.warn({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciliation stalled (signature not found after 120s) - Escalate');
              }
           }
         }

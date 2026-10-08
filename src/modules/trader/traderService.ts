@@ -211,7 +211,7 @@ export class TraderService {
         remaining_raw: parseResult.tokenDeltaRaw.toString(),
       };
 
-      await this.tradeRepo.updateTradeStatus(tradeRecord.id!, updates);
+      await this.tradeRepo.atomicReconcileEntry(tradeRecord.id!, updates);
       return { ...tradeRecord, ...updates };
 
     } catch (err: any) {
@@ -293,7 +293,12 @@ export class TraderService {
     if (amountLamportsBigInt <= 0n) {
       throw new Error('Calculated token amount to close is 0.');
     }
-    const amountLamports = Number(amountLamportsBigInt); // Jupiter client expects number
+    
+    // Check safe range
+    if (amountLamportsBigInt > 9007199254740991n) {
+      throw new Error(`Kuantitas token terlalu besar dan tidak dapat diproses dengan aman: ${amountLamportsBigInt}`);
+    }
+    const amountLamports = Number(amountLamportsBigInt);
 
     // Increment exit attempts immediately
     const currentAttempts = (trade.exit_attempts ?? 0) + 1;
@@ -319,7 +324,7 @@ export class TraderService {
     const exitAttempt = await this.tradeRepo.createExitAttempt({
       trade_id: trade.id,
       percentage: percentageToClose,
-      tokens_amount_raw: amountLamports,
+      tokens_amount_raw: amountLamportsBigInt.toString(),
       status: 'PENDING',
       idempotency_key: attemptIdempotencyKey
     });
@@ -407,50 +412,35 @@ export class TraderService {
       return;
     }
 
-    const solReceived = solReceivedLamports > 0 ? solReceivedLamports / 1e9 : 0;
-    
-    const actualTokensSpent = BigInt(tokenSpentRaw);
-    const newTradeRemainingRaw = tradeBalanceRaw > actualTokensSpent ? tradeBalanceRaw - actualTokensSpent : 0n;
-    
-    const newStatus = newTradeRemainingRaw <= 0n ? 'CLOSED' : 'PARTIAL_EXIT';
-    
-    // PnL Calculation based on proportional cost
-    let realizedPnlSol = trade.realized_pnl_sol ?? 0;
-    let pnlPercent = trade.pnl_percent ?? 0;
-    
-    if (trade.sol_spent_lamports && trade.token_amount_raw && BigInt(trade.token_amount_raw) > 0n) {
-      const solSpentLamportsBigInt = BigInt(trade.sol_spent_lamports);
-      const tokenAmountRawBigInt = BigInt(trade.token_amount_raw);
-      
-      const costLamports = (solSpentLamportsBigInt * actualTokensSpent) / tokenAmountRawBigInt;
-      const costSol = Number(costLamports) / 1e9;
-      const feeSol = feeLamports / 1e9;
-      
-      const currentRealized = solReceived - costSol - feeSol;
-      realizedPnlSol += currentRealized;
-      
-      if (costSol > 0) {
-        pnlPercent = ((solReceived - costSol) / costSol) * 100;
-      }
-    }
+    const { AccountingEngine } = await import('./accountingEngine.js');
+    const acctResult = AccountingEngine.calculateExit({
+      trade,
+      actualTokensSpentRaw: BigInt(tokenSpentRaw),
+      solReceivedLamports,
+      feeLamports,
+      currentPriceUsd
+    });
 
-    const updates: Partial<TradeRecord> = {
-      status: newStatus,
-      pnl_percent: pnlPercent,
-      pnl_sol: realizedPnlSol,
-      realized_pnl_sol: realizedPnlSol,
+    const updates: Partial<TradeRecord> & { token_delta_raw?: string, sol_delta_lamports?: number, fee_lamports?: number } = {
+      status: acctResult.newStatus,
+      pnl_percent: acctResult.pnlPercent,
+      pnl_sol: acctResult.pnlSol,
+      realized_pnl_sol: acctResult.realizedPnlSol,
       tx_signature: signature,
-      remaining_raw: newTradeRemainingRaw.toString(),
+      remaining_raw: acctResult.remainingRaw,
+      token_delta_raw: tokenSpentRaw.toString(),
+      sol_delta_lamports: solReceivedLamports,
+      fee_lamports: feeLamports,
     };
 
-    if (newStatus === 'CLOSED') {
+    if (acctResult.newStatus === 'CLOSED') {
       updates.closed_at = new Date().toISOString();
       updates.exit_price_usd = currentPriceUsd;
     }
 
     // Edge case: if wallet is completely empty, ensure we close
     const totalRemainingTokenBalance = await this.walletService.getTokenBalance(wallet.publicKey, trade.token_mint);
-    if (totalRemainingTokenBalance.raw === 0n && newStatus !== 'CLOSED') {
+    if (totalRemainingTokenBalance.raw === 0n && acctResult.newStatus !== 'CLOSED') {
       updates.status = 'CLOSED';
       updates.remaining_raw = '0';
       updates.closed_at = new Date().toISOString();

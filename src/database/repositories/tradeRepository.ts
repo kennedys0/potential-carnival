@@ -200,25 +200,64 @@ export class TradeRepository {
   async atomicReconcileExit(
     tradeId: string,
     exitAttemptId: string | undefined,
-    updates: Partial<TradeRecord>
+    updates: Partial<TradeRecord> & {
+      token_delta_raw?: string | bigint;
+      sol_delta_lamports?: number;
+      fee_lamports?: number;
+    }
   ): Promise<void> {
-    const { error } = await this.db.rpc('atomic_reconcile_exit', {
+    const { error, data } = await this.db.rpc('atomic_reconcile_exit', {
       p_trade_id: tradeId,
-      p_exit_attempt_id: exitAttemptId || null,
+      p_exit_attempt_id: exitAttemptId ?? null,
       p_status: updates.status,
-      p_pnl_percent: updates.pnl_percent || 0,
-      p_pnl_sol: updates.pnl_sol || 0,
-      p_realized_pnl_sol: updates.realized_pnl_sol || 0,
-      p_tx_signature: updates.tx_signature || null,
-      p_remaining_raw: updates.remaining_raw || 0,
-      p_closed_at: updates.closed_at || null,
-      p_exit_price_usd: updates.exit_price_usd || null,
-      p_needs_attention: updates.needs_attention || null
+      p_pnl_percent: updates.pnl_percent ?? 0,
+      p_pnl_sol: updates.pnl_sol ?? 0,
+      p_realized_pnl_sol: updates.realized_pnl_sol ?? 0,
+      p_tx_signature: updates.tx_signature ?? null,
+      p_remaining_raw: updates.remaining_raw ?? 0,
+      p_closed_at: updates.closed_at ?? null,
+      p_exit_price_usd: updates.exit_price_usd ?? null,
+      p_needs_attention: updates.needs_attention ?? null,
+      p_token_delta_raw: updates.token_delta_raw ? updates.token_delta_raw.toString() : 0,
+      p_sol_delta_lamports: updates.sol_delta_lamports ?? 0,
+      p_fee_lamports: updates.fee_lamports ?? 0
     });
 
     if (error) {
       throw new Error(`Failed to atomic_reconcile_exit: ${error.message}`);
     }
+
+    if (data === 'ALREADY_APPLIED') {
+      logger.info({ tradeId, exitAttemptId, signature: updates.tx_signature }, 'Reconciliation skipped: Already applied (idempotency)');
+    }
+  }
+
+  async atomicReconcileEntry(
+    tradeId: string,
+    updates: Partial<TradeRecord>
+  ): Promise<void> {
+    const { error, data } = await this.db.rpc('atomic_reconcile_entry', {
+      p_trade_id: tradeId,
+      p_status: updates.status ?? null,
+      p_tx_signature: updates.tx_signature ?? null,
+      p_remaining_raw: updates.remaining_raw ?? null,
+      p_token_decimals: updates.token_decimals ?? null,
+      p_sol_spent_lamports: updates.sol_spent_lamports ?? null,
+      p_token_amount_raw: updates.token_amount_raw ?? null,
+      p_fee_lamports: updates.fee_lamports ?? null,
+      p_sol_amount: updates.sol_amount ?? null,
+      p_token_amount: updates.token_amount ?? null,
+      p_needs_attention: updates.needs_attention ?? null
+    });
+
+    if (error) {
+      throw new Error(`Failed to atomic_reconcile_entry: ${error.message}`);
+    }
+
+    if (data === 'ALREADY_APPLIED' || data === 'ALREADY_RESOLVED') {
+      logger.info({ tradeId, signature: updates.tx_signature }, `Entry reconciliation skipped: ${data}`);
+    }
   }
 }
+
 

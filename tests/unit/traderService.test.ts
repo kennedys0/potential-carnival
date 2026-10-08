@@ -88,6 +88,7 @@ describe('TraderService', () => {
     const mockTradeRepo: any = {
       createTrade: vi.fn().mockImplementation((trade) => Promise.resolve({ id: 'trade-uuid', ...trade })),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      atomicReconcileEntry: vi.fn().mockResolvedValue(true),
     };
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
@@ -178,7 +179,7 @@ describe('TraderService', () => {
     };
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
-      getTokenBalance: vi.fn().mockResolvedValue(10_000_000), // 10 tokens
+      getTokenBalance: vi.fn().mockResolvedValue({ raw: 10_000_000n, decimals: 6, ui: 10 }), // 10 tokens
       signAndSendVersionedTransaction: vi.fn().mockRejectedValue(new Error('RPC Timeout')),
     };
     const mockJupiterClient: any = {

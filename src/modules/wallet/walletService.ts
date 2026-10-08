@@ -201,8 +201,21 @@ export class WalletService {
       }).compileToV0Message();
 
       const transaction = new VersionedTransaction(finalMessage);
+      
+      const idempotencyKey = `wd_${userId}_${Date.now()}`;
+      const withdrawalId = await this.walletRepo.createWithdrawalAttempt({
+        user_id: userId,
+        amount_sol: transferLamports / LAMPORTS_PER_SOL,
+        destination_address: destinationAddress,
+        status: 'PENDING',
+        idempotency_key: idempotencyKey
+      });
 
-      const result = await TxSender.sendAndConfirm(withdrawalConnection, transaction, [keypair]);
+      const result = await TxSender.sendAndConfirm(withdrawalConnection, transaction, [keypair], {
+        onSignature: async (sig) => {
+          await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { tx_signature: sig });
+        }
+      });
       
       if (
         result.status === 'SIGN_FAILED' ||
@@ -210,6 +223,7 @@ export class WalletService {
         result.status === 'SUBMISSION_REJECTED' ||
         result.status === 'FAILED_ONCHAIN'
       ) {
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'FAILED' });
         throw new Error(`Withdrawal gagal: ${result.status} - ${JSON.stringify(result.err)}`);
       }
       
@@ -219,9 +233,11 @@ export class WalletService {
         result.status === 'CONFIRMING' ||
         result.status === 'EXPIRED'
       ) {
+        await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'CONFIRMING' });
         throw new Error(`Status transaksi tidak pasti (${result.status}). Harap cek explorer sebelum mengulang.`);
       }
 
+      await this.walletRepo.updateWithdrawalAttempt(withdrawalId, { status: 'SUCCESS' });
       return result.signature;
     } finally {
       KeypairService.clearKeypair(keypair); // zero out memory per transaction

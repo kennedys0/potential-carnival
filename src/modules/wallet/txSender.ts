@@ -58,7 +58,19 @@ export class TxSender {
       });
     } catch (e: any) {
       logger.error({ err: e }, 'Failed to sendTransaction initially');
-      return { status: 'SUBMISSION_REJECTED', signature, err: e };
+      
+      const errMsg = e.message ? e.message.toLowerCase() : '';
+      const isDefiniteRejection = errMsg.includes('blockhash not found') || 
+                                  errMsg.includes('invalid') || 
+                                  errMsg.includes('signature verification failed');
+
+      if (isDefiniteRejection) {
+        return { status: 'SUBMISSION_REJECTED', signature, err: e };
+      } else {
+        // TCP timeout, rate limit, internal server error, or other ambiguous errors
+        // We cannot guarantee the network didn't receive it!
+        return { status: 'UNKNOWN', signature, err: e };
+      }
     }
 
     // Poll until confirmed/finalized or blockhash is invalid

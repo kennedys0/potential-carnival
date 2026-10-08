@@ -52,8 +52,15 @@ export async function handlePositionsMenu(
       let pnlIcon = '➖';
       
       if (currentPriceUsd > 0 && entryPrice > 0) {
-        pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
-        pnlSol = trade.sol_amount * (pnlPercent / 100);
+        // Use AccountingEngine for accurate live PnL instead of naive price differences
+        const acct = await import('../../trader/accountingEngine.js');
+        const liveAcct = acct.AccountingEngine.calculateLiveValuation({
+          trade,
+          currentPriceUsd
+        });
+        
+        pnlPercent = liveAcct.pnlPercent;
+        pnlSol = liveAcct.pnlSol;
         pnlIdr = currencyService.solToIdr(pnlSol);
         pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
       }

@@ -30,30 +30,32 @@ export class UserStateService {
     // 1. Get Open Positions
     // Actually we should get from positions table, but let's assume we can get from trades for now
     // Since Phase 2/3 will migrate to PENDING/OPEN/PARTIAL_EXIT.
-    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING']);
+    const allActiveTrades = await this.tradeRepo.getTradesByStatuses(userId, ['OPEN', 'PARTIAL_EXIT', 'PENDING', 'UNKNOWN', 'CONFIRMING']);
     
-    const maxPendingAge = appSettings.MAX_PENDING_AGE_MS;
-    const nowMs = Date.now();
-    const openTrades = allActiveTrades.filter(t => {
-      if (t.status === 'PENDING' && t.pending_since) {
-        const ageMs = nowMs - new Date(t.pending_since).getTime();
-        if (ageMs > maxPendingAge) {
-          return false;
-        }
-      }
-      return true;
-    });
-
+    // We no longer assume PENDING trades have failed based on time. 
+    // They are considered active exposure until definitively FAILED.
+    const openTrades = allActiveTrades;
     const openPositionsCount = openTrades.length;
     const heldMints = openTrades.map((t) => t.token_mint);
 
     // 2. Get Balance
     const wallet = await this.walletService.getOrCreateWallet(userId);
     const balance = await this.walletService.getBalance(wallet.publicKey);
+    
+    // Sum up unconfirmed SOL exposures (entries that might land)
+    let unconfirmedExposureSol = 0;
+    for (const t of openTrades) {
+      if (['PENDING', 'UNKNOWN', 'CONFIRMING'].includes(t.status) && t.sol_amount) {
+        unconfirmedExposureSol += t.sol_amount;
+      }
+    }
+
     const minReserve = sizingParams.min_reserve_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MIN_RESERVE_SOL;
     const autopilotBudget = sizingParams.autopilot_budget_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_BUDGET_SOL;
     
-    const availableBalanceSol = Math.max(0, Math.min(balance.sol - minReserve, autopilotBudget));
+    // Deduct unconfirmed exposures so we don't double-spend
+    const conservativeBalance = balance.sol - unconfirmedExposureSol;
+    const availableBalanceSol = Math.max(0, Math.min(conservativeBalance - minReserve, autopilotBudget));
 
     // 3. Get Closed Trades Today (based on DAY_BOUNDARY_TZ)
     const tz = appSettings.DAY_BOUNDARY_TZ || 'UTC';

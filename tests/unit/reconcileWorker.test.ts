@@ -65,6 +65,7 @@ describe('ReconcileWorker', () => {
       ]),
       getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
       updateTradeStatus: vi.fn().mockResolvedValue(true),
+      atomicReconcileEntry: vi.fn().mockResolvedValue(true),
       getAllPendingExitAttempts: vi.fn().mockResolvedValue([]),
     };
 
@@ -93,7 +94,7 @@ describe('ReconcileWorker', () => {
     const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
     await worker.processor({});
 
-    expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-2', expect.objectContaining({
+    expect(mockTradeRepo.atomicReconcileEntry).toHaveBeenCalledWith('trade-2', expect.objectContaining({
       status: 'OPEN',
       remaining_raw: '1000000',
       token_decimals: 6,
@@ -135,6 +136,49 @@ describe('ReconcileWorker', () => {
     expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-2', expect.objectContaining({
       remaining_raw: '15',
       needs_attention: true
+    }));
+  });
+  it('reconciles PENDING exit attempt correctly after worker crash', async () => {
+    const mockTradeRepo: any = {
+      getPendingTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+      getAllPendingExitAttempts: vi.fn().mockResolvedValue([
+        { id: 'exit-1', trade_id: 'trade-1', tx_signature: 'sig-1', status: 'PENDING', percentage: 100, created_at: new Date(Date.now() - 5000).toISOString() }
+      ]),
+      updateExitAttempt: vi.fn().mockResolvedValue(true),
+      getTradeById: vi.fn().mockResolvedValue({
+         id: 'trade-1', user_id: 111, remaining_raw: '1000000', sol_spent_lamports: '10000000', token_amount_raw: '1000000', token_mint: 'token-A'
+      }),
+      atomicReconcileExit: vi.fn().mockResolvedValue(true),
+    };
+
+    const mockWalletService: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
+      getConnection: vi.fn().mockReturnValue({
+        getSignatureStatuses: vi.fn().mockResolvedValue({
+          value: [{ err: null, confirmationStatus: 'confirmed' }]
+        })
+      }),
+      getParsedTransaction: vi.fn().mockResolvedValue({
+        meta: { 
+          err: null, 
+          fee: 5000,
+          preBalances: [1_000_000_000],
+          postBalances: [1_050_000_000],
+          preTokenBalances: [{ mint: 'token-A', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }],
+          postTokenBalances: [{ mint: 'token-A', owner: '1111', uiTokenAmount: { amount: '0', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'token-A'] } }
+      })
+    };
+
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
+    await worker.processor({});
+
+    expect(mockTradeRepo.atomicReconcileExit).toHaveBeenCalledWith('trade-1', 'exit-1', expect.objectContaining({
+      status: 'CLOSED',
+      remaining_raw: '0',
     }));
   });
 });

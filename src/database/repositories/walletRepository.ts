@@ -53,8 +53,25 @@ export class WalletRepository {
       .single();
     if (error || !data) {
        throw error;
-       return false;
     }
     return true;
+  }
+
+  async createWithdrawalAttempt(data: { user_id: number; amount_sol: number; destination_address: string; status: string; idempotency_key: string }): Promise<string> {
+    const { data: record, error } = await this.db.from('withdrawal_attempts').insert(data).select('id').single();
+    if (error) {
+      if (error.code === '23505') { // unique violation
+        throw new Error('Withdrawal sedang diproses atau sudah pernah dikirim.');
+      }
+      throw new Error(`Failed to create withdrawal attempt: ${error.message}`);
+    }
+    return record.id;
+  }
+
+  async updateWithdrawalAttempt(id: string, updates: { status?: string; tx_signature?: string }): Promise<void> {
+    const { error } = await this.db.from('withdrawal_attempts').update(updates).eq('id', id);
+    if (error) {
+      throw new Error(`Failed to update withdrawal attempt: ${error.message}`);
+    }
   }
 }
