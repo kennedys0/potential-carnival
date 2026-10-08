@@ -67,6 +67,12 @@ Bot Telegram *production-grade* untuk scalping dan auto-trading di jaringan Sola
   - Circuit Breaker proteksi modal (batas rugi harian & batas kekalahan beruntun).
   - Tabel audit `decision_logs` untuk mencatat setiap keputusan beli, lewati, atau tolak.
 
+- **🚀 Dual Autopilot & New Token Sniper**:
+  - Dukungan **Dual Autopilot Engine**: Menjalankan mode scalper standar dan mode sniper secara paralel.
+  - **New Token Sniper**: Secara otomatis mendeteksi dan menembak token yang baru saja membuat liquidity pool.
+  - **Strategy Reservations**: Alokasi eksklusif untuk mencegah bentrok posisi atau *race condition* antara mesin scalper dan sniper.
+  - **Exit Policy Engine**: Take Profit dan Stop Loss bertahap (partial exit) dengan trailing dinamis, khusus dirancang untuk menangani volatilitas ekstrem token baru.
+
 ---
 
 ## 🏛️ Arsitektur Sistem
@@ -373,6 +379,11 @@ Scanner ➔ Anti-Rug Security Filter ➔ AI Scalping Analyzer ➔ Autopilot Rule
    - Jika terjadi kekalahan beruntun (`maxConsecutiveLosses`), sistem otomatis menghentikan eksekusi untuk melindungi sisa modal.
 4. **Audit Logging**:
    - Setiap token yang dipindai (baik dieksekusi maupun ditolak) dicatat lengkap di tabel `decision_logs` untuk keperluan evaluasi dan audit transparansi.
+
+### Mode Dual Autopilot & Token Sniper:
+Sistem mendukung eksekusi dua mesin secara paralel (Scalper dan Sniper) dengan tingkat perlindungan ekstra:
+- **Strategy Reservations**: Mencegah *race condition* atau perebutan modal antar strategi pada saat yang bersamaan. Setiap mesin wajib melakukan reservasi modal di database secara transaksional.
+- **Exit Policy Engine**: Menangani strategi jalan keluar (exit) bertahap, seperti trailing stop loss dinamis, untuk beradaptasi dengan price action token baru yang belum memiliki data teknikal matang.
 
 ---
 
