@@ -201,8 +201,8 @@ export class TradeRepository {
     exitAttemptId: string | undefined,
     updates: Partial<TradeRecord> & {
       token_delta_raw?: string | bigint;
-      sol_delta_lamports?: number;
-      fee_lamports?: number;
+      sol_delta_lamports?: string | bigint | number;
+      fee_lamports?: string | bigint | number;
     }
   ): Promise<void> {
     const { error, data } = await this.db.rpc('atomic_reconcile_exit', {
@@ -210,8 +210,8 @@ export class TradeRepository {
       p_exit_attempt_id: exitAttemptId ?? null,
       p_tx_signature: updates.tx_signature ?? null,
       p_token_delta_raw: updates.token_delta_raw ? updates.token_delta_raw.toString() : 0,
-      p_sol_delta_lamports: updates.sol_delta_lamports ?? 0,
-      p_fee_lamports: updates.fee_lamports ?? 0,
+      p_sol_delta_lamports: updates.sol_delta_lamports !== undefined ? updates.sol_delta_lamports.toString() : 0,
+      p_fee_lamports: updates.fee_lamports !== undefined ? updates.fee_lamports.toString() : 0,
       p_exit_price_usd: updates.exit_price_usd ?? null
     });
 

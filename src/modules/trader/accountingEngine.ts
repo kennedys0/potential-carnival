@@ -3,8 +3,8 @@ import { TradeRecord } from '../../database/repositories/tradeRepository';
 export interface ExitAccountingParams {
   trade: TradeRecord;
   actualTokensSpentRaw: bigint;
-  solReceivedLamports: number;
-  feeLamports: number;
+  solReceivedLamports: bigint | string;
+  feeLamports: bigint | string;
   currentPriceUsd?: number;
 }
 
@@ -19,14 +19,16 @@ export interface ExitAccountingResult {
 
 export class AccountingEngine {
   static calculateExit(params: ExitAccountingParams): ExitAccountingResult {
-    const { trade, actualTokensSpentRaw, solReceivedLamports, feeLamports, currentPriceUsd } = params;
+    const { trade, actualTokensSpentRaw, currentPriceUsd } = params;
+    const solReceivedLamports = BigInt(params.solReceivedLamports);
+    const feeLamports = BigInt(params.feeLamports);
 
     const tradeBalanceRaw = BigInt(trade.remaining_raw ?? 0);
     const newTradeRemainingRaw = tradeBalanceRaw > actualTokensSpentRaw ? tradeBalanceRaw - actualTokensSpentRaw : 0n;
     
     let newStatus: 'PARTIAL_EXIT' | 'CLOSED' = newTradeRemainingRaw <= 0n ? 'CLOSED' : 'PARTIAL_EXIT';
     
-    const solReceived = solReceivedLamports > 0 ? solReceivedLamports / 1e9 : 0;
+    const solReceived = solReceivedLamports > 0n ? Number(solReceivedLamports) / 1e9 : 0;
     
     let realizedPnlSol = trade.realized_pnl_sol ?? 0;
     let pnlPercent = trade.pnl_percent ?? 0;
@@ -37,7 +39,7 @@ export class AccountingEngine {
       
       const costLamports = (solSpentLamportsBigInt * actualTokensSpentRaw) / tokenAmountRawBigInt;
       const costSol = Number(costLamports) / 1e9;
-      const feeSol = feeLamports / 1e9;
+      const feeSol = Number(feeLamports) / 1e9;
       
       const currentRealized = solReceived - costSol - feeSol;
       realizedPnlSol += currentRealized;

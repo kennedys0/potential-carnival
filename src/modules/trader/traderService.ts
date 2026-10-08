@@ -416,16 +416,16 @@ export class TraderService {
     await new Promise((res) => setTimeout(res, 2000));
     const tx = await this.walletService.getParsedTransaction(signature);
     
-    let solReceivedLamports = 0;
-    let feeLamports = 0;
+    let solReceivedLamports = "0";
+    let feeLamports = "0";
     let tokenSpentRaw = "0";
 
     if (tx && tx.meta) {
       const parseResult = FillParser.parseSellFill(tx, wallet.publicKey, trade.token_mint);
       
       if (parseResult) {
-         feeLamports = Number(parseResult.feeLamports);
-         solReceivedLamports = Number(parseResult.solDeltaLamports);
+         feeLamports = parseResult.feeLamports.toString();
+         solReceivedLamports = parseResult.solDeltaLamports.toString();
          tokenSpentRaw = parseResult.tokenDeltaRaw.toString();
       }
     }
@@ -443,12 +443,12 @@ export class TraderService {
     const acctResult = AccountingEngine.calculateExit({
       trade,
       actualTokensSpentRaw: BigInt(tokenSpentRaw),
-      solReceivedLamports: Number(solReceivedLamports),
-      feeLamports: Number(feeLamports),
+      solReceivedLamports: solReceivedLamports,
+      feeLamports: feeLamports,
       currentPriceUsd
     });
 
-    const updates: Partial<TradeRecord> & { token_delta_raw?: string, sol_delta_lamports?: number, fee_lamports?: number } = {
+    const updates: Partial<TradeRecord> & { token_delta_raw?: string, sol_delta_lamports?: string | number, fee_lamports?: string | number } = {
       status: acctResult.newStatus,
       pnl_percent: acctResult.pnlPercent,
       pnl_sol: acctResult.pnlSol,
@@ -456,8 +456,8 @@ export class TraderService {
       tx_signature: signature,
       remaining_raw: acctResult.remainingRaw,
       token_delta_raw: tokenSpentRaw.toString(),
-      sol_delta_lamports: Number(solReceivedLamports),
-      fee_lamports: Number(feeLamports),
+      sol_delta_lamports: solReceivedLamports,
+      fee_lamports: feeLamports,
     };
 
     if (acctResult.newStatus === 'CLOSED') {

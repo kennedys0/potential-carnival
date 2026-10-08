@@ -70,7 +70,7 @@ export function createReconcileWorker(
                       token_decimals: parseResult.decimals,
                       sol_spent_lamports: String(parseResult.solDeltaLamports),
                       token_amount_raw: String(parseResult.tokenDeltaRaw),
-                      fee_lamports: Number(parseResult.feeLamports),
+                      fee_lamports: String(parseResult.feeLamports),
                       sol_amount: Number(parseResult.solDeltaLamports) / 1e9,
                       token_amount: Number(parseResult.tokenDeltaRaw) / Math.pow(10, parseResult.decimals)
                     });
@@ -137,16 +137,16 @@ export function createReconcileWorker(
                    const acctResult = AccountingEngine.calculateExit({
                      trade,
                      actualTokensSpentRaw: parseResult.tokenDeltaRaw,
-                     solReceivedLamports: Number(parseResult.solDeltaLamports),
-                     feeLamports: Number(parseResult.feeLamports),
+                     solReceivedLamports: parseResult.solDeltaLamports,
+                     feeLamports: parseResult.feeLamports,
                    });
 
                    await tradeRepo.atomicReconcileExit(trade.id!, attempt.id, {
                      tx_signature: attempt.tx_signature,
                      exit_price_usd: acctResult.exitPriceUsd,
                      token_delta_raw: parseResult.tokenDeltaRaw.toString(),
-                     sol_delta_lamports: Number(parseResult.solDeltaLamports),
-                     fee_lamports: Number(parseResult.feeLamports),
+                     sol_delta_lamports: parseResult.solDeltaLamports.toString(),
+                     fee_lamports: parseResult.feeLamports.toString(),
                    });
                    logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciled PENDING exit attempt to SUCCESS with accounting');
                  } else {
