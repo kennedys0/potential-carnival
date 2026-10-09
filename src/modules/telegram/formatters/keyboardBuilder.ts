@@ -3,8 +3,11 @@ import { InlineKeyboard } from 'grammy';
 export function createTokenKeyboard(tokenMint: string, isDryRun: boolean = true): InlineKeyboard {
   const modeTag = isDryRun ? '[PAPER] ' : '';
   return new InlineKeyboard()
-    .text(`💰 ${modeTag}Buy 0.1`, `buy:${tokenMint}:0.1`)
-    .text(`💰 ${modeTag}Buy 0.5`, `buy:${tokenMint}:0.5`)
+    .text(`💰 ${modeTag}0.01`, `buy:${tokenMint}:0.01`)
+    .text(`💰 ${modeTag}0.05`, `buy:${tokenMint}:0.05`)
+    .text(`💰 ${modeTag}0.1`, `buy:${tokenMint}:0.1`)
+    .row()
+    .text(`💰 ${modeTag}0.5`, `buy:${tokenMint}:0.5`)
     .text(`💰 Custom`, `buy_custom:${tokenMint}`)
     .row()
     .text(`🔄 Refresh`, `refresh:${tokenMint}`)

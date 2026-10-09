@@ -18,7 +18,7 @@ export class WalletService {
   }
 
   async getParsedTransaction(signature: string) {
-    return this.connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
+    return this.connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 1 });
   }
 
   async getOrCreateWallet(userId: number): Promise<{ publicKey: string }> {
@@ -287,7 +287,7 @@ export class WalletService {
       try {
         parsedWithdrawal = await withdrawalConnection.getParsedTransaction(result.signature, {
           commitment: 'confirmed',
-          maxSupportedTransactionVersion: 0,
+          maxSupportedTransactionVersion: 1,
         });
       } catch {
         // Preserve durable execution ownership; never send an immediate replacement.

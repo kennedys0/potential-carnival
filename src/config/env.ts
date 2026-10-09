@@ -36,6 +36,9 @@ export const EnvSchema = z.object({
   AI_BASE_URL: z.string().optional(),
   AI_API_KEY: z.string().optional(),
   AI_MODEL: z.string().optional(),
+  SCAN_AI_BASE_URL: z.string().optional(),
+  SCAN_AI_API_KEY: z.string().optional(),
+  SCAN_AI_MODEL: z.string().optional(),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   JITO_TIP_LAMPORTS: z.coerce.number().default(100000),
   WHITELISTED_USERS: z.string().default(''), // comma-separated user IDs

@@ -26,7 +26,7 @@ export async function handleSettingsMenu(
 • <b>Min Security Score:</b> <code>${minScore}/100</code>
 • <b>Stop Loss (SL):</b> <code>${slPercent}%</code>
 • <b>Take Profit (TP1):</b> <code>${tp1Percent}%</code>
-• <b>Trailing Stop:</b> ${trailingEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}
+• <b>Trailing Stop:</b> ${trailingEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'} (Aktif: <code>+${(config.exit_params as any)?.trailing_activation_percent ?? 20}%</code>, Jarak: <code>${(config.exit_params as any)?.trailing_stop_percent ?? 5}%</code>)
 • <b>Status Autopilot:</b> ${config.is_active ? '🟢 AKTIF' : '⏸ NONAKTIF'}
 
 <i>Gunakan tombol di bawah untuk mengubah parameter trading Anda secara langsung:</i>
@@ -49,7 +49,10 @@ export async function handleSettingsMenu(
     .row()
     .text(`📉 Set SL (${slPercent}%)`, 'settings_cycle_sl')
     .text(`📈 Set TP (${tp1Percent}%)`, 'settings_cycle_tp')
+    .row()
     .text(`Trailing: ${trailingEnabled ? 'ON' : 'OFF'}`, 'settings_toggle_trailing')
+    .text(`Jarak: ${(config.exit_params as any)?.trailing_stop_percent ?? 5}%`, 'settings_cycle_trail_dist')
+    .text(`Mulai: +${(config.exit_params as any)?.trailing_activation_percent ?? 20}%`, 'settings_cycle_trail_start')
     .row()
     .text('📈 Trending Controls', 'menu_autopilot')
     .text('⚡ Sniper Settings', 'sniper_settings')

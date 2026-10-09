@@ -50,32 +50,64 @@ export async function handleScanCommand(
     }
 
     const priceUsd = parseFloat(pair.priceUsd || '0');
-    const security = await securityService.evaluateToken(tokenMint, {
-      liquidityUsd: pair.liquidity?.usd || null,
-      marketCapUsd: pair.marketCap || pair.fdv || null,
-    });
 
-    const candles = await scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
+    // Fetch data concurrently to speed up scan
+    let [security, rawCandles, macroCandles, config] = await Promise.all([
+      securityService.evaluateToken(tokenMint, {
+        liquidityUsd: pair.liquidity?.usd || null,
+        marketCapUsd: pair.marketCap || pair.fdv || null,
+      }),
+      scannerService.getCandles('solana', pair.pairAddress, 'minute', 5),
+      scannerService.getCandles('solana', pair.pairAddress, 'minute', 15),
+      autopilotRepo.getOrCreateConfig(ctx.from!.id)
+    ]);
+    
+    // Typecast to array of any since Promise.all preserves types, but we want to modify it.
+    let candles = rawCandles as any[];
+
+    // Create a fake candle if we have absolutely no candles from GeckoTerminal
+    if (candles.length === 0 && priceUsd > 0) {
+      candles = [{
+        timestamp: Date.now(),
+        open: priceUsd,
+        high: priceUsd,
+        low: priceUsd,
+        close: priceUsd,
+        volume: pair.volume?.m5 || 0
+      }];
+    }
+
     const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
     const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
 
-    const indicators = analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
+    const indicators = analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes, macroCandles);
     
-    let aiAnalysis = null;
-    if (indicators) {
-       aiAnalysis = await analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
-    }
+    // let aiAnalysis = null;
+    // We defer AI analysis to the background to speed up UI
 
-    const config = await autopilotRepo.getOrCreateConfig(ctx.from!.id);
     const isDryRun = config.mode === 'PAPER';
 
-    const reportText = formatTokenReport(pair, security, aiAnalysis, !!indicators);
+    // FIRST RENDER: Show data instantly while AI processes in the background
+    const initialReportText = formatTokenReport(pair, security, null, !!indicators, !!indicators);
     const keyboard = createTokenKeyboard(tokenMint, isDryRun);
 
-    await ctx.api.editMessageText(chatId, activeMessageId, reportText, {
+    await ctx.api.editMessageText(chatId, activeMessageId, initialReportText, {
       parse_mode: 'HTML',
       reply_markup: keyboard,
     });
+
+    // BACKGROUND PROCESSING: AI Analysis
+    if (indicators) {
+      analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags)
+        .then(async (aiAnalysis) => {
+          const finalReportText = formatTokenReport(pair, security, aiAnalysis, true, false);
+          await ctx.api.editMessageText(chatId, activeMessageId!, finalReportText, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          });
+        })
+        .catch(console.error);
+    }
   } catch (err: any) {
     if (err?.description?.includes('message is not modified')) {
       return;

@@ -31,7 +31,7 @@ export const AppSettingsSchema = z.object({
     DEFAULT_TRAILING_ACTIVATION_PERCENT: z.number().default(20),
   }).default({}),
   AUTOPILOT_PARAMS: z.object({
-    DEFAULT_MIN_RESERVE_SOL: z.number().default(0.03),
+    DEFAULT_MIN_RESERVE_SOL: z.number().default(0.01),
     DEFAULT_BUDGET_SOL: z.number().default(1000.0), // reasonable explicit budget instead of Infinity
     DEFAULT_MAX_DAILY_LOSS_SOL: z.number().default(1.0),
     DEFAULT_MAX_CONSECUTIVE_LOSSES: z.number().default(10),
@@ -55,8 +55,8 @@ export const AppSettingsSchema = z.object({
     REQUIRE_AI: z.boolean().default(false), // Disable AI requirement for new pairs
   }).default({}),
   ANALYZER_PARAMS: z.object({
-    MIN_CANDLES: z.number().default(21),
-    MAX_STALE_CANDLE_AGE_MS: z.number().default(300000), // 5 minutes
+    MIN_CANDLES: z.number().default(2),
+    MAX_STALE_CANDLE_AGE_MS: z.number().default(1800000), // 30 minutes
   }).default({}),
   SECURITY_PARAMS: z.object({
     MIN_LIQUIDITY_USD: z.number().default(2000),

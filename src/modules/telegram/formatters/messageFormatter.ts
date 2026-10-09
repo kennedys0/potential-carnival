@@ -35,7 +35,8 @@ export function formatTokenReport(
   pair: DexScreenerPair,
   security: SecurityScoreResult,
   ai: AiAnalysis | null,
-  hasIndicators: boolean
+  hasIndicators: boolean,
+  isAiLoading: boolean = false
 ): string {
   const priceNum = parseFloat(pair.priceUsd || '0');
   let levelEmoji = '🔴';
@@ -52,8 +53,10 @@ export function formatTokenReport(
   let aiSection = '';
   if (!hasIndicators) {
     aiSection = '<i>🤖 Analisa AI: Data tidak cukup (menunggu candle lebih banyak)</i>';
+  } else if (isAiLoading) {
+    aiSection = '<i>⏳ 🤖 Analisa AI: Sedang memproses analisis on-chain...</i>';
   } else if (!ai) {
-    aiSection = '<i>🤖 Analisa AI: AI unavailable</i>';
+    aiSection = '<i>🤖 Analisa AI: Gagal memproses AI</i>';
   } else {
     const verdictEmoji = ai.verdict === 'BUY' ? '🟢' : ai.verdict === 'WAIT' ? '🟡' : '🔴';
     aiSection = `
@@ -69,6 +72,7 @@ ${ai.key_reasons.map((r) => `  - ${escapeHtml(r)}`).join('\n')}
   return `
 🚀 <b>${escapeHtml(pair.baseToken.name)} (${escapeHtml(pair.baseToken.symbol)})</b>
 <code>${escapeHtml(pair.baseToken.address)}</code> <i>(Tap to copy)</i>
+🔗 <a href="https://dexscreener.com/solana/${pair.baseToken.address}">View on DexScreener</a>
 
 💵 <b>Harga:</b> ${formatPrice(priceNum)} <code>(${pair.priceChange?.m5 >= 0 ? '+' : ''}${pair.priceChange?.m5 ?? 0}% 5m | ${pair.priceChange?.h1 >= 0 ? '+' : ''}${pair.priceChange?.h1 ?? 0}% 1h)</code>
 💧 <b>Likuiditas:</b> ${formatUsd(pair.liquidity?.usd ?? 0)}

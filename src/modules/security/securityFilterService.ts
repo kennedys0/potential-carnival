@@ -27,19 +27,25 @@ export class SecurityFilterService {
       lpBurned?: boolean;
     }
   ): Promise<SecurityScoreResult> {
+    const sellSimulationPromise = this.honeypotSimulator.simulateSell(mintAddress);
     const authority = await this.authorityChecker.checkAuthorities(mintAddress);
     
-    let dangerousExtensions: FactorResult<string[]> = { value: [], status: 'OK', source: 'Default' };
+    let dangerousExtensionsPromise = Promise.resolve({ value: [], status: 'OK', source: 'Default' } as FactorResult<string[]>);
     if (authority.programId) {
-      dangerousExtensions = await Token2022Inspector.inspectExtensions(
+      dangerousExtensionsPromise = Token2022Inspector.inspectExtensions(
         this.connection,
         new PublicKey(mintAddress),
         authority.programId
       );
     }
 
-    const holderResult = await this.holderAnalyzer.analyzeHolders(mintAddress, authority.totalSupply);
-    const sellSimulation = await this.honeypotSimulator.simulateSell(mintAddress);
+    const holderResultPromise = this.holderAnalyzer.analyzeHolders(mintAddress, authority.totalSupply);
+
+    const [dangerousExtensions, holderResult, sellSimulation] = await Promise.all([
+      dangerousExtensionsPromise,
+      holderResultPromise,
+      sellSimulationPromise
+    ]);
 
     // Deployer holding logic: normally resolved from on-chain tx history or API (e.g. RugCheck)
     // For now we'll mark it as unavailable so it correctly lowers coverage instead of assuming SAFE

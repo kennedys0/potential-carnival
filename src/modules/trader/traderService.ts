@@ -25,9 +25,12 @@ export interface OrderRequest {
 
 import { WalletService } from '../wallet/walletService';
 import { JupiterClient } from './jupiterClient';
+import { PumpPortalClient } from './pumpPortalClient';
+import { VersionedTransaction } from '@solana/web3.js';
 
 export class TraderService {
   private readonly WSOL_MINT = 'So11111111111111111111111111111111111111112';
+  private readonly pumpPortalClient = new PumpPortalClient();
 
   constructor(
     private readonly tradeRepo: TradeRepository,
@@ -99,29 +102,57 @@ export class TraderService {
     if (!Number.isInteger(slippageLimit) || slippageLimit < 1) throw new Error('Invalid slippage limit');
     const slippageBps = Math.min(appSettings.DEFAULT_SLIPPAGE_BPS, slippageLimit);
 
-    const initialQuote = await this.jupiterClient.getQuote(
-      this.WSOL_MINT,
-      req.tokenMint,
-      amountLamports,
-      slippageBps
-    );
+    let transaction!: VersionedTransaction;
+    let lastValidBlockHeight: number | undefined;
 
-    const priceImpactPct = Number(initialQuote.priceImpactPct ?? 0) * 100;
-    if (priceImpactPct > appSettings.MAX_PRICE_IMPACT_PCT) {
-      throw new Error(`Entry ditolak: Price impact (${priceImpactPct.toFixed(2)}%) melebihi batas (${appSettings.MAX_PRICE_IMPACT_PCT}%)`);
+    let useJupiter = !req.tokenMint.endsWith('pump');
+
+    if (!useJupiter) {
+      try {
+        const result = await this.pumpPortalClient.getSwapTransaction({
+          publicKey: wallet.publicKey,
+          action: 'buy',
+          mint: req.tokenMint,
+          amount: req.solAmount,
+          denominatedInSol: true,
+          slippage: slippageLimit / 100,
+          priorityFee: 0.0005,
+          pool: 'pump'
+        });
+        transaction = result.transaction;
+      } catch (err: any) {
+        logger.warn(`PumpPortal gagal untuk buy ${req.tokenMint}, fallback ke Jupiter. Error: ${err.message}`);
+        useJupiter = true;
+      }
     }
 
-    const dynamicSlippageBps = this.calculateDynamicSlippage(slippageBps, priceImpactPct, slippageLimit);
-    
-    // Re-fetch quote with dynamic slippage
-    const quote = await this.jupiterClient.getQuote(
-      this.WSOL_MINT,
-      req.tokenMint,
-      amountLamports,
-      dynamicSlippageBps
-    );
+    if (useJupiter) {
+      if (!this.jupiterClient) throw new Error('Jupiter client not initialized');
+      const initialQuote = await this.jupiterClient.getQuote(
+        this.WSOL_MINT,
+        req.tokenMint,
+        amountLamports,
+        slippageBps
+      );
 
-    const { transaction, lastValidBlockHeight } = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+      const priceImpactPct = Number(initialQuote.priceImpactPct ?? 0) * 100;
+      if (priceImpactPct > appSettings.MAX_PRICE_IMPACT_PCT) {
+        throw new Error(`Entry ditolak: Price impact (${priceImpactPct.toFixed(2)}%) melebihi batas (${appSettings.MAX_PRICE_IMPACT_PCT}%)`);
+      }
+
+      const dynamicSlippageBps = this.calculateDynamicSlippage(slippageBps, priceImpactPct, slippageLimit);
+      
+      const quote = await this.jupiterClient.getQuote(
+        this.WSOL_MINT,
+        req.tokenMint,
+        amountLamports,
+        dynamicSlippageBps
+      );
+
+      const jupResult = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+      transaction = jupResult.transaction;
+      lastValidBlockHeight = jupResult.lastValidBlockHeight;
+    }
     const blockhash = transaction.message.recentBlockhash;
 
     const idempotencyKey = crypto.createHash('sha256').update(`buy_${req.userId}_${req.tokenMint}_${Math.floor(Date.now() / 60000)}`).digest('hex');
@@ -349,14 +380,45 @@ export class TraderService {
     const maxSlippage = appSettings.EXIT_MAX_SLIPPAGE_BPS;
     const exitSlippageBps = Math.min(baseSlippage + (currentAttempts - 1) * stepSlippage, maxSlippage);
 
-    const quote = await this.jupiterClient.getQuote(
-      trade.token_mint,
-      this.WSOL_MINT,
-      amountLamports,
-      exitSlippageBps
-    );
+    let transaction!: VersionedTransaction;
+    let lastValidBlockHeight: number | undefined;
 
-    const { transaction, lastValidBlockHeight } = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+    let useJupiter = !trade.token_mint.endsWith('pump');
+
+    if (!useJupiter) {
+      try {
+        const percentToClose = percentageToClose > 100 ? 100 : percentageToClose;
+        const result = await this.pumpPortalClient.getSwapTransaction({
+          publicKey: wallet.publicKey,
+          action: 'sell',
+          mint: trade.token_mint,
+          amount: `${percentToClose}%`,
+          denominatedInSol: false,
+          slippage: exitSlippageBps / 100,
+          priorityFee: 0.0005,
+          pool: 'pump'
+        });
+        transaction = result.transaction;
+      } catch (err: any) {
+        logger.warn(`PumpPortal gagal untuk sell ${trade.token_mint}, fallback ke Jupiter. Error: ${err.message}`);
+        useJupiter = true;
+      }
+    }
+
+    if (useJupiter) {
+      if (!this.jupiterClient) throw new Error('Jupiter client not initialized');
+      const quote = await this.jupiterClient.getQuote(
+        trade.token_mint,
+        this.WSOL_MINT,
+        amountLamports,
+        exitSlippageBps
+      );
+
+      const jupResult = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+      transaction = jupResult.transaction;
+      lastValidBlockHeight = jupResult.lastValidBlockHeight;
+    }
+    
     const blockhash = transaction.message.recentBlockhash;
     
     // Create attempt record

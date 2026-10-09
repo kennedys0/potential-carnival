@@ -70,7 +70,7 @@ ATURAN WAJIB:
           messages: [
             {
               role: 'system',
-              content: 'You are a disciplined quantitative scalper. Respond strictly in valid JSON matching the requested schema.',
+              content: 'You are a disciplined quantitative scalper. Respond strictly in valid JSON matching the requested schema. Do not include markdown formatting or explanation.',
             },
             {
               role: 'user',
@@ -78,7 +78,6 @@ ATURAN WAJIB:
             },
           ],
           temperature: 0.2,
-          response_format: { type: 'json_object' },
         }),
         signal: controller.signal,
       });
@@ -92,8 +91,11 @@ ATURAN WAJIB:
       }
 
       const data: any = await res.json();
-      const content = data.choices?.[0]?.message?.content;
+      let content = data.choices?.[0]?.message?.content;
       if (!content) return null;
+
+      // Clean markdown code blocks if the model included them
+      content = content.replace(/```(?:json)?\n?/g, '').replace(/```\n?/g, '').trim();
 
       const parsedJson = JSON.parse(content);
       return AiAnalysisSchema.parse(parsedJson);

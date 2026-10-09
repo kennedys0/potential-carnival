@@ -34,6 +34,9 @@ export interface TechnicalIndicatorsSnapshot {
   calculatedStopLoss: number;
   calculatedTp1: number;
   calculatedTp2: number;
+  macroEma9?: number;
+  macroEma21?: number;
+  macroRsi14?: number;
 }
 
 export class AnalyzerService {
@@ -43,9 +46,11 @@ export class AnalyzerService {
     candles: Candle[],
     currentPrice: number,
     currentVolume: number,
-    pastVolumes: number[]
+    pastVolumes: number[],
+    macroCandles?: Candle[]
   ): TechnicalIndicatorsSnapshot | null {
-    if (candles.length < appSettings.ANALYZER_PARAMS.MIN_CANDLES) {
+    if (candles.length < 1) {
+      console.log(`[Analyzer] Not enough candles: ${candles.length}`);
       return null;
     }
 
@@ -55,6 +60,7 @@ export class AnalyzerService {
     const now = Date.now();
     const candleAgeMs = now - lastCandle.timestamp;
     if (candleAgeMs > appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS) {
+      console.log(`[Analyzer] Stale candle. Age: ${candleAgeMs}ms, Max allowed: ${appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS}`);
       return null;
     }
 
@@ -72,7 +78,7 @@ export class AnalyzerService {
     const calculatedTp1 = currentPrice + appSettings.RISK_MULTIPLIER_TP1 * riskDelta;
     const calculatedTp2 = currentPrice + appSettings.RISK_MULTIPLIER_TP2 * riskDelta;
 
-    return {
+    const result: TechnicalIndicatorsSnapshot = {
       ema9,
       ema21,
       rsi14,
@@ -83,6 +89,15 @@ export class AnalyzerService {
       calculatedTp1,
       calculatedTp2,
     };
+
+    if (macroCandles && macroCandles.length >= 21) {
+      const macroCloses = macroCandles.map(c => c.close);
+      result.macroEma9 = calculateEMA(macroCloses, 9);
+      result.macroEma21 = calculateEMA(macroCloses, 21);
+      result.macroRsi14 = calculateRSI(macroCloses, 14);
+    }
+
+    return result;
   }
 
   async analyzeWithLlm(
@@ -100,7 +115,9 @@ export class AnalyzerService {
 ATURAN MUTLAK:
 1. JIKA VERDICT = BUY, Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk (currentPrice), dan Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
 2. key_reasons WAJIB ditulis dalam bahasa Indonesia, maksimal 5-7 kata per alasan agar singkat, padat, dan mudah dimengerti.
-3. Keluarkan HANYA JSON valid sesuai struktur berikut:
+3. [MULTI-TIMEFRAME]: Jika trend jangka pendek (EMA 5m) terlihat naik tapi trend makro (EMA 15m/1h) turun, BERHATI-HATILAH terhadap fakeout/dead cat bounce.
+4. [ANTI-TRAP]: Jika ada 'flags' yang menyebutkan bahwa Top 10 Holder memiliki supply sangat besar (>50%), VERDICT WAJIB AVOID kecuali ada alasan fundamental kuat. Paus ini bisa rugpull seketika!
+5. Keluarkan HANYA JSON valid sesuai struktur berikut:
 {
   "verdict": "BUY" | "WAIT" | "AVOID",
   "confidence": 0-100,
@@ -137,7 +154,7 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
           if (!result) throw new Error('LLM analysis returned null');
           analysis = result;
         } else {
-        const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VWAP=${indicators.vwap}, VolumeSpike=${indicators.volumeSpikeRatio}x. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
+        const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VWAP=${indicators.vwap}, VolumeSpike=${indicators.volumeSpikeRatio}x. Macro (15m): EMA9=${indicators.macroEma9}, EMA21=${indicators.macroEma21}, RSI14=${indicators.macroRsi14}. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
         const response = await this.llmClient.messages.create({
           model: appSettings.FALLBACK_AI_MODEL,
           max_tokens: 1000,

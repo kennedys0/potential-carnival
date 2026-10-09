@@ -77,7 +77,7 @@ export class AutopilotRepository {
         mode: 'FIXED_SOL',
         fixed_sol: 0.1,
         max_concurrent_positions: 3,
-        min_reserve_sol: 0.03,
+        min_reserve_sol: 0.01,
       },
       exit_params: {
         tp1_percent: 15,

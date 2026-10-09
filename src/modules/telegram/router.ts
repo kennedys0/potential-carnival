@@ -37,6 +37,7 @@ import { handleSniperSettings } from './handlers/sniperHandler';
 import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsHandler';
 import { handleHelpMenu } from './handlers/helpHandler';
 import { handleReportCommand } from './handlers/reportHandler';
+import { handleCopyTradeCommand, handleCopyTradeMenu } from './handlers/copyTradeHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
 import { escapeHtml } from './formatters/messageFormatter';
 
@@ -48,8 +49,10 @@ export interface BotRouteServices {
   scannerService: ScannerService;
   securityService: SecurityFilterService;
   analyzerService: AnalyzerService;
+  scanAnalyzerService?: AnalyzerService;
   tradeRepo: TradeRepository;
   traderService: TraderService;
+  copyTradeRepo: any; // We'll use any to avoid circular import if needed, or import CopyTradeRepository
 }
 
 function cyclePreset(current: number, presets: readonly number[]): number {
@@ -111,6 +114,11 @@ export function registerBotRoutes(
     await handleReportCommand(ctx, services.tradeRepo);
   });
 
+  // Command /copy (Copy Trading)
+  bot.command('copy', async (ctx) => {
+    await handleCopyTradeCommand(ctx, services.copyTradeRepo);
+  });
+
   // Command /killswitch
   bot.command('killswitch', async (ctx) => {
     if (!ctx.from) return;
@@ -149,7 +157,7 @@ export function registerBotRoutes(
       );
       return;
     }
-    await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService, services.autopilotRepo);
+    await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.scanAnalyzerService ?? services.analyzerService, services.autopilotRepo);
   });
 
   // Command /set_withdraw_address
@@ -266,7 +274,7 @@ export function registerBotRoutes(
 
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
     if (solanaAddressRegex.test(text) && !text.startsWith('/')) {
-      await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.analyzerService, services.autopilotRepo);
+      await handleScanCommand(ctx, text, services.scannerService, services.securityService, services.scanAnalyzerService ?? services.analyzerService, services.autopilotRepo);
       return;
     }
     await next();
@@ -302,6 +310,9 @@ export function registerBotRoutes(
     } else if (data === 'menu_help') {
       await ctx.answerCallbackQuery();
       await handleHelpMenu(ctx);
+    } else if (data === 'copytrade_refresh') {
+      await ctx.answerCallbackQuery();
+      await handleCopyTradeMenu(ctx, services.copyTradeRepo);
     } else if (data === 'menu_scan') {
       await ctx.answerCallbackQuery();
       const text = (
@@ -545,6 +556,28 @@ export function registerBotRoutes(
       });
       await ctx.answerCallbackQuery({ text: `Trailing Stop ${!trailingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
       await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_cycle_trail_dist') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const currentDist = (cfg.exit_params as any)?.trailing_stop_percent ?? 5;
+      // Cycle: 5 -> 10 -> 15 -> 20 -> 5
+      const nextDist = currentDist === 5 ? 10 : currentDist === 10 ? 15 : currentDist === 15 ? 20 : 5;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        exit_params: { ...cfg.exit_params, trailing_stop_percent: nextDist },
+      });
+      await ctx.answerCallbackQuery({ text: `Trailing Distance diubah ke ${nextDist}%` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_cycle_trail_start') {
+      if (!ctx.from) return;
+      const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+      const currentStart = (cfg.exit_params as any)?.trailing_activation_percent ?? 20;
+      // Cycle: 10 -> 20 -> 30 -> 50 -> 10
+      const nextStart = currentStart === 10 ? 20 : currentStart === 20 ? 30 : currentStart === 30 ? 50 : 10;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        exit_params: { ...cfg.exit_params, trailing_activation_percent: nextStart },
+      });
+      await ctx.answerCallbackQuery({ text: `Trailing Start diubah ke +${nextStart}%` });
+      await handleSettingsMenu(ctx, services.autopilotRepo);
     } else if (data === 'settings_toggle_trending') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
@@ -571,10 +604,9 @@ export function registerBotRoutes(
       }
     }
 
-    // 5. Token Scan Actions
     else if (data.startsWith('refresh:')) {
       const tokenMint = data.split(':')[1];
-      await handleScanCommand(ctx, tokenMint, services.scannerService, services.securityService, services.analyzerService, services.autopilotRepo);
+      await handleScanCommand(ctx, tokenMint, services.scannerService, services.securityService, services.scanAnalyzerService ?? services.analyzerService, services.autopilotRepo);
     } else if (data.startsWith('buy_custom:')) {
       if (!ctx.from) return;
       const mint = data.split(':')[1];

@@ -9,6 +9,7 @@ import { TradeRepository } from './database/repositories/tradeRepository';
 import { AutopilotRepository } from './database/repositories/autopilotRepository';
 import { SniperRepository } from './database/repositories/sniperRepository';
 import { StrategyReservationRepository } from './database/repositories/strategyReservationRepository';
+import { CopyTradeRepository } from './database/repositories/copyTradeRepository';
 import { getRedisConnection } from './queue/connection';
 import { createQueues } from './queue/queues';
 import { createMonitorWorker } from './queue/workers/monitorWorker';
@@ -27,6 +28,7 @@ import { createTelegramBot } from './modules/telegram/bot';
 import { registerBotRoutes } from './modules/telegram/router';
 import { TrendScanner } from './modules/scanner/trendScanner';
 import { SniperScanner } from './modules/scanner/sniperScanner';
+import { CopyTradeTracker } from './modules/copytrade/copyTradeTracker';
 import { UserStateService } from './modules/user/userStateService';
 import { liveFeedSubscribers } from './modules/scanner/liveFeedState';
 
@@ -55,6 +57,7 @@ async function main() {
   const autopilotRepo = new AutopilotRepository(supabase);
   const sniperRepo = new SniperRepository(supabase);
   const strategyReservations = new StrategyReservationRepository(supabase);
+  const copyTradeRepo = new CopyTradeRepository(supabase);
 
   // Core Services
   const walletService = new WalletService(walletRepo, solanaConnection);
@@ -70,6 +73,14 @@ async function main() {
     timeoutMs: 60000,
   }) : undefined;
   const analyzerService = new AnalyzerService(llmProvider);
+
+  const scanLlmProvider = env.SCAN_AI_BASE_URL && env.SCAN_AI_API_KEY ? new OpenAiCompatibleProvider({
+    baseUrl: env.SCAN_AI_BASE_URL,
+    apiKey: env.SCAN_AI_API_KEY,
+    model: env.SCAN_AI_MODEL || 'deepseek-v4-flash',
+    timeoutMs: 60000,
+  }) : undefined;
+  const scanAnalyzerService = scanLlmProvider ? new AnalyzerService(scanLlmProvider) : analyzerService;
   const traderService = new TraderService(tradeRepo, walletService, jupiterClient);
   const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService, sniperRepo, strategyReservations);
 
@@ -102,6 +113,16 @@ async function main() {
     bot.api
   );
 
+  const copyTradeTracker = new CopyTradeTracker(
+    solanaConnection,
+    copyTradeRepo,
+    traderService,
+    scannerService,
+    securityService,
+    autopilotRepo,
+    bot.api
+  );
+
   // BullMQ Workers
   const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api, sniperRepo);
   const reconcileWorker = createReconcileWorker(tradeRepo, walletService);
@@ -128,6 +149,7 @@ async function main() {
     // Start Autopilot Trend Scanner
     trendScanner.start();
     sniperScanner.start();
+    copyTradeTracker.start();
 
     // Schedule Reconciliation Job (every 5 minutes)
     queues.reconcileQueue.add('reconcile-job', undefined, {
@@ -149,8 +171,10 @@ async function main() {
     scannerService,
     securityService,
     analyzerService,
+    scanAnalyzerService,
     tradeRepo,
     traderService,
+    copyTradeRepo,
   });
 
   // Start Bot Polling (in development or non-test mode)
@@ -183,6 +207,7 @@ async function main() {
     try {
       await bot.stop();
       trendScanner.stop();
+      copyTradeTracker.stop();
       await monitorWorker.close();
       await reconcileWorker.close();
       await queues.scanQueue.close();

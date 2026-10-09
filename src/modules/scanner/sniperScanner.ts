@@ -121,9 +121,10 @@ export class SniperScanner {
           continue;
         }
         const candles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 1);
+        const macroCandles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 5);
         const volumes = candles.slice(0, -1).map(c => c.volume);
         const currentVolume = pair.volume?.m5 ?? candles.at(-1)?.volume ?? 0;
-        const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, volumes);
+        const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, volumes, macroCandles);
         const ai = null; // Disabled AI for faster sniping
 
         for (const config of eligibleConfigs) {

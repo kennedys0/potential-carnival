@@ -39,15 +39,23 @@ export class JupiterClient {
   ): Promise<QuoteResponse> {
     await this.waitForRateLimit();
     
-    const quote = await this.api.quoteGet({
-      inputMint,
-      outputMint,
-      amount: amountLamports,
-      slippageBps,
-    });
-    
-    if (!quote) throw new Error('Failed to get quote from Jupiter API');
-    return quote;
+    try {
+      const quote = await this.api.quoteGet({
+        inputMint,
+        outputMint,
+        amount: amountLamports,
+        slippageBps,
+      });
+      
+      if (!quote) throw new Error('Failed to get quote from Jupiter API');
+      return quote;
+    } catch (err: any) {
+      if (err.response && typeof err.response.text === 'function') {
+        const text = await err.response.text().catch(() => '');
+        throw new Error(`Jupiter Quote API Error: ${err.message} - Body: ${text}`);
+      }
+      throw err;
+    }
   }
 
   async getSwapTransaction(
@@ -56,21 +64,30 @@ export class JupiterClient {
   ): Promise<{ transaction: VersionedTransaction; lastValidBlockHeight?: number }> {
     await this.waitForRateLimit();
 
-    const swap = await this.api.swapPost({
-      swapRequest: {
-        quoteResponse,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
+    try {
+      const swap = await this.api.swapPost({
+        swapRequest: {
+          quoteResponse,
+          userPublicKey,
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          prioritizationFeeLamports: 500000 as any, // 0.0005 SOL
+        }
+      });
+
+      if (!swap || !swap.swapTransaction) {
+        throw new Error('Failed to generate swap transaction from Jupiter API');
       }
-    });
 
-    if (!swap || !swap.swapTransaction) {
-      throw new Error('Failed to generate swap transaction from Jupiter API');
+      const swapTransactionBuf = Buffer.from(swap.swapTransaction, 'base64');
+      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+      return { transaction, lastValidBlockHeight: swap.lastValidBlockHeight };
+    } catch (err: any) {
+      if (err.response && typeof err.response.text === 'function') {
+        const text = await err.response.text().catch(() => '');
+        throw new Error(`Jupiter Swap API Error: ${err.message} - Body: ${text}`);
+      }
+      throw err;
     }
-
-    const swapTransactionBuf = Buffer.from(swap.swapTransaction, 'base64');
-    const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-    return { transaction, lastValidBlockHeight: swap.lastValidBlockHeight };
   }
 }

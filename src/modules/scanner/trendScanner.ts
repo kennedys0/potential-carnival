@@ -67,6 +67,40 @@ export class TrendScanner {
     }
   }
 
+  private async fetchDexScreenerBoosts(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
+    try {
+      const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+      if (!res.ok) return [];
+      const data = (await res.json()) as any[];
+      const solanaTokens = data.filter(t => t.chainId === 'solana');
+      return solanaTokens.map(t => ({
+        tokenAddress: t.tokenAddress,
+        pairAddress: '', // DexScreener boosts only give tokenAddress, scannerService resolves it
+        symbol: 'Boosted',
+      }));
+    } catch (err) {
+      logger.warn({ err }, 'TrendScanner: DexScreener Boosts failed');
+      return [];
+    }
+  }
+
+  private async fetchDexScreenerLatestProfiles(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
+    try {
+      const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+      if (!res.ok) return [];
+      const data = (await res.json()) as any[];
+      const solanaTokens = data.filter(t => t.chainId === 'solana');
+      return solanaTokens.map(t => ({
+        tokenAddress: t.tokenAddress,
+        pairAddress: '', // Resolved by scannerService
+        symbol: 'NewProfile',
+      }));
+    } catch (err) {
+      logger.warn({ err }, 'TrendScanner: DexScreener Latest Profiles failed');
+      return [];
+    }
+  }
+
   private async scanTrending() {
     try {
       // 1. Get active autopilot users
@@ -78,8 +112,25 @@ export class TrendScanner {
 
       logger.info(`TrendScanner: Fetching trending tokens for ${activeConfigs.length} active users...`);
 
-      // 2. Fetch organic trending tokens (GeckoTerminal primary, DexScreener fallback)
-      const trendingList = await this.fetchOrganicTrendingTokens();
+      // 2. Fetch tokens from multiple sources
+      const [geckoTokens, boostedTokens, latestProfiles] = await Promise.all([
+        this.fetchOrganicTrendingTokens(),
+        this.fetchDexScreenerBoosts(),
+        this.fetchDexScreenerLatestProfiles()
+      ]);
+
+      const combinedList = [...geckoTokens, ...boostedTokens, ...latestProfiles];
+      
+      // Deduplicate by token address
+      const uniqueTokensMap = new Map<string, typeof combinedList[0]>();
+      for (const t of combinedList) {
+        if (!uniqueTokensMap.has(t.tokenAddress)) {
+          uniqueTokensMap.set(t.tokenAddress, t);
+        }
+      }
+      const trendingList = Array.from(uniqueTokensMap.values());
+      logger.info(`TrendScanner: Merged ${trendingList.length} unique tokens from GeckoTerminal & DexScreener.`);
+      
       const redis = getRedisConnection();
 
       const newTokens: typeof trendingList = [];
@@ -92,7 +143,7 @@ export class TrendScanner {
       
       // Ambil top 30 token trending untuk di-scan ringan
       const tokensToScan = newTokens.slice(0, 30);
-      logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW organic trending Solana tokens.`);
+      logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW multi-source trending Solana tokens.`);
 
       // Ambil profile/pair DexScreener secara concurrent max 3 sekaligus (Chunking manual)
       const fetchedPairs = [];
@@ -140,10 +191,11 @@ export class TrendScanner {
           });
 
           const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
+          const macroCandles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 15);
           const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
           const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
           
-          const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes);
+          const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes, macroCandles);
           let aiAnalysis = null;
           if (indicators) {
             aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
