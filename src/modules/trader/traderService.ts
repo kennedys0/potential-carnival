@@ -19,23 +19,24 @@ export interface OrderRequest {
   source: 'MANUAL' | 'AUTOPILOT';
   slippageBps?: number;
   ownerToken?: string;
-  strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER';
+  strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER' | 'COPY_TRADE';
   exitPolicy?: Record<string, unknown>;
 }
 
 import { WalletService } from '../wallet/walletService';
-import { JupiterClient } from './jupiterClient';
+import { JupiterClient, JupiterSwapBuildResult } from './jupiterClient';
 import { PumpPortalClient } from './pumpPortalClient';
 import { VersionedTransaction } from '@solana/web3.js';
+import { SwapTransactionIntent } from '../wallet/transactionValidator.js';
 
 export class TraderService {
   private readonly WSOL_MINT = 'So11111111111111111111111111111111111111112';
-  private readonly pumpPortalClient = new PumpPortalClient();
 
   constructor(
     private readonly tradeRepo: TradeRepository,
     private readonly walletService: WalletService,
-    private readonly jupiterClient?: JupiterClient
+    private readonly jupiterClient?: JupiterClient,
+    private readonly pumpPortalClient: PumpPortalClient = new PumpPortalClient(),
   ) {}
 
   calculateDynamicSlippage(baseSlippageBps: number, priceImpactPct: number, maxSlippageBps: number): number {
@@ -104,6 +105,7 @@ export class TraderService {
 
     let transaction!: VersionedTransaction;
     let lastValidBlockHeight: number | undefined;
+    let transactionIntent!: SwapTransactionIntent;
 
     let useJupiter = !req.tokenMint.endsWith('pump');
 
@@ -113,13 +115,21 @@ export class TraderService {
           publicKey: wallet.publicKey,
           action: 'buy',
           mint: req.tokenMint,
-          amount: req.solAmount,
+          amount: this.formatRawAmount(BigInt(amountLamports), 9),
           denominatedInSol: true,
           slippage: slippageLimit / 100,
           priorityFee: 0.0005,
           pool: 'pump'
         });
         transaction = result.transaction;
+        transactionIntent = {
+          provider: 'PUMP_PORTAL',
+          side: 'BUY',
+          walletPublicKey: wallet.publicKey,
+          inputMint: this.WSOL_MINT,
+          outputMint: req.tokenMint,
+          inputAmountRaw: BigInt(amountLamports),
+        };
       } catch (err: any) {
         logger.warn(`PumpPortal gagal untuk buy ${req.tokenMint}, fallback ke Jupiter. Error: ${err.message}`);
         useJupiter = true;
@@ -128,30 +138,33 @@ export class TraderService {
 
     if (useJupiter) {
       if (!this.jupiterClient) throw new Error('Jupiter client not initialized');
-      const initialQuote = await this.jupiterClient.getQuote(
+      const initialBuild = await this.jupiterClient.buildSwap(
         this.WSOL_MINT,
         req.tokenMint,
-        amountLamports,
-        slippageBps
+        BigInt(amountLamports),
+        slippageBps,
+        wallet.publicKey,
       );
 
-      const priceImpactPct = Number(initialQuote.priceImpactPct ?? 0) * 100;
+      const priceImpactPct = Number(initialBuild.quote.priceImpactPct) * 100;
       if (priceImpactPct > appSettings.MAX_PRICE_IMPACT_PCT) {
         throw new Error(`Entry ditolak: Price impact (${priceImpactPct.toFixed(2)}%) melebihi batas (${appSettings.MAX_PRICE_IMPACT_PCT}%)`);
       }
 
       const dynamicSlippageBps = this.calculateDynamicSlippage(slippageBps, priceImpactPct, slippageLimit);
       
-      const quote = await this.jupiterClient.getQuote(
-        this.WSOL_MINT,
-        req.tokenMint,
-        amountLamports,
-        dynamicSlippageBps
-      );
-
-      const jupResult = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
+      const jupResult = dynamicSlippageBps === slippageBps
+        ? initialBuild
+        : await this.jupiterClient.buildSwap(
+          this.WSOL_MINT,
+          req.tokenMint,
+          BigInt(amountLamports),
+          dynamicSlippageBps,
+          wallet.publicKey,
+        );
       transaction = jupResult.transaction;
       lastValidBlockHeight = jupResult.lastValidBlockHeight;
+      transactionIntent = this.jupiterIntent(jupResult, wallet.publicKey, 'BUY');
     }
     const blockhash = transaction.message.recentBlockhash;
 
@@ -196,6 +209,7 @@ export class TraderService {
         req.userId, 
         transaction,
         {
+          intent: transactionIntent,
           onSignature: async (sig) => {
             tradeRecord.pending_signature = sig;
             if (tradeRecord.id) {
@@ -320,7 +334,10 @@ export class TraderService {
       
       const priceMultiplier = trade.entry_price_usd > 0 ? (currentPriceUsd / trade.entry_price_usd) : 1;
       const initialSolSpent = trade.sol_amount ?? 0;
-      const initialTokenAmountRaw = BigInt(trade.token_amount_raw ?? 1);
+      if (trade.token_amount_raw === null || trade.token_amount_raw === undefined) {
+        throw new Error('Paper trade is missing its initial token amount');
+      }
+      const initialTokenAmountRaw = BigInt(trade.token_amount_raw);
       
       let solCostBasisForThisExit = 0;
       if (initialTokenAmountRaw > 0n) {
@@ -365,12 +382,6 @@ export class TraderService {
       throw new Error('Calculated token amount to close is 0.');
     }
     
-    // Check safe range
-    if (amountLamportsBigInt > 9007199254740991n) {
-      throw new Error(`Kuantitas token terlalu besar dan tidak dapat diproses dengan aman: ${amountLamportsBigInt}`);
-    }
-    const amountLamports = Number(amountLamportsBigInt);
-
     // Increment exit attempts immediately
     const currentAttempts = (trade.exit_attempts ?? 0) + 1;
     await this.tradeRepo.updateTradeStatus(trade.id, { exit_attempts: currentAttempts });
@@ -382,23 +393,31 @@ export class TraderService {
 
     let transaction!: VersionedTransaction;
     let lastValidBlockHeight: number | undefined;
+    let transactionIntent!: SwapTransactionIntent;
 
     let useJupiter = !trade.token_mint.endsWith('pump');
 
     if (!useJupiter) {
       try {
-        const percentToClose = percentageToClose > 100 ? 100 : percentageToClose;
         const result = await this.pumpPortalClient.getSwapTransaction({
           publicKey: wallet.publicKey,
           action: 'sell',
           mint: trade.token_mint,
-          amount: `${percentToClose}%`,
+          amount: this.formatRawAmount(amountLamportsBigInt, totalTokenBalance.decimals),
           denominatedInSol: false,
           slippage: exitSlippageBps / 100,
           priorityFee: 0.0005,
           pool: 'pump'
         });
         transaction = result.transaction;
+        transactionIntent = {
+          provider: 'PUMP_PORTAL',
+          side: 'SELL',
+          walletPublicKey: wallet.publicKey,
+          inputMint: trade.token_mint,
+          outputMint: this.WSOL_MINT,
+          inputAmountRaw: amountLamportsBigInt,
+        };
       } catch (err: any) {
         logger.warn(`PumpPortal gagal untuk sell ${trade.token_mint}, fallback ke Jupiter. Error: ${err.message}`);
         useJupiter = true;
@@ -407,16 +426,16 @@ export class TraderService {
 
     if (useJupiter) {
       if (!this.jupiterClient) throw new Error('Jupiter client not initialized');
-      const quote = await this.jupiterClient.getQuote(
+      const jupResult = await this.jupiterClient.buildSwap(
         trade.token_mint,
         this.WSOL_MINT,
-        amountLamports,
-        exitSlippageBps
+        amountLamportsBigInt,
+        exitSlippageBps,
+        wallet.publicKey,
       );
-
-      const jupResult = await this.jupiterClient.getSwapTransaction(quote, wallet.publicKey);
       transaction = jupResult.transaction;
       lastValidBlockHeight = jupResult.lastValidBlockHeight;
+      transactionIntent = this.jupiterIntent(jupResult, wallet.publicKey, 'SELL');
     }
     
     const blockhash = transaction.message.recentBlockhash;
@@ -432,16 +451,22 @@ export class TraderService {
     });
     
     let result;
+    let exitSignature: string | undefined;
     try {
       result = await this.walletService.signAndSendVersionedTransaction(
         trade.user_id, 
         transaction,
         {
+          intent: transactionIntent,
           onSignature: async (sig) => {
-            trade.pending_signature = sig; // update in memory
-            await this.tradeRepo.updateTradeStatus(trade.id!, { pending_signature: sig });
+            exitSignature = sig;
             if (exitAttempt.id) {
-              await this.tradeRepo.updateExitAttempt(exitAttempt.id, { tx_signature: sig });
+              await this.tradeRepo.updateExitAttempt(exitAttempt.id, { tx_signature: sig, status: 'SIGNED' });
+            }
+          },
+          onSend: async () => {
+            if (exitAttempt.id) {
+              await this.tradeRepo.updateExitAttempt(exitAttempt.id, { status: 'BROADCAST_ATTEMPTED' });
             }
           }
         }
@@ -449,7 +474,7 @@ export class TraderService {
     } catch (e: any) {
       const failureReason = e.message || 'Unknown execution error';
       // Only fail it if we are sure it didn't hit the network, otherwise keep PENDING
-      if (!trade.pending_signature || trade.pending_signature === 'SIGN_FAILED') {
+      if (!exitSignature) {
         await this.tradeRepo.updateTradeStatus(trade.id, {
           last_exit_error: failureReason,
           needs_attention: currentAttempts >= 3,
@@ -569,6 +594,48 @@ export class TraderService {
     }
 
     return 'SUCCESS';
+  }
+
+  async acquireBuyLock(userId: number, tokenMint: string, ownerToken: string, ttlSeconds: number): Promise<boolean> {
+    return this.tradeRepo.acquireBuyLock(userId, tokenMint, ownerToken, ttlSeconds);
+  }
+
+  async releaseBuyLock(userId: number, tokenMint: string, ownerToken: string): Promise<void> {
+    await this.tradeRepo.releaseBuyLock(userId, tokenMint, ownerToken);
+  }
+
+  async hasActiveTrade(userId: number, tokenMint: string): Promise<boolean> {
+    const activeTrades = await this.tradeRepo.getTradesByStatuses(
+      userId,
+      ['RESERVED', 'SIGNED', 'BROADCAST_ATTEMPTED', 'PENDING', 'OPEN', 'PARTIAL_EXIT'],
+    );
+    return activeTrades.some((trade) => trade.token_mint === tokenMint);
+  }
+
+  private jupiterIntent(
+    build: JupiterSwapBuildResult,
+    walletPublicKey: string,
+    side: 'BUY' | 'SELL',
+  ): SwapTransactionIntent {
+    return {
+      provider: 'JUPITER',
+      side,
+      walletPublicKey,
+      inputMint: build.quote.inputMint,
+      outputMint: build.quote.outputMint,
+      inputAmountRaw: BigInt(build.quote.inAmount),
+      minimumOutputAmountRaw: BigInt(build.quote.otherAmountThreshold),
+      addressLookupTableAccounts: build.addressLookupTableAccounts,
+    };
+  }
+
+  private formatRawAmount(amountRaw: bigint, decimals: number): string {
+    if (!Number.isInteger(decimals) || decimals < 0) throw new Error('Invalid token decimals');
+    if (decimals === 0) return amountRaw.toString();
+    const digits = amountRaw.toString().padStart(decimals + 1, '0');
+    const whole = digits.slice(0, -decimals);
+    const fraction = digits.slice(-decimals).replace(/0+$/, '');
+    return fraction ? `${whole}.${fraction}` : whole;
   }
 
   private async assertTradingAllowed(userId: number, side: 'BUY' | 'SELL', isDryRun: boolean): Promise<void> {

@@ -33,7 +33,7 @@ export class HoneypotSimulator {
         };
       }
 
-      const tokenReceived = parseInt(buyQuote.outAmount);
+      const tokenReceived = BigInt(buyQuote.outAmount);
 
       // 2. Dapatkan quote jual dari Token ke WSOL
       const sellQuote = await this.jupiterClient.getQuote(tokenMint, wsolMint, tokenReceived, 200);
@@ -46,23 +46,23 @@ export class HoneypotSimulator {
         };
       }
 
-      const solReturned = parseInt(sellQuote.outAmount);
+      const solReturned = BigInt(sellQuote.outAmount);
       
       // Hitung rugi fee (tax)
       let effectiveTaxPercent = 0;
-      if (solReturned < amountInSolLamports) {
-         effectiveTaxPercent = ((amountInSolLamports - solReturned) / amountInSolLamports) * 100;
+      if (solReturned < BigInt(amountInSolLamports)) {
+         effectiveTaxPercent = Number((BigInt(amountInSolLamports) - solReturned) * 10_000n / BigInt(amountInSolLamports)) / 100;
       }
 
-      const priceImpact = parseFloat(sellQuote.priceImpactPct || '0');
+      const priceImpact = Number(sellQuote.priceImpactPct || '0') * 100;
       
       // Jika rugi > 30%, asumsikan honeypot ekstrim
       const canSell = effectiveTaxPercent < 30;
 
       return {
-        canSell: { value: canSell, status: 'OK', source: 'Jupiter Roundtrip Validation' },
-        effectiveTaxPercent: { value: effectiveTaxPercent, status: 'OK', source: 'Jupiter Roundtrip Validation' },
-        priceImpactPct: { value: priceImpact, status: 'OK', source: 'Jupiter Quote API' },
+        canSell: { value: canSell, status: 'OK', source: 'Jupiter V2 roundtrip route quote; execution simulation occurs before signing' },
+        effectiveTaxPercent: { value: effectiveTaxPercent, status: 'OK', source: 'Jupiter V2 quoted roundtrip loss' },
+        priceImpactPct: { value: priceImpact, status: 'OK', source: 'Jupiter Swap API V2' },
       };
     } catch (err: any) {
       const isRateLimit = err?.response?.status === 429 || err?.status === 429 || err.message?.includes('429');

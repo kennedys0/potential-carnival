@@ -75,11 +75,11 @@ export class ScoreCalculator {
       hardBlockReasons.push(`Dangerous Token-2022 extensions: ${input.dangerousExtensions.value.join(', ')}`);
     }
 
-    addReport('Sell Simulation', input.sellSimulationSuccess, input.sellSimulationSuccess.value ? 'Success' : 'Failed');
+    addReport('Sell Route Quote', input.sellSimulationSuccess, input.sellSimulationSuccess.value ? 'Route Available' : 'No Route');
     if (input.sellSimulationSuccess.status === 'UNAVAILABLE') {
-      riskFlags.push('Sell simulation route data UNAVAILABLE');
+      riskFlags.push('Sell route quote data UNAVAILABLE');
     } else if (!input.sellSimulationSuccess.value) {
-      hardBlockReasons.push('Sell simulation failed (Honeypot risk)');
+      hardBlockReasons.push('Sell route quote failed (Honeypot/liquidity risk)');
     }
 
     addReport('Liquidity', input.liquidityUsd, `$${input.liquidityUsd.value?.toFixed(2)}`);
@@ -89,7 +89,7 @@ export class ScoreCalculator {
       hardBlockReasons.push(`Liquidity too low: $${input.liquidityUsd.value}`);
     }
 
-    addReport('Tax', input.effectiveTaxPercent, `${input.effectiveTaxPercent.value}%`);
+    addReport('Quoted Roundtrip Loss', input.effectiveTaxPercent, `${input.effectiveTaxPercent.value}%`);
     if (input.effectiveTaxPercent.status === 'OK' && input.effectiveTaxPercent.value! > settings.MAX_TAX_PERCENT) {
       hardBlockReasons.push(`Excessive tax: ${input.effectiveTaxPercent.value}%`);
     }

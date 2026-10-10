@@ -120,6 +120,8 @@ async function main() {
     scannerService,
     securityService,
     autopilotRepo,
+    strategyReservations,
+    userStateService,
     bot.api
   );
 
@@ -138,6 +140,10 @@ async function main() {
               positionId: trade.id,
               userId: trade.user_id,
               tokenMint: trade.token_mint,
+            }, {
+              jobId: `monitor-${trade.id}`,
+              removeOnComplete: true,
+              removeOnFail: 100,
             });
           }
         }
@@ -153,7 +159,10 @@ async function main() {
 
     // Schedule Reconciliation Job (every 5 minutes)
     queues.reconcileQueue.add('reconcile-job', undefined, {
-      repeat: { pattern: '*/5 * * * *' }
+      jobId: 'reconcile-global',
+      repeat: { pattern: '*/5 * * * *' },
+      removeOnComplete: true,
+      removeOnFail: 100,
     });
 
     // Auto-subscribe all active autopilot users to live feed on startup

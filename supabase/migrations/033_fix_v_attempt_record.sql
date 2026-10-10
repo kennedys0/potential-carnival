@@ -1,3 +1,4 @@
+-- Forward-only correction formerly stored under a duplicate 028 version.
 CREATE OR REPLACE FUNCTION atomic_reconcile_exit(
     p_trade_id UUID,
     p_exit_attempt_id UUID,

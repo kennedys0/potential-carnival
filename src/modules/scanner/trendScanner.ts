@@ -67,40 +67,6 @@ export class TrendScanner {
     }
   }
 
-  private async fetchDexScreenerBoosts(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
-    try {
-      const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
-      if (!res.ok) return [];
-      const data = (await res.json()) as any[];
-      const solanaTokens = data.filter(t => t.chainId === 'solana');
-      return solanaTokens.map(t => ({
-        tokenAddress: t.tokenAddress,
-        pairAddress: '', // DexScreener boosts only give tokenAddress, scannerService resolves it
-        symbol: 'Boosted',
-      }));
-    } catch (err) {
-      logger.warn({ err }, 'TrendScanner: DexScreener Boosts failed');
-      return [];
-    }
-  }
-
-  private async fetchDexScreenerLatestProfiles(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
-    try {
-      const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
-      if (!res.ok) return [];
-      const data = (await res.json()) as any[];
-      const solanaTokens = data.filter(t => t.chainId === 'solana');
-      return solanaTokens.map(t => ({
-        tokenAddress: t.tokenAddress,
-        pairAddress: '', // Resolved by scannerService
-        symbol: 'NewProfile',
-      }));
-    } catch (err) {
-      logger.warn({ err }, 'TrendScanner: DexScreener Latest Profiles failed');
-      return [];
-    }
-  }
-
   private async scanTrending() {
     try {
       // 1. Get active autopilot users
@@ -112,14 +78,8 @@ export class TrendScanner {
 
       logger.info(`TrendScanner: Fetching trending tokens for ${activeConfigs.length} active users...`);
 
-      // 2. Fetch tokens from multiple sources
-      const [geckoTokens, boostedTokens, latestProfiles] = await Promise.all([
-        this.fetchOrganicTrendingTokens(),
-        this.fetchDexScreenerBoosts(),
-        this.fetchDexScreenerLatestProfiles()
-      ]);
-
-      const combinedList = [...geckoTokens, ...boostedTokens, ...latestProfiles];
+      // Discovery is organic-only. Paid boosts/profiles must never enter an auto-buy pipeline.
+      const combinedList = await this.fetchOrganicTrendingTokens();
       
       // Deduplicate by token address
       const uniqueTokensMap = new Map<string, typeof combinedList[0]>();
@@ -129,7 +89,7 @@ export class TrendScanner {
         }
       }
       const trendingList = Array.from(uniqueTokensMap.values());
-      logger.info(`TrendScanner: Merged ${trendingList.length} unique tokens from GeckoTerminal & DexScreener.`);
+      logger.info(`TrendScanner: Loaded ${trendingList.length} unique organic GeckoTerminal tokens.`);
       
       const redis = getRedisConnection();
 

@@ -49,8 +49,26 @@ export class AnalyzerService {
     pastVolumes: number[],
     macroCandles?: Candle[]
   ): TechnicalIndicatorsSnapshot | null {
-    if (candles.length < 1) {
-      console.log(`[Analyzer] Not enough candles: ${candles.length}`);
+    if (candles.length < appSettings.ANALYZER_PARAMS.MIN_CANDLES) {
+      logger.warn({ candleCount: candles.length }, 'Analyzer rejected insufficient candle history');
+      return null;
+    }
+
+    const isValidCandle = (candle: Candle) =>
+      Number.isFinite(candle.timestamp) && Number.isFinite(candle.open) && Number.isFinite(candle.high)
+      && Number.isFinite(candle.low) && Number.isFinite(candle.close) && Number.isFinite(candle.volume)
+      && candle.timestamp > 0 && candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0
+      && candle.high >= candle.low;
+    if (!candles.every(isValidCandle)) {
+      logger.warn('Analyzer rejected malformed candle data');
+      return null;
+    }
+    if (candles.some((candle, index) => index > 0 && candle.timestamp <= candles[index - 1].timestamp)) {
+      logger.warn('Analyzer rejected unordered or duplicate candle timestamps');
+      return null;
+    }
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0 || !Number.isFinite(currentVolume) || currentVolume < 0) {
+      logger.warn('Analyzer rejected invalid current market values');
       return null;
     }
 
@@ -60,7 +78,7 @@ export class AnalyzerService {
     const now = Date.now();
     const candleAgeMs = now - lastCandle.timestamp;
     if (candleAgeMs > appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS) {
-      console.log(`[Analyzer] Stale candle. Age: ${candleAgeMs}ms, Max allowed: ${appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS}`);
+      logger.warn({ candleAgeMs }, 'Analyzer rejected stale candle data');
       return null;
     }
 
@@ -71,6 +89,10 @@ export class AnalyzerService {
     const atr14 = calculateATR(candles, 14);
     const vwap = calculateVWAP(candles);
     const volumeSpikeRatio = calculateVolumeSpikeRatio(currentVolume, pastVolumes);
+    if (![ema9, ema21, rsi14, atr14, vwap, volumeSpikeRatio].every(Number.isFinite)) {
+      logger.warn('Analyzer rejected non-finite indicator output');
+      return null;
+    }
 
     // ATR-based dynamic risk bounds
     const calculatedStopLoss = Math.max(currentPrice - appSettings.RISK_MULTIPLIER_STOP_LOSS * atr14, currentPrice * appSettings.MAX_LOSS_PERCENTAGE);

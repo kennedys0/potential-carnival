@@ -1,5 +1,6 @@
 import { AiAnalysis, AiAnalysisSchema, TechnicalIndicatorsSnapshot } from './analyzerService';
 import { logger } from '../../utils/logger';
+import { appSettings } from '../../config/settings';
 
 export interface OpenAiConfig {
   baseUrl: string;
@@ -57,7 +58,7 @@ ATURAN WAJIB:
     try {
       const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 8000);
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs ?? appSettings.LLM_REQUEST_TIMEOUT_MS);
 
       const res = await fetch(url, {
         method: 'POST',

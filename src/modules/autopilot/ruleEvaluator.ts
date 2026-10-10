@@ -97,7 +97,7 @@ export class RuleEvaluator {
               rulesFailed.push('Fallback indicators criteria not met');
            }
         } else {
-           rulesPassed.push('AI skipped (not required), no indicators available');
+           rulesFailed.push('AI unavailable and technical indicators are unavailable');
         }
       }
     } else {

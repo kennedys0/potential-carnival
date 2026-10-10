@@ -26,6 +26,7 @@ export function createReconcileWorker(
         const pendingTrades = await tradeRepo.getInflightTradesWithSignature();
         if (pendingTrades && pendingTrades.length > 0) {
           for (const trade of pendingTrades) {
+            try {
              const signature = trade.pending_signature;
              
              if (signature === 'SIGN_FAILED' || trade.status === ('NOT_SENT' as any)) {
@@ -97,6 +98,9 @@ export function createReconcileWorker(
                  }
                }
              }
+            } catch (error) {
+              logger.error({ err: error, tradeId: trade.id }, 'Failed to reconcile one pending entry; continuing');
+            }
           }
         }
       } catch (err) {
@@ -107,6 +111,7 @@ export function createReconcileWorker(
       try {
         const preBroadcastTrades = await tradeRepo.getReservedTradesWithoutSignature();
         for (const trade of preBroadcastTrades) {
+          try {
           const pendingSince = trade.pending_since ? new Date(trade.pending_since).getTime() : new Date(trade.created_at || Date.now()).getTime();
           const ageMs = Date.now() - pendingSince;
           
@@ -119,6 +124,9 @@ export function createReconcileWorker(
              });
              logger.info({ tradeId: trade.id }, 'Reconciled RESERVED trade to FAILED to release lock');
           }
+          } catch (error) {
+            logger.error({ err: error, tradeId: trade.id }, 'Failed to reconcile one pre-broadcast entry; continuing');
+          }
         }
       } catch (err) {
         logger.error({ err }, 'Failed to reconcile pre-broadcast pending trades');
@@ -128,6 +136,7 @@ export function createReconcileWorker(
       try {
         const pendingExits = await tradeRepo.getAllPendingExitAttempts();
         for (const attempt of pendingExits) {
+          try {
           const attemptAgeMs = Date.now() - new Date(attempt.created_at || Date.now()).getTime();
           
           if (!attempt.tx_signature) {
@@ -184,6 +193,9 @@ export function createReconcileWorker(
                await tradeRepo.updateTradeStatus(attempt.trade_id, { needs_attention: true });
                logger.warn({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciliation stalled (signature not found after 120s) - Escalate');
              }
+          }
+          } catch (error) {
+            logger.error({ err: error, attemptId: attempt.id, tradeId: attempt.trade_id }, 'Failed to reconcile one exit; continuing');
           }
         }
       } catch (err) {
@@ -290,6 +302,7 @@ export function createReconcileWorker(
       try {
           const pendingWithdrawals = await walletService['walletRepo'].getPendingWithdrawals();
           for (const w of pendingWithdrawals) {
+            try {
             if (w.tx_signature) {
                const tx = await walletService.getParsedTransaction(w.tx_signature);
                if (tx && tx.meta) {
@@ -322,6 +335,9 @@ export function createReconcileWorker(
                  await walletService['walletRepo'].updateWithdrawalAttempt(w.id, { status: 'NEEDS_ATTENTION' });
                  logger.warn({ attemptId: w.id }, 'Withdrawal stalled without signature for >5 mins. Marked NEEDS_ATTENTION');
                }
+            }
+            } catch (error) {
+              logger.error({ err: error, attemptId: w.id }, 'Failed to reconcile one withdrawal; continuing');
             }
           }
       } catch (err) {

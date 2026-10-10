@@ -22,6 +22,13 @@ export const AppSettingsSchema = z.object({
   CONFIRMATION_DELAY_MS: z.number().default(2000),
   MAX_PENDING_AGE_MS: z.number().default(300000),
   TX_POLLING_TIMEOUT_MS: z.number().default(90000),
+  TX_MAX_COMPUTE_UNITS: z.number().int().positive().default(1_400_000),
+  TX_MAX_PRIORITY_FEE_LAMPORTS: z.number().int().nonnegative().default(500_000),
+  TX_MAX_NETWORK_FEE_LAMPORTS: z.number().int().nonnegative().default(100_000),
+  TX_MAX_INCIDENTAL_LAMPORTS: z.number().int().nonnegative().default(10_000_000),
+  TX_MIN_OUTPUT_RAW: z.number().int().positive().default(1),
+  NETWORK_FEE_FALLBACK_LAMPORTS: z.number().int().positive().default(5_000),
+  LLM_REQUEST_TIMEOUT_MS: z.number().int().positive().default(8_000),
   ORPHAN_DUST_LIMIT_RAW: z.number().default(1000),
   MONITOR_PARAMS: z.object({
     DEFAULT_TP1_PERCENT: z.number().default(15),
@@ -29,6 +36,7 @@ export const AppSettingsSchema = z.object({
     DEFAULT_SL_PERCENT: z.number().default(8),
     DEFAULT_TRAILING_STOP_PERCENT: z.number().default(5),
     DEFAULT_TRAILING_ACTIVATION_PERCENT: z.number().default(20),
+    DEFAULT_TP1_SELL_SHARE: z.number().min(1).max(100).default(50),
   }).default({}),
   AUTOPILOT_PARAMS: z.object({
     DEFAULT_MIN_RESERVE_SOL: z.number().default(0.01),
@@ -48,6 +56,12 @@ export const AppSettingsSchema = z.object({
     MAX_TRENDING_DAILY_BUYS: z.number().default(100),
     MAX_TRENDING_DAILY_BUDGET_SOL: z.number().default(10),
   }).default({}),
+  COPY_TRADE_PARAMS: z.object({
+    DEFAULT_MAX_POSITIONS: z.number().int().positive().default(3),
+    MAX_DAILY_BUYS: z.number().int().positive().default(10),
+    DEFAULT_MIN_SAFETY_SCORE: z.number().min(0).max(100).default(75),
+    DEFAULT_MIN_LIQUIDITY_USD: z.number().positive().default(10_000),
+  }).default({}),
   SNIPER_PARAMS: z.object({
     MIN_SAFETY_SCORE: z.number().default(50),
     ALLOWED_LEVELS: z.array(z.string()).default(['SAFE', 'CAUTION']),
@@ -55,7 +69,7 @@ export const AppSettingsSchema = z.object({
     REQUIRE_AI: z.boolean().default(false), // Disable AI requirement for new pairs
   }).default({}),
   ANALYZER_PARAMS: z.object({
-    MIN_CANDLES: z.number().default(2),
+    MIN_CANDLES: z.number().int().min(21).default(21),
     MAX_STALE_CANDLE_AGE_MS: z.number().default(1800000), // 30 minutes
   }).default({}),
   SECURITY_PARAMS: z.object({

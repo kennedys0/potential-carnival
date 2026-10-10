@@ -5,6 +5,7 @@ import { AnalyzerService } from '../../analyzer/analyzerService';
 import { escapeHtml, formatTokenReport } from '../formatters/messageFormatter';
 import { createTokenKeyboard } from '../formatters/keyboardBuilder';
 import { AutopilotRepository } from '../../../database/repositories/autopilotRepository';
+import { logger } from '../../../utils/logger';
 
 export async function handleScanCommand(
   ctx: Context,
@@ -62,20 +63,7 @@ export async function handleScanCommand(
       autopilotRepo.getOrCreateConfig(ctx.from!.id)
     ]);
     
-    // Typecast to array of any since Promise.all preserves types, but we want to modify it.
-    let candles = rawCandles as any[];
-
-    // Create a fake candle if we have absolutely no candles from GeckoTerminal
-    if (candles.length === 0 && priceUsd > 0) {
-      candles = [{
-        timestamp: Date.now(),
-        open: priceUsd,
-        high: priceUsd,
-        low: priceUsd,
-        close: priceUsd,
-        volume: pair.volume?.m5 || 0
-      }];
-    }
+    const candles = rawCandles as any[];
 
     const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
     const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
@@ -106,7 +94,7 @@ export async function handleScanCommand(
             reply_markup: keyboard,
           });
         })
-        .catch(console.error);
+        .catch((error) => logger.error({ err: error, tokenMint }, 'Background token analysis failed'));
     }
   } catch (err: any) {
     if (err?.description?.includes('message is not modified')) {

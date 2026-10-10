@@ -6,6 +6,8 @@ import { WalletRepository } from '../../database/repositories/walletRepository';
 import { getEnv } from '../../config/env';
 import { TxSender, TxSendResult } from './txSender';
 import { verifyWithdrawalTransfer } from './withdrawalVerification.js';
+import { SwapTransactionIntent, TransactionValidator } from './transactionValidator.js';
+import { appSettings } from '../../config/settings';
 
 export class WalletService {
   constructor(
@@ -194,7 +196,7 @@ export class WalletService {
       }).compileToV0Message();
       
       const fee = await withdrawalConnection.getFeeForMessage(message, 'confirmed');
-      const estimatedFee = fee.value ?? 5000;
+      const estimatedFee = fee.value ?? appSettings.NETWORK_FEE_FALLBACK_LAMPORTS;
       
       let transferLamports = 0;
       const rentReserve = 0.01 * LAMPORTS_PER_SOL;
@@ -311,9 +313,22 @@ export class WalletService {
     }
   }
 
-  async signAndSendVersionedTransaction(userId: number, transaction: any, options?: { onSignature?: (sig: string) => Promise<void>; onSend?: () => Promise<void> }): Promise<TxSendResult> {
+  async signAndSendVersionedTransaction(
+    userId: number,
+    transaction: VersionedTransaction,
+    options: {
+      intent: SwapTransactionIntent;
+      onSignature?: (sig: string) => Promise<void>;
+      onSend?: () => Promise<void>;
+    },
+  ): Promise<TxSendResult> {
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar.');
+    if (options.intent.walletPublicKey !== wallet.public_key) {
+      throw new Error('Transaction intent wallet does not match the stored wallet');
+    }
+
+    await new TransactionValidator(this.connection).validateSwap(transaction, options.intent);
 
     const env = getEnv();
     const keypair = KeypairService.decrypt(

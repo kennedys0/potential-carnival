@@ -178,7 +178,7 @@ export class AutopilotEngine {
     }
 
     if (source === 'SNIPER' && config.require_sell_route &&
-        security.report?.find((r: any) => r.name === 'Sell Simulation')?.value !== 'Success') {
+        security.report?.find((r: any) => r.name === 'Sell Route Quote')?.value !== 'Route Available') {
       return { executed: false, reason: 'Sell route not verified' };
     }
 
@@ -188,7 +188,7 @@ export class AutopilotEngine {
     
     if (source === 'SNIPER') {
        orderSol = config.buy_amount_sol ?? 0.01;
-       sizingConf.max_concurrent_positions = config.max_active_positions ?? 3;
+       sizingConf.max_concurrent_positions = config.max_active_positions ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_MAX_POSITIONS;
     } else {
       if (sizingConf.mode === 'FIXED_SOL') {
         orderSol = sizingConf.fixed_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_FIXED_SOL;

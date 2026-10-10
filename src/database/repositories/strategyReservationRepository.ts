@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { solToLamports } from '../../modules/autopilot/strategyRisk';
 import { appSettings } from '../../config/settings';
 
-export type StrategyName = 'TRENDING' | 'NEW_TOKEN_SNIPER';
+export type StrategyName = 'TRENDING' | 'NEW_TOKEN_SNIPER' | 'COPY_TRADE';
 export interface StrategyReservationRequest {
   userId: number;
   tokenMint: string;
@@ -23,7 +23,8 @@ export class StrategyReservationRepository {
   async reserve(request: StrategyReservationRequest): Promise<string | null> {
     const amountLamports = solToLamports(request.amountSol);
     const availableLamports = solToLamports(request.availableBalanceSol);
-    const dailyBudget = request.strategy === 'NEW_TOKEN_SNIPER'
+    const hasCustomDailyLimits = request.strategy !== 'TRENDING';
+    const dailyBudget = hasCustomDailyLimits
       ? solToLamports(request.maxDailyBudgetSol ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_DAILY_BUDGET_SOL)
       : solToLamports(appSettings.STRATEGY_RESERVATION_PARAMS.MAX_TRENDING_DAILY_BUDGET_SOL);
     const { data, error } = await this.db.rpc('reserve_strategy_entry', {
@@ -34,7 +35,7 @@ export class StrategyReservationRepository {
       p_amount_lamports: amountLamports.toString(),
       p_max_strategy_positions: request.maxStrategyPositions,
       p_max_global_positions: request.maxGlobalPositions,
-      p_max_daily_buys: request.strategy === 'NEW_TOKEN_SNIPER' ? (request.maxDailyBuys ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_DAILY_BUYS) : appSettings.STRATEGY_RESERVATION_PARAMS.MAX_TRENDING_DAILY_BUYS,
+      p_max_daily_buys: hasCustomDailyLimits ? (request.maxDailyBuys ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_DAILY_BUYS) : appSettings.STRATEGY_RESERVATION_PARAMS.MAX_TRENDING_DAILY_BUYS,
       p_max_daily_lamports: dailyBudget.toString(),
       p_available_lamports: availableLamports.toString(),
     });

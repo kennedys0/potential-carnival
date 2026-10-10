@@ -11,6 +11,8 @@ import { logger } from '../../utils/logger';
 import { JupiterClient } from '../../modules/trader/jupiterClient';
 import { appSettings } from '../../config/settings';
 import { escapeHtml } from '../../modules/telegram/formatters/messageFormatter';
+import { currencyService } from '../../utils/currencyService';
+import crypto from 'node:crypto';
 
 export function createMonitorWorker(
   tradeRepo: TradeRepository,
@@ -62,7 +64,7 @@ export function createMonitorWorker(
            if (currentPriceUsd <= 0) return;
            const entryPrice = trade.entry_price_usd;
            pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
-           pnlSol = (trade.sol_amount || 0) * (pnlPercent / 100);
+           pnlSol = trade.sol_amount * (pnlPercent / 100);
         } else {
            // Live trading: use Jupiter Quote
            if (!trade.remaining_raw) {
@@ -73,16 +75,11 @@ export function createMonitorWorker(
            const remainingBigInt = BigInt(trade.remaining_raw);
            if (remainingBigInt <= 0n) return;
            
-           if (remainingBigInt > 9007199254740991n) {
-              logger.error({ positionId, remaining: trade.remaining_raw }, 'Remaining tokens too large for safe integer conversion during monitoring');
-              return;
-           }
-           const amountLamports = Number(remainingBigInt);
            const WSOL_MINT = 'So11111111111111111111111111111111111111112';
            const slippageBps = 100; // default for monitoring estimation
            
            try {
-             const quote = await jupiterClient.getQuote(trade.token_mint, WSOL_MINT, amountLamports, slippageBps);
+             const quote = await jupiterClient.getQuote(trade.token_mint, WSOL_MINT, remainingBigInt, slippageBps);
              const solToReceive = parseInt(quote.outAmount) / 1e9;
              
              // Calculate cost basis proportional to remaining_raw
@@ -114,6 +111,9 @@ export function createMonitorWorker(
         const tp1Percent = exitParams.tp1_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP1_PERCENT;
         const tp2Percent = exitParams.tp2_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP2_PERCENT;
         const slPercent = exitParams.sl_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_SL_PERCENT;
+        const tp1SellShare = Math.min(100, Math.max(1, Number(
+          exitParams.tp1_sell_share ?? appSettings.MONITOR_PARAMS.DEFAULT_TP1_SELL_SHARE,
+        )));
         
         let percentageToClose = 0;
         let reason = '';
@@ -126,11 +126,13 @@ export function createMonitorWorker(
         }
 
         const trailingStopEnabled = exitParams.trailing_stop_enabled ?? true;
-        const trailingStopPercent = exitParams.trailing_stop_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_STOP_PERCENT; // drop distance from highest
+        const trailingStopPercent = exitParams.trailing_stop_delta_percent
+          ?? exitParams.trailing_stop_percent
+          ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_STOP_PERCENT;
         const trailingActivationPercent = exitParams.trailing_activation_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_ACTIVATION_PERCENT; // active only when highest > this
 
         if (trade.status === 'OPEN' && pnlPercent >= tp1Percent && pnlPercent < tp2Percent) {
-           percentageToClose = 50;
+           percentageToClose = tp1SellShare;
            reason = `TP1 Reached (+${pnlPercent.toFixed(2)}%)`;
         } else if (pnlPercent >= tp2Percent) {
            percentageToClose = 100;
@@ -145,7 +147,8 @@ export function createMonitorWorker(
 
         if (percentageToClose > 0) {
           const lockKey = `lock:monitor:close:${positionId}`;
-          const locked = await redis.set(lockKey, 'locked', 'EX', 30, 'NX');
+          const lockOwner = crypto.randomUUID();
+          const locked = await redis.set(lockKey, lockOwner, 'EX', 120, 'NX');
           if (!locked) {
             logger.info({ positionId }, 'Position is currently being closed by another worker, skipping');
             return;
@@ -158,9 +161,10 @@ export function createMonitorWorker(
               const statusEmoji = pnlPercent >= 0 ? '🟢' : '🔴';
               const actionTitle = pnlPercent >= 0 ? 'TAKE PROFIT REACHED' : 'STOP LOSS TRIGGERED';
               
-              const pnlIdr = pnlSol * 2500000;
+              await currencyService.fetchRates();
+              const pnlIdr = currencyService.solToIdr(pnlSol);
               const sign = pnlSol >= 0 ? '+' : '';
-              const idrFormatted = Math.abs(pnlIdr).toLocaleString('id-ID', { style: 'currency', currency: 'IDR' });
+              const idrFormatted = currencyService.formatIdr(pnlIdr === null ? null : Math.abs(pnlIdr));
 
               if (status === 'SUCCESS') {
                 await botApi.sendMessage(userId, 
@@ -191,6 +195,16 @@ export function createMonitorWorker(
               return;
             }
             throw e;
+          } finally {
+            const releaseScript = `
+              if redis.call("get", KEYS[1]) == ARGV[1] then
+                return redis.call("del", KEYS[1])
+              end
+              return 0
+            `;
+            await redis.eval(releaseScript, 1, lockKey, lockOwner).catch((error) => {
+              logger.error({ err: error, positionId }, 'Failed to release monitor close lock');
+            });
           }
         }
 

@@ -36,6 +36,8 @@ export const EnvSchema = z.object({
   AI_BASE_URL: z.string().optional(),
   AI_API_KEY: z.string().optional(),
   AI_MODEL: z.string().optional(),
+  JUPITER_API_KEY: z.string().min(1).optional(),
+  JUPITER_API_URL: z.string().url().optional(),
   SCAN_AI_BASE_URL: z.string().optional(),
   SCAN_AI_API_KEY: z.string().optional(),
   SCAN_AI_MODEL: z.string().optional(),
@@ -64,6 +66,14 @@ export const EnvSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['ADMIN_USER_IDS'],
       message: 'ADMIN_USER_IDS must contain at least one Telegram admin ID in production',
+    });
+  }
+
+  if (env.LIVE_TRADING_ENABLED && !env.JUPITER_API_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JUPITER_API_KEY'],
+      message: 'JUPITER_API_KEY is required when live trading is enabled in production',
     });
   }
 });

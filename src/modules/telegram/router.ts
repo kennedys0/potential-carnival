@@ -648,7 +648,15 @@ export function registerBotRoutes(
         const priceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0;
         if (priceUsd === 0) throw new Error('Gagal mendapatkan harga terkini token');
 
-        await services.traderService.closePosition(trade, priceUsd, percent);
+        const closeStatus = await services.traderService.closePosition(trade, priceUsd, percent);
+        if (closeStatus === 'UNCERTAIN') {
+          await ctx.reply('⚠️ <b>Sell sudah dibroadcast tetapi status akhirnya belum pasti.</b> Posisi dikunci untuk rekonsiliasi; jangan mengulang sell.', { parse_mode: 'HTML' });
+          return;
+        }
+        if (closeStatus === 'SKIPPED') {
+          await ctx.reply('ℹ️ Posisi sudah tidak aktif; tidak ada transaksi sell yang dikirim.');
+          return;
+        }
         
         await currencyService.fetchRates();
         const entryPrice = trade.entry_price_usd;
@@ -658,7 +666,7 @@ export function registerBotRoutes(
         const pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
 
         await ctx.reply(
-          `✅ <b>Posisi Berhasil Ditutup (${percent}%)!</b>\n\n` +
+          `✅ <b>Posisi Terkonfirmasi Ditutup (${percent}%)!</b>\n\n` +
           `• <b>Token:</b> ${escapeHtml(trade.token_symbol)}\n` +
           `• <b>Entry Price:</b> $${entryPrice.toFixed(6)}\n` +
           `• <b>Exit Price:</b> $${priceUsd.toFixed(6)}\n` +
@@ -688,8 +696,10 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
     const isDryRun = cfg.mode === 'PAPER';
 
     const pair = await services.scannerService.scanTokenByAddress(mint);
-    const priceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0.0001;
-    const symbol = pair?.baseToken?.symbol || 'UNKNOWN';
+    if (!pair) throw new Error('Token/pool aktif tidak ditemukan; buy manual ditolak');
+    const priceUsd = Number(pair.priceUsd);
+    if (!Number.isFinite(priceUsd) || priceUsd <= 0) throw new Error('Harga token tidak valid; buy manual ditolak');
+    const symbol = pair.baseToken.symbol || 'UNKNOWN';
 
     const trade = await services.traderService.executeOrder({
       userId: ctx.from.id,
@@ -705,7 +715,7 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
     const amountIdr = currencyService.solToIdr(amount);
 
     await ctx.reply(
-      `✅ <b>Order Berhasil Dieksekusi!</b>\n\n` +
+      `${trade.status === 'OPEN' ? '✅ <b>Order Terkonfirmasi!</b>' : '⏳ <b>Order Terkirim, Menunggu Rekonsiliasi</b>'}\n\n` +
       `• <b>Mode:</b> ${isDryRun ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}\n` +
       `• <b>Token:</b> ${escapeHtml(symbol)} (<code>${escapeHtml(mint.slice(0, 8))}...</code>)\n` +
       `• <b>Alokasi:</b> <code>${amount} SOL</code> (${currencyService.formatIdr(amountIdr)})\n` +
