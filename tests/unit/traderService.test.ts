@@ -29,6 +29,23 @@ vi.mock('../../src/queue/connection', () => ({
   getRedisConnection: vi.fn(() => mockRedis),
 }));
 
+const mockBuildSwap = (priceImpactPct = '0') => vi.fn().mockImplementation(
+  async (inputMint: string, outputMint: string, amount: bigint, slippageBps: number) => ({
+    transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] },
+    lastValidBlockHeight: 100,
+    addressLookupTableAccounts: [],
+    quote: {
+      inputMint,
+      outputMint,
+      inAmount: amount.toString(),
+      outAmount: '10000000',
+      otherAmountThreshold: '1',
+      slippageBps,
+      priceImpactPct,
+    },
+  }),
+);
+
 describe('TraderService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -106,8 +123,7 @@ describe('TraderService', () => {
       }),
     };
     const mockJupiterClient: any = {
-      getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
+      buildSwap: mockBuildSwap(),
     };
 
     const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
@@ -122,8 +138,7 @@ describe('TraderService', () => {
       source: 'MANUAL',
     });
 
-    expect(mockJupiterClient.getQuote).toHaveBeenCalled();
-    expect(mockJupiterClient.getSwapTransaction).toHaveBeenCalled();
+    expect(mockJupiterClient.buildSwap).toHaveBeenCalled();
     expect(mockWalletService.signAndSendVersionedTransaction).toHaveBeenCalled();
     expect(mockWalletService.getParsedTransaction).toHaveBeenCalledWith('mock-tx-sig-123');
     expect(result.tx_signature).toBe('mock-tx-sig-123');
@@ -166,6 +181,8 @@ describe('TraderService', () => {
       is_dry_run: true,
       sol_amount: 0.5,
       token_amount: 10,
+      token_amount_raw: '10000000',
+      remaining_raw: '10000000',
       entry_price_usd: 1.0,
     } as any, 1.5, 100)).resolves.not.toThrow();
   });
@@ -184,8 +201,7 @@ describe('TraderService', () => {
       signAndSendVersionedTransaction: vi.fn().mockRejectedValue(new Error('RPC Timeout')),
     };
     const mockJupiterClient: any = {
-      getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
+      buildSwap: mockBuildSwap(),
     };
 
     const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
@@ -288,8 +304,7 @@ describe('TraderService', () => {
       }),
     };
     const jup: any = {
-      getQuote: vi.fn().mockResolvedValue({ outAmount: '1000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
+      buildSwap: mockBuildSwap(),
     };
     return { repo, wallet, jup, service: new TraderService(repo, wallet, jup) };
   };
@@ -367,8 +382,7 @@ describe('TraderService', () => {
       }),
     };
     const jup: any = {
-      getQuote: vi.fn().mockResolvedValue({ outAmount: '10000000' }),
-      getSwapTransaction: vi.fn().mockResolvedValue({ transaction: { message: { recentBlockhash: 'mock-blockhash' }, signatures: [Buffer.from('sig')] }, lastValidBlockHeight: 100 }),
+      buildSwap: mockBuildSwap(),
     };
     return { repo, wallet, service: new TraderService(repo, wallet, jup) };
   };
@@ -407,8 +421,7 @@ describe('TraderService', () => {
 
   it('[GUARD] entry: tolak bila priceImpactPct > batas config', async () => {
     const { service } = buyDeps(sendWithSig({ status: 'SUCCESS', signature: 'sigX' }));
-    // Mock quote to return high price impact (3% = "0.03")
-    service['jupiterClient']!.getQuote = vi.fn().mockResolvedValue({ priceImpactPct: '0.03' });
+    service['jupiterClient']!.buildSwap = mockBuildSwap('0.03');
     await expect(service.executeOrder(buyReq)).rejects.toThrow(/Price impact \(3.00%\) melebihi batas/);
   });
 
@@ -428,7 +441,7 @@ describe('TraderService', () => {
     // base: 100, step: 50. attempt: 2 -> currentAttempt before fetch is 3.
     // wait, in exitPosition: currentAttempts = (trade.exit_attempts ?? 0) + 1 = 3.
     // exitSlippageBps = 100 + (3-1)*50 = 200.
-    expect(jup.getQuote).toHaveBeenCalledWith(trade.token_mint, expect.any(String), 1000000, 200);
+    expect(jup.buildSwap).toHaveBeenCalledWith(trade.token_mint, expect.any(String), 1000000n, 200, '1111');
     
     const ups = updatesOf(repo);
     const pnlUpdate = ups.find(u => u.pnl_sol !== undefined);
@@ -496,5 +509,40 @@ describe('TraderService', () => {
     // 2nd exit cost = 1 SOL. Received 1.5 SOL (net). Fee = 0.000005. Realized this time = +0.5.
     // Total realized = 0.0 + 0.5 = 0.5.
     expect(pnlUpdate2!.realized_pnl_sol).toBeCloseTo(0.5, 5);
+  });
+
+  it('[GUARD] Pump sell sends the exact computed token amount, never a wallet percentage', async () => {
+    const repo: any = {
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+      getPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      createExitAttempt: vi.fn().mockImplementation(async (attempt: any) => ({ id: 'exit-pump', ...attempt })),
+      updateExitAttempt: vi.fn().mockResolvedValue(undefined),
+    };
+    const wallet: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
+      getTokenBalance: vi.fn().mockResolvedValue({ raw: 1_234_567n, decimals: 6, ui: 1.234567 }),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'UNKNOWN', signature: 'pump-sig' }),
+    };
+    const pump: any = {
+      getSwapTransaction: vi.fn().mockResolvedValue({
+        transaction: { message: { recentBlockhash: 'pump-blockhash' }, signatures: [Buffer.alloc(64)] },
+      }),
+    };
+    const service = new TraderService(repo, wallet, {} as any, pump);
+    const trade = liveTrade({ token_mint: 'ExactAmountTokenpump', remaining_raw: '1234567' });
+
+    await expect(service.closePosition(trade as any, 1.5, 50)).resolves.toBe('UNCERTAIN');
+    expect(pump.getSwapTransaction).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'sell',
+      amount: '0.617283',
+      denominatedInSol: false,
+    }));
+    expect(wallet.signAndSendVersionedTransaction).toHaveBeenCalledWith(
+      trade.user_id,
+      expect.anything(),
+      expect.objectContaining({
+        intent: expect.objectContaining({ inputAmountRaw: 617283n }),
+      }),
+    );
   });
 });

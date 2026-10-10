@@ -18,7 +18,7 @@ describe('Positions Handler', () => {
     };
 
     const mockTradeRepo: any = {
-      getOpenTradesByUserId: vi.fn().mockResolvedValue([]),
+      getTradesByStatuses: vi.fn().mockResolvedValue([]),
     };
     
     const mockScannerService: any = {
@@ -39,7 +39,7 @@ describe('Positions Handler', () => {
     };
 
     const mockTradeRepo: any = {
-      getOpenTradesByUserId: vi.fn().mockResolvedValue([
+      getTradesByStatuses: vi.fn().mockResolvedValue([
         {
           token_symbol: 'BONK',
           entry_price_usd: 0.000025,
@@ -68,7 +68,7 @@ describe('Positions Handler', () => {
     vi.spyOn(currencyService, 'solToIdr').mockReturnValue(null);
     const mockCtx: any = { from: { id: 1 }, reply: vi.fn().mockResolvedValue(true) };
     const mockTradeRepo: any = {
-      getOpenTradesByUserId: vi.fn().mockResolvedValue([
+      getTradesByStatuses: vi.fn().mockResolvedValue([
         { id: 't1', token_symbol: 'BONK', token_mint: 'M', entry_price_usd: 0.00002, sol_amount: 0.5, token_amount: 20000, status: 'OPEN', is_dry_run: true },
       ]),
     };

@@ -64,3 +64,28 @@ test('031 aligns live schema with application queries and withdrawal cancellatio
   assert.match(walletHandler, /withdraw_cancel:\$\{withdrawalId\}/);
   assert.match(router, /withdraw_cancel:/);
 });
+
+test('migration versions are unique and remediation isolates enum extension', () => {
+  const names = fs.readdirSync(new URL('../../supabase/migrations/', import.meta.url));
+  const versions = names.map((name) => name.split('_', 1)[0]);
+  assert.equal(new Set(versions).size, versions.length);
+
+  const enumSql = load('034_add_copy_trade_strategy.sql');
+  const remediationSql = load('035_production_safety_remediation.sql');
+  assert.match(enumSql, /ADD VALUE IF NOT EXISTS 'COPY_TRADE'/);
+  assert.match(remediationSql, /Exit signatures belong exclusively to exit_attempts\.tx_signature/);
+  assert.match(remediationSql, /'SIGNED','BROADCAST_ATTEMPTED','CONFIRMING'/);
+});
+
+test('copy-trade targets are server-only and cannot bypass backend limits', () => {
+  const sql = load('035_production_safety_remediation.sql');
+  assert.match(sql, /DROP POLICY IF EXISTS "Users can manage their own copy trade targets"/);
+  assert.match(sql, /REVOKE ALL ON TABLE public\.copy_trade_targets FROM PUBLIC, anon, authenticated/);
+  assert.match(sql, /GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public\.copy_trade_targets TO service_role/);
+  assert.match(sql, /CHECK \(max_buy_usd > 0 AND max_buy_usd <= 10000\)/);
+
+  const trader = fs.readFileSync(new URL('../../src/modules/trader/traderService.ts', import.meta.url), 'utf8');
+  const closePosition = trader.slice(trader.indexOf('async closePosition('), trader.indexOf('private jupiterIntent('));
+  assert.doesNotMatch(closePosition, /pending_signature/);
+  assert.match(closePosition, /updateExitAttempt\(exitAttempt\.id, \{ tx_signature: sig, status: 'SIGNED' \}\)/);
+});

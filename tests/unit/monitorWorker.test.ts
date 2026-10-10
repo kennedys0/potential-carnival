@@ -25,6 +25,7 @@ vi.mock('bullmq', () => ({
 const mockRedis = {
   get: vi.fn().mockResolvedValue(null),
   set: vi.fn().mockResolvedValue('OK'),
+  eval: vi.fn().mockResolvedValue(1),
 };
 
 const mockBotApi = {
@@ -187,6 +188,29 @@ describe('MonitorWorker', () => {
     await worker.processor({ data: { positionId: trade.id, userId: 111, tokenMint: trade.token_mint } });
     expect(traderService.closePosition).toHaveBeenCalledWith(trade, 1.21, 100);
     expect(autopilotRepo.getOrCreateConfig).not.toHaveBeenCalled();
+  });
+
+  it('uses the configured TP1 sell share instead of a hardcoded 50 percent', async () => {
+    const trade = {
+      id: 'tp1-share', token_mint: 'tokenT', token_symbol: 'TOK', status: 'OPEN', is_dry_run: true,
+      entry_price_usd: 1, sol_amount: 1, highest_pnl_percent: 0,
+      exit_policy_snapshot: {
+        enabled: true, tp1_percent: 10, tp1_sell_share: 25, tp2_percent: 30,
+        sl_percent: 8, trailing_stop_enabled: false,
+      },
+    };
+    const tradeRepo: any = {
+      getOpenTradesByUserId: vi.fn().mockResolvedValue([trade]),
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const traderService: any = { closePosition: vi.fn().mockResolvedValue('UNCERTAIN') };
+    const scannerService: any = { scanTokenByAddress: vi.fn().mockResolvedValue({ priceUsd: '1.2' }) };
+    const worker: any = createMonitorWorker(
+      tradeRepo, traderService, scannerService, {} as any, {} as any, mockBotApi,
+    );
+
+    await worker.processor({ data: { positionId: trade.id, userId: 111, tokenMint: trade.token_mint } });
+    expect(traderService.closePosition).toHaveBeenCalledWith(trade, 1.2, 25);
   });
 
 });

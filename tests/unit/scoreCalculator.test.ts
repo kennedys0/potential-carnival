@@ -84,7 +84,7 @@ describe('ScoreCalculator', () => {
     };
     const result = ScoreCalculator.calculate(input);
     expect(result.isHardBlocked).toBe(true);
-    expect(result.hardBlockReasons).toContain('Sell simulation failed (Honeypot risk)');
+    expect(result.hardBlockReasons).toContain('Sell route quote failed (Honeypot/liquidity risk)');
     expect(result.level).not.toBe('SAFE');
   });
 });
