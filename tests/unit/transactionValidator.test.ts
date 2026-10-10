@@ -8,13 +8,22 @@ import {
   VersionedTransaction,
   SystemProgram,
 } from '@solana/web3.js';
-import { AccountLayout, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import {
+  AccountLayout,
+  AuthorityType,
+  createApproveInstruction,
+  createSetAuthorityInstruction,
+  getAssociatedTokenAddressSync,
+  TOKEN_PROGRAM_ID,
+} from '@solana/spl-token';
+import {
+  SwapTransactionIntent,
   TransactionValidationError,
   TransactionValidator,
 } from '../../src/modules/wallet/transactionValidator';
 
 const JUPITER_PROGRAM = new PublicKey('JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4');
+const PUMP_PROGRAM = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
 const WSOL = 'So11111111111111111111111111111111111111112';
 const OUTPUT_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 
@@ -53,6 +62,41 @@ function jupiterInstruction(wallet: PublicKey): TransactionInstruction {
   });
 }
 
+function intentFor(wallet: PublicKey): SwapTransactionIntent {
+  return {
+    provider: 'JUPITER',
+    side: 'BUY',
+    walletPublicKey: wallet.toBase58(),
+    inputMint: WSOL,
+    outputMint: OUTPUT_MINT.toBase58(),
+    inputAmountRaw: 100_000_000n,
+    minimumOutputAmountRaw: 1n,
+  };
+}
+
+function pumpInstruction(
+  wallet: PublicKey,
+  mint: PublicKey,
+  discriminator: number[],
+  firstAmount: bigint,
+  secondAmount: bigint,
+): TransactionInstruction {
+  const data = Buffer.alloc(24);
+  Buffer.from(discriminator).copy(data, 0);
+  data.writeBigUInt64LE(firstAmount, 8);
+  data.writeBigUInt64LE(secondAmount, 16);
+  const keys = Array.from({ length: 9 }, () => ({
+    pubkey: Keypair.generate().publicKey,
+    isSigner: false,
+    isWritable: false,
+  }));
+  keys[2] = { pubkey: mint, isSigner: false, isWritable: false };
+  keys[5] = { pubkey: getAssociatedTokenAddressSync(mint, wallet), isSigner: false, isWritable: true };
+  keys[6] = { pubkey: wallet, isSigner: true, isWritable: true };
+  keys[8] = { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false };
+  return new TransactionInstruction({ programId: PUMP_PROGRAM, keys, data });
+}
+
 describe('TransactionValidator', () => {
   it('rejects an unexpected top-level program before signing', () => {
     const wallet = Keypair.generate().publicKey;
@@ -63,7 +107,7 @@ describe('TransactionValidator', () => {
     ]);
     const validator = new TransactionValidator({} as any);
 
-    expect(() => validator.validateMessage(transaction, wallet, 'JUPITER'))
+    expect(() => validator.validateMessage(transaction, wallet, intentFor(wallet)))
       .toThrow(/program is not allowlisted/);
   });
 
@@ -76,7 +120,7 @@ describe('TransactionValidator', () => {
     ]);
     const validator = new TransactionValidator({} as any);
 
-    expect(() => validator.validateMessage(transaction, wallet, 'JUPITER'))
+    expect(() => validator.validateMessage(transaction, wallet, intentFor(wallet)))
       .toThrow(/not an approved wrapped-SOL funding instruction/);
   });
 
@@ -95,8 +139,72 @@ describe('TransactionValidator', () => {
     ]);
     const validator = new TransactionValidator({} as any);
 
-    expect(() => validator.validateMessage(transaction, wallet, 'JUPITER'))
+    expect(() => validator.validateMessage(transaction, wallet, intentFor(wallet)))
       .toThrow(/only required signer|unexpected instruction signer/);
+  });
+
+  it('rejects an SPL approval that delegates an unrelated token account', () => {
+    const wallet = Keypair.generate().publicKey;
+    const attacker = Keypair.generate().publicKey;
+    const unrelatedAccount = Keypair.generate().publicKey;
+    const transaction = transactionFor(wallet, [
+      createApproveInstruction(unrelatedAccount, attacker, wallet, 9_999_999_999n),
+      jupiterInstruction(wallet),
+    ]);
+    const validator = new TransactionValidator({} as any);
+
+    expect(() => validator.validateMessage(transaction, wallet, intentFor(wallet)))
+      .toThrow(/top-level token instruction/);
+  });
+
+  it('rejects an SPL authority change even when the wallet is the only signer', () => {
+    const wallet = Keypair.generate().publicKey;
+    const attacker = Keypair.generate().publicKey;
+    const unrelatedAccount = Keypair.generate().publicKey;
+    const transaction = transactionFor(wallet, [
+      createSetAuthorityInstruction(unrelatedAccount, wallet, AuthorityType.AccountOwner, attacker),
+      jupiterInstruction(wallet),
+    ]);
+    const validator = new TransactionValidator({} as any);
+
+    expect(() => validator.validateMessage(transaction, wallet, intentFor(wallet)))
+      .toThrow(/top-level token instruction/);
+  });
+
+  it('accepts the canonical Pump program and derives an exact buy minimum from its instruction', () => {
+    const wallet = Keypair.generate().publicKey;
+    const transaction = transactionFor(wallet, [
+      pumpInstruction(wallet, OUTPUT_MINT, [56, 252, 116, 8, 158, 223, 205, 95], 100_000_000n, 55_000n),
+    ]);
+    const validator = new TransactionValidator({} as any);
+
+    const validated = validator.validateMessage(transaction, wallet, {
+      provider: 'PUMP_PORTAL',
+      side: 'BUY',
+      walletPublicKey: wallet.toBase58(),
+      inputMint: WSOL,
+      outputMint: OUTPUT_MINT.toBase58(),
+      inputAmountRaw: 100_000_000n,
+    });
+
+    expect(validated.minimumOutputAmountRaw).toBe(55_000n);
+  });
+
+  it('rejects a Pump buy whose on-chain spend cap exceeds the approved input', () => {
+    const wallet = Keypair.generate().publicKey;
+    const transaction = transactionFor(wallet, [
+      pumpInstruction(wallet, OUTPUT_MINT, [102, 6, 61, 18, 1, 218, 235, 234], 55_000n, 100_000_001n),
+    ]);
+    const validator = new TransactionValidator({} as any);
+
+    expect(() => validator.validateMessage(transaction, wallet, {
+      provider: 'PUMP_PORTAL',
+      side: 'BUY',
+      walletPublicKey: wallet.toBase58(),
+      inputMint: WSOL,
+      outputMint: OUTPUT_MINT.toBase58(),
+      inputAmountRaw: 100_000_000n,
+    })).toThrow(/maximum SOL cost exceeds/);
   });
 
   it('rejects a priority fee above the configured cap', async () => {
@@ -111,6 +219,7 @@ describe('TransactionValidator', () => {
     await expect(validator.validateSwap(transaction, {
       provider: 'JUPITER', side: 'BUY', walletPublicKey: wallet.toBase58(),
       inputMint: WSOL, outputMint: OUTPUT_MINT.toBase58(), inputAmountRaw: 100_000_000n,
+      minimumOutputAmountRaw: 1n,
     })).rejects.toThrow(/priority fee/);
   });
 
@@ -124,6 +233,7 @@ describe('TransactionValidator', () => {
         value: [{ pubkey: tokenAccount, account: { data: preTokenData } }],
       }),
       getAccountInfo: vi.fn().mockResolvedValue({ owner: TOKEN_PROGRAM_ID }),
+      getMultipleAccountsInfo: vi.fn().mockResolvedValue([null]),
       getBalance: vi.fn().mockResolvedValue(1_000_000_000),
       simulateTransaction: vi.fn().mockResolvedValue({
         value: {
@@ -143,5 +253,49 @@ describe('TransactionValidator', () => {
       inputMint: WSOL, outputMint: OUTPUT_MINT.toBase58(), inputAmountRaw: 100_000_000n,
       minimumOutputAmountRaw: 1n,
     })).rejects.toThrow(TransactionValidationError);
+  });
+
+  it('rejects a provider CPI that closes an unrelated wallet token account', async () => {
+    const wallet = Keypair.generate().publicKey;
+    const outputAccount = getAssociatedTokenAddressSync(OUTPUT_MINT, wallet);
+    const unrelatedMint = Keypair.generate().publicKey;
+    const unrelatedAccount = Keypair.generate().publicKey;
+    const preOutputData = tokenAccountData(OUTPUT_MINT, wallet, 0n);
+    const postOutputData = tokenAccountData(OUTPUT_MINT, wallet, 100n);
+    const unrelatedData = tokenAccountData(unrelatedMint, wallet, 500n);
+    const maliciousJupiterInstruction = new TransactionInstruction({
+      programId: JUPITER_PROGRAM,
+      keys: [
+        { pubkey: wallet, isSigner: true, isWritable: true },
+        { pubkey: unrelatedAccount, isSigner: false, isWritable: true },
+      ],
+      data: Buffer.from([1]),
+    });
+    const connection: any = {
+      getTokenAccountsByOwner: vi.fn().mockResolvedValue({
+        value: [{ pubkey: outputAccount, account: { data: preOutputData } }],
+      }),
+      getAccountInfo: vi.fn().mockResolvedValue({ owner: TOKEN_PROGRAM_ID }),
+      getMultipleAccountsInfo: vi.fn().mockImplementation(async (addresses: PublicKey[]) => addresses.map((address) => (
+        address.equals(unrelatedAccount)
+          ? { data: unrelatedData, owner: TOKEN_PROGRAM_ID, lamports: 2_039_280, executable: false }
+          : null
+      ))),
+      getBalance: vi.fn().mockResolvedValue(1_000_000_000),
+      simulateTransaction: vi.fn().mockResolvedValue({
+        value: {
+          err: null,
+          accounts: [
+            { lamports: 899_900_000, data: ['', 'base64'], owner: PublicKey.default.toBase58(), executable: false },
+            { lamports: 2_039_280, data: [postOutputData.toString('base64'), 'base64'], owner: TOKEN_PROGRAM_ID.toBase58(), executable: false },
+            null,
+          ],
+        },
+      }),
+    };
+    const validator = new TransactionValidator(connection);
+
+    await expect(validator.validateSwap(transactionFor(wallet, [maliciousJupiterInstruction]), intentFor(wallet)))
+      .rejects.toThrow(/wallet token account was closed/);
   });
 });

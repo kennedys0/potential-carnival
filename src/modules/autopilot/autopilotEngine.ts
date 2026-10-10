@@ -254,15 +254,17 @@ export class AutopilotEngine {
       : { enabled: true, ...((config.exit_params as any) ?? {}) };
 
     try {
+      await this.reservationRepo.finish(reservationId, 'IN_FLIGHT');
       const trade = await this.traderService.executeOrder({
         userId, tokenMint, tokenSymbol, solAmount: orderSol, currentPriceUsd,
         isDryRun, source: 'AUTOPILOT', ownerToken,
         strategy, exitPolicy,
         slippageBps: source === 'SNIPER' ? config.max_slippage_bps : undefined,
+        strategyReservationId: reservationId,
       });
       const completed = trade.status === 'OPEN';
       // An ambiguous broadcast is NOT a completed BUY; hold reservation for reconciliation.
-      await this.reservationRepo.finish(reservationId, completed ? 'COMPLETED' : 'IN_FLIGHT');
+      if (completed) await this.reservationRepo.finish(reservationId, 'COMPLETED');
       return {
         executed: true,
         status: completed ? 'COMPLETED' : 'PENDING',

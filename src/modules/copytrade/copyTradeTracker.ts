@@ -227,6 +227,7 @@ export class CopyTradeTracker {
       });
       if (!reservationId) throw new Error('atomic exposure, duplicate, or daily-budget gate rejected entry');
 
+      await this.reservationRepo.finish(reservationId, 'IN_FLIGHT');
       const trade = await this.traderService.executeOrder({
         userId: follower.user_id,
         tokenMint,
@@ -238,8 +239,9 @@ export class CopyTradeTracker {
         ownerToken,
         strategy: 'COPY_TRADE',
         exitPolicy: { enabled: true, ...config.exit_params },
+        strategyReservationId: reservationId,
       });
-      await this.reservationRepo.finish(reservationId, trade.status === 'OPEN' ? 'COMPLETED' : 'IN_FLIGHT');
+      if (trade.status === 'OPEN') await this.reservationRepo.finish(reservationId, 'COMPLETED');
 
       await this.botApi.sendMessage(
         follower.user_id,

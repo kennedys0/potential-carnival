@@ -53,4 +53,31 @@ export class StrategyReservationRepository {
     if (error) throw new Error(`Failed to safely release strategy reservation: ${error.message}`);
     return data === true;
   }
+
+  async refreshForExecution(
+    id: string,
+    request: Pick<StrategyReservationRequest, 'userId' | 'tokenMint' | 'strategy' | 'isDryRun'>,
+  ): Promise<boolean> {
+    const { data, error } = await this.db.rpc('refresh_strategy_reservation', {
+      p_id: id,
+      p_user_id: request.userId,
+      p_token_mint: request.tokenMint,
+      p_strategy: request.strategy,
+      p_is_dry_run: request.isDryRun,
+    });
+    if (error) throw new Error(`Failed to refresh strategy reservation: ${error.message}`);
+    return data === true;
+  }
+
+  async reconcileStale(staleBefore: string): Promise<number> {
+    const { data, error } = await this.db.rpc('reconcile_stale_strategy_reservations', {
+      p_stale_before: staleBefore,
+    });
+    if (error) throw new Error(`Failed to reconcile stale strategy reservations: ${error.message}`);
+    const count = Number(data);
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(`Invalid stale reservation reconciliation count: ${String(data)}`);
+    }
+    return count;
+  }
 }

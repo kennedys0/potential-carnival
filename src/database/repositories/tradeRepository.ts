@@ -49,8 +49,11 @@ export interface ExitAttemptRecord {
   trade_id: string;
   percentage: number;
   tokens_amount_raw: string | number;
-  status: 'PENDING' | 'SIGNED' | 'BROADCAST_ATTEMPTED' | 'CONFIRMING' | 'SUCCESS' | 'FAILED';
+  status: 'PENDING' | 'SIGNED' | 'BROADCAST_ATTEMPTED' | 'CONFIRMING' | 'SUCCESS' | 'FAILED' | 'EXPIRED';
   tx_signature?: string | null;
+  blockhash?: string | null;
+  last_valid_block_height?: number | null;
+  failure_reason?: string | null;
   idempotency_key: string;
   worker_id?: string | null;
   created_at?: string;

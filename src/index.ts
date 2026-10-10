@@ -81,7 +81,7 @@ async function main() {
     timeoutMs: 60000,
   }) : undefined;
   const scanAnalyzerService = scanLlmProvider ? new AnalyzerService(scanLlmProvider) : analyzerService;
-  const traderService = new TraderService(tradeRepo, walletService, jupiterClient);
+  const traderService = new TraderService(tradeRepo, walletService, jupiterClient, undefined, strategyReservations);
   const autopilotEngine = new AutopilotEngine(autopilotRepo, traderService, sniperRepo, strategyReservations);
 
   // BullMQ Queues & Redis
@@ -127,7 +127,7 @@ async function main() {
 
   // BullMQ Workers
   const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api, sniperRepo);
-  const reconcileWorker = createReconcileWorker(tradeRepo, walletService);
+  const reconcileWorker = createReconcileWorker(tradeRepo, walletService, strategyReservations);
 
   // Position Monitoring Scheduler (runs every minute)
   if (process.env.NODE_ENV !== 'test') {

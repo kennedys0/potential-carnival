@@ -1,4 +1,5 @@
 import { TradeRepository, TradeRecord } from '../../database/repositories/tradeRepository';
+import { StrategyReservationRepository } from '../../database/repositories/strategyReservationRepository.js';
 import { appSettings } from '../../config/settings';
 import { getEnv } from '../../config/env';
 import { getRedisConnection } from '../../queue/connection';
@@ -21,6 +22,7 @@ export interface OrderRequest {
   ownerToken?: string;
   strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER' | 'COPY_TRADE';
   exitPolicy?: Record<string, unknown>;
+  strategyReservationId?: string;
 }
 
 import { WalletService } from '../wallet/walletService';
@@ -37,6 +39,7 @@ export class TraderService {
     private readonly walletService: WalletService,
     private readonly jupiterClient?: JupiterClient,
     private readonly pumpPortalClient: PumpPortalClient = new PumpPortalClient(),
+    private readonly reservationRepo?: StrategyReservationRepository,
   ) {}
 
   calculateDynamicSlippage(baseSlippageBps: number, priceImpactPct: number, maxSlippageBps: number): number {
@@ -46,6 +49,7 @@ export class TraderService {
 
   async executeOrder(req: OrderRequest): Promise<TradeRecord> {
     await this.assertTradingAllowed(req.userId, 'BUY', req.isDryRun);
+    await this.refreshStrategyReservation(req);
 
     if (req.isDryRun) {
       // Paper Trading: kurs SOL/USD HARUS nyata. Tanpa data segar -> tolak (bukan memakai angka palsu).
@@ -118,7 +122,7 @@ export class TraderService {
           amount: this.formatRawAmount(BigInt(amountLamports), 9),
           denominatedInSol: true,
           slippage: slippageLimit / 100,
-          priorityFee: 0.0005,
+          priorityFee: 0,
           pool: 'pump'
         });
         transaction = result.transaction;
@@ -169,6 +173,8 @@ export class TraderService {
     const blockhash = transaction.message.recentBlockhash;
 
     const idempotencyKey = crypto.createHash('sha256').update(`buy_${req.userId}_${req.tokenMint}_${Math.floor(Date.now() / 60000)}`).digest('hex');
+
+    await this.refreshStrategyReservation(req);
 
     let tradeRecord: TradeRecord;
     try {
@@ -406,7 +412,7 @@ export class TraderService {
           amount: this.formatRawAmount(amountLamportsBigInt, totalTokenBalance.decimals),
           denominatedInSol: false,
           slippage: exitSlippageBps / 100,
-          priorityFee: 0.0005,
+          priorityFee: 0,
           pool: 'pump'
         });
         transaction = result.transaction;
@@ -447,7 +453,9 @@ export class TraderService {
       percentage: percentageToClose,
       tokens_amount_raw: amountLamportsBigInt.toString(),
       status: 'PENDING',
-      idempotency_key: attemptIdempotencyKey
+      idempotency_key: attemptIdempotencyKey,
+      blockhash,
+      last_valid_block_height: lastValidBlockHeight,
     });
     
     let result;
@@ -507,8 +515,7 @@ export class TraderService {
     if (
       result.status === 'UNKNOWN' ||
       result.status === 'SUBMISSION_TIMEOUT' ||
-      result.status === 'CONFIRMING' ||
-      result.status === 'EXPIRED'
+      result.status === 'CONFIRMING'
     ) {
        await this.tradeRepo.updateTradeStatus(trade.id, {
           last_exit_error: `Uncertain status: ${result.status}`,
@@ -516,6 +523,19 @@ export class TraderService {
        });
        // UNKNOWN status stays PENDING
        return 'UNCERTAIN';
+    }
+
+    if (result.status === 'EXPIRED') {
+       await this.tradeRepo.updateTradeStatus(trade.id, {
+          last_exit_error: 'Exit failed: blockhash expired before confirmation',
+       });
+       if (exitAttempt.id) {
+         await this.tradeRepo.updateExitAttempt(exitAttempt.id, {
+           status: 'EXPIRED',
+           failure_reason: 'Blockhash expired and final signature lookup returned no transaction',
+         });
+       }
+       throw new Error('Exit transaction expired before confirmation');
     }
 
     // SUCCESS flow - DO NOT mark attempt SUCCESS until atomic reconciliation
@@ -636,6 +656,20 @@ export class TraderService {
     const whole = digits.slice(0, -decimals);
     const fraction = digits.slice(-decimals).replace(/0+$/, '');
     return fraction ? `${whole}.${fraction}` : whole;
+  }
+
+  private async refreshStrategyReservation(req: OrderRequest): Promise<void> {
+    if (req.source !== 'AUTOPILOT') return;
+    if (!this.reservationRepo || !req.strategyReservationId || !req.strategy) {
+      throw new Error('Autopilot trade requires an active durable strategy reservation');
+    }
+    const active = await this.reservationRepo.refreshForExecution(req.strategyReservationId, {
+      userId: req.userId,
+      tokenMint: req.tokenMint,
+      strategy: req.strategy,
+      isDryRun: req.isDryRun,
+    });
+    if (!active) throw new Error('Strategy reservation expired or no longer owns this trade execution');
   }
 
   private async assertTradingAllowed(userId: number, side: 'BUY' | 'SELL', isDryRun: boolean): Promise<void> {

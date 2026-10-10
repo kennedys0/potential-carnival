@@ -26,6 +26,10 @@ vi.mock('../../src/queue/connection', () => ({
 }));
 
 describe('ReconcileWorker', () => {
+  const reservationRepo: any = {
+    reconcileStale: vi.fn().mockResolvedValue(0),
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -50,7 +54,7 @@ describe('ReconcileWorker', () => {
       walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
-    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService, reservationRepo);
     
     // run the processor manually
     await worker.processor({});
@@ -95,7 +99,7 @@ describe('ReconcileWorker', () => {
 
 
 
-    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService, reservationRepo);
     await worker.processor({});
 
     expect(mockTradeRepo.atomicReconcileEntry).toHaveBeenCalledWith('trade-2', expect.objectContaining({
@@ -132,7 +136,7 @@ describe('ReconcileWorker', () => {
       walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
-    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService, reservationRepo);
     await worker.processor({});
 
     // Deficit is 15. Expected to record inventory discrepancy, NOT modify trade directly
@@ -175,12 +179,77 @@ describe('ReconcileWorker', () => {
       walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) }
     };
 
-    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService);
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService, reservationRepo);
     await worker.processor({});
 
     expect(mockTradeRepo.atomicReconcileExit).toHaveBeenCalledWith('trade-1', 'exit-1', expect.objectContaining({
       tx_signature: 'sig-1',
       token_delta_raw: '1000000',
+    }));
+  });
+
+  it('releases a stale exit attempt that never reached signing', async () => {
+    const mockTradeRepo: any = {
+      getInflightTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getReservedTradesWithoutSignature: vi.fn().mockResolvedValue([]),
+      getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
+      getAllPendingExitAttempts: vi.fn().mockResolvedValue([{
+        id: 'exit-unsigned',
+        trade_id: 'trade-unsigned',
+        status: 'PENDING',
+        created_at: new Date(Date.now() - 120_000).toISOString(),
+      }]),
+      updateExitAttempt: vi.fn().mockResolvedValue(true),
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+    };
+    const mockWalletService: any = {
+      getConnection: vi.fn().mockReturnValue({}),
+      walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) },
+    };
+
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService, reservationRepo);
+    await worker.processor({});
+
+    expect(mockTradeRepo.updateExitAttempt).toHaveBeenCalledWith('exit-unsigned', expect.objectContaining({
+      status: 'FAILED',
+      failure_reason: expect.stringContaining('before signing'),
+    }));
+  });
+
+  it('releases a signed exit only after blockhash expiry and a final empty status lookup', async () => {
+    const getSignatureStatuses = vi.fn()
+      .mockResolvedValueOnce({ value: [null] })
+      .mockResolvedValueOnce({ value: [null] });
+    const mockTradeRepo: any = {
+      getInflightTradesWithSignature: vi.fn().mockResolvedValue([]),
+      getReservedTradesWithoutSignature: vi.fn().mockResolvedValue([]),
+      getOpenTradesOrderedFIFO: vi.fn().mockResolvedValue([]),
+      getAllPendingExitAttempts: vi.fn().mockResolvedValue([{
+        id: 'exit-expired',
+        trade_id: 'trade-expired',
+        tx_signature: 'sig-expired',
+        blockhash: 'old-blockhash',
+        status: 'BROADCAST_ATTEMPTED',
+        created_at: new Date(Date.now() - 120_000).toISOString(),
+      }]),
+      updateExitAttempt: vi.fn().mockResolvedValue(true),
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+    };
+    const mockWalletService: any = {
+      getConnection: vi.fn().mockReturnValue({
+        getSignatureStatuses,
+        isBlockhashValid: vi.fn().mockResolvedValue({ value: false }),
+      }),
+      walletRepo: { getPendingWithdrawals: vi.fn().mockResolvedValue([]) },
+    };
+
+    const worker: any = createReconcileWorker(mockTradeRepo, mockWalletService, reservationRepo);
+    await worker.processor({});
+
+    expect(getSignatureStatuses).toHaveBeenCalledTimes(2);
+    expect(mockTradeRepo.updateExitAttempt).toHaveBeenCalledWith('exit-expired', expect.objectContaining({
+      status: 'EXPIRED',
+      failure_reason: expect.stringContaining('final signature lookup'),
     }));
   });
 });

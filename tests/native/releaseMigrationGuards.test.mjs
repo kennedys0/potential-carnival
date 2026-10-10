@@ -89,3 +89,16 @@ test('copy-trade targets are server-only and cannot bypass backend limits', () =
   assert.doesNotMatch(closePosition, /pending_signature/);
   assert.match(closePosition, /updateExitAttempt\(exitAttempt\.id, \{ tx_signature: sig, status: 'SIGNED' \}\)/);
 });
+
+test('036 proves exit expiry and safely reconciles stale strategy reservations', () => {
+  const sql = load('036_crash_recovery_hardening.sql');
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS blockhash TEXT/);
+  assert.match(sql, /'FAILED','EXPIRED'/);
+  assert.match(sql, /FOR UPDATE SKIP LOCKED/);
+  assert.match(sql, /t\.tx_signature IS NOT NULL/);
+  assert.match(sql, /t\.pending_signature IS NOT NULL/);
+  assert.match(sql, /SET status = 'RELEASED'/);
+  assert.match(sql, /refresh_strategy_reservation/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.reconcile_stale_strategy_reservations/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.reconcile_stale_strategy_reservations/);
+});

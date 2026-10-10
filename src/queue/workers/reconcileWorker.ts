@@ -10,10 +10,12 @@ import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { FillParser } from '../../modules/trader/fillParser.js';
 import { AccountingEngine } from '../../modules/trader/accountingEngine.js';
 import { verifyWithdrawalTransfer } from '../../modules/wallet/withdrawalVerification.js';
+import { StrategyReservationRepository } from '../../database/repositories/strategyReservationRepository.js';
 
 export function createReconcileWorker(
   tradeRepo: TradeRepository,
   walletService: WalletService,
+  reservationRepo: StrategyReservationRepository,
 ) {
   const redis = getRedisConnection();
   
@@ -21,6 +23,14 @@ export function createReconcileWorker(
     logger.info('Starting reconciliation job');
 
     try {
+      try {
+        const staleBefore = new Date(Date.now() - appSettings.STRATEGY_RESERVATION_STALE_MS).toISOString();
+        const reconciled = await reservationRepo.reconcileStale(staleBefore);
+        if (reconciled > 0) logger.info({ reconciled }, 'Reconciled stale strategy reservations');
+      } catch (error) {
+        logger.error({ err: error }, 'Failed to reconcile stale strategy reservations');
+      }
+
       // 1. Reconcile INFLIGHT trades
       try {
         const pendingTrades = await tradeRepo.getInflightTradesWithSignature();
@@ -140,10 +150,12 @@ export function createReconcileWorker(
           const attemptAgeMs = Date.now() - new Date(attempt.created_at || Date.now()).getTime();
           
           if (!attempt.tx_signature) {
-             // We don't know if it was broadcasted before crash. Do NOT mark FAILED.
-             if (attemptAgeMs > 60000) { // 60 seconds timeout
-                await tradeRepo.updateTradeStatus(attempt.trade_id, { needs_attention: true });
-                logger.warn({ attemptId: attempt.id, tradeId: attempt.trade_id }, 'Exit attempt stalled without signature for >60s. Marked trade NEEDS_ATTENTION');
+             if (attemptAgeMs > appSettings.EXIT_ATTEMPT_UNSIGNED_TIMEOUT_MS) {
+                await tradeRepo.updateExitAttempt(attempt.id!, {
+                  status: 'FAILED',
+                  failure_reason: 'Reconciled: process halted before signing and broadcast',
+                });
+                logger.info({ attemptId: attempt.id, tradeId: attempt.trade_id }, 'Released stale pre-broadcast exit attempt');
              }
              continue;
           }
@@ -186,14 +198,31 @@ export function createReconcileWorker(
                  }
                }
              }
-          } else {
-             // If signature not found and it's old enough, escalate instead of assuming failure
-             if (attemptAgeMs > 120000) {
-               // Do not mark FAILED. Mark trade as needs_attention to escalate.
-               await tradeRepo.updateTradeStatus(attempt.trade_id, { needs_attention: true });
-               logger.warn({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Reconciliation stalled (signature not found after 120s) - Escalate');
-             }
-          }
+           } else if (attempt.blockhash) {
+              const validity = await connection.isBlockhashValid(attempt.blockhash, { commitment: 'confirmed' });
+              if (!validity.value) {
+                const finalStatusRes = await connection.getSignatureStatuses(
+                  [attempt.tx_signature],
+                  { searchTransactionHistory: true },
+                );
+                const finalStatus = finalStatusRes.value[0];
+                if (!finalStatus) {
+                  await tradeRepo.updateExitAttempt(attempt.id!, {
+                    status: 'EXPIRED',
+                    failure_reason: 'Blockhash expired and final signature lookup returned no transaction',
+                  });
+                  logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Released expired exit attempt after final signature check');
+                } else if (finalStatus.err) {
+                  await tradeRepo.updateExitAttempt(attempt.id!, {
+                    status: 'FAILED',
+                    failure_reason: `Reconciled as FAILED_ONCHAIN: ${JSON.stringify(finalStatus.err)}`,
+                  });
+                }
+              }
+           } else if (attemptAgeMs > 120000) {
+              await tradeRepo.updateTradeStatus(attempt.trade_id, { needs_attention: true });
+              logger.warn({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Exit attempt has no blockhash evidence; manual review required');
+           }
           } catch (error) {
             logger.error({ err: error, attemptId: attempt.id, tradeId: attempt.trade_id }, 'Failed to reconcile one exit; continuing');
           }
