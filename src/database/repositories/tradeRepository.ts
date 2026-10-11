@@ -22,6 +22,8 @@ export interface TradeRecord {
   pnl_percent?: number | null;
   status: 'RESERVED' | 'SIGNED' | 'BROADCAST_ATTEMPTED' | 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
   strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER' | 'COPY_TRADE';
+  copy_source_signature?: string | null;
+  copy_target_wallet?: string | null;
   exit_policy_snapshot?: Record<string, unknown> | null;
   created_at?: string;
   closed_at?: string | null;
@@ -181,7 +183,7 @@ export class TradeRepository {
       .from('exit_attempts')
       .select(SELECT_EXIT_ATTEMPTS_SAFE)
       .eq('trade_id', tradeId)
-      .in('status', ['PENDING', 'SIGNED', 'BROADCAST_ATTEMPTED', 'CONFIRMING']);
+      .in('status', ['PENDING', 'SIGNED', 'BROADCAST_ATTEMPTED', 'CONFIRMING', 'EXPIRED']);
       
     if (error) throw new Error(`Failed to getPendingExitAttempts: ${error.message}`);
     return (data || []) as ExitAttemptRecord[];
@@ -191,7 +193,7 @@ export class TradeRepository {
     const { data, error } = await this.db
       .from('exit_attempts')
       .select(SELECT_EXIT_ATTEMPTS_SAFE)
-      .in('status', ['PENDING', 'SIGNED', 'BROADCAST_ATTEMPTED', 'CONFIRMING']);
+      .in('status', ['PENDING', 'SIGNED', 'BROADCAST_ATTEMPTED', 'CONFIRMING', 'EXPIRED']);
       
     if (error) throw new Error(`Failed to getAllPendingExitAttempts: ${error.message}`);
     return (data || []) as ExitAttemptRecord[];

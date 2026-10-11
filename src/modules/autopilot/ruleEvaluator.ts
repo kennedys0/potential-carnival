@@ -5,6 +5,9 @@ export interface AutopilotSafetyFilterParams {
   minSafetyScore: number;
   allowedLevels: string[];
   minLiquidityUsd: number;
+  maxTop10Percent?: number;
+  maxDeployerPercent?: number;
+  requireLpBurnOrLock?: boolean;
 }
 
 export interface AutopilotAiCriteriaParams {
@@ -15,6 +18,46 @@ export interface AutopilotAiCriteriaParams {
 }
 
 export class RuleEvaluator {
+  static evaluateCriticalChecks(
+    security: SecurityScoreResult,
+    safetyParams: AutopilotSafetyFilterParams,
+  ): { passed: string[]; failed: string[] } {
+    const passed: string[] = [];
+    const failed: string[] = [];
+    const checks = security.criticalChecks;
+
+    if (safetyParams.requireLpBurnOrLock) {
+      if (checks?.lpBurnedOrLocked === true) passed.push('LP burn/lock verified');
+      else failed.push(checks?.lpBurnedOrLocked === false
+        ? 'LP is not burned or locked'
+        : 'LP burn/lock status is unavailable');
+    }
+
+    if (safetyParams.maxTop10Percent !== undefined) {
+      const actual = checks?.top10HolderPercent;
+      if (actual === null || actual === undefined) {
+        failed.push('Top-10 holder concentration is unavailable');
+      } else if (actual > safetyParams.maxTop10Percent) {
+        failed.push(`Top-10 holder concentration ${actual}% exceeds ${safetyParams.maxTop10Percent}%`);
+      } else {
+        passed.push(`Top-10 holder concentration ${actual}% <= ${safetyParams.maxTop10Percent}%`);
+      }
+    }
+
+    if (safetyParams.maxDeployerPercent !== undefined) {
+      const actual = checks?.deployerHoldingPercent;
+      if (actual === null || actual === undefined) {
+        failed.push('Deployer holding is unavailable');
+      } else if (actual > safetyParams.maxDeployerPercent) {
+        failed.push(`Deployer holding ${actual}% exceeds ${safetyParams.maxDeployerPercent}%`);
+      } else {
+        passed.push(`Deployer holding ${actual}% <= ${safetyParams.maxDeployerPercent}%`);
+      }
+    }
+
+    return { passed, failed };
+  }
+
   static evaluate(
     security: SecurityScoreResult,
     ai: AiAnalysis | null,
@@ -44,6 +87,10 @@ export class RuleEvaluator {
         rulesFailed,
       };
     }
+
+    const criticalPolicy = this.evaluateCriticalChecks(security, safetyParams);
+    rulesPassed.push(...criticalPolicy.passed);
+    rulesFailed.push(...criticalPolicy.failed);
 
     // 2. Safety Score Threshold
     if (security.score < safetyParams.minSafetyScore) {
@@ -118,6 +165,18 @@ export class RuleEvaluator {
         rulesFailed.push(`AI R:R ${ai.risk_reward_ratio} below minimum ${aiParams.minRiskReward}`);
       } else {
         rulesPassed.push(`AI R:R ${ai.risk_reward_ratio} >= ${aiParams.minRiskReward}`);
+      }
+
+      const setupType = String(ai.setup_type ?? '').trim().toUpperCase();
+      const allowedSetups = aiParams.allowedSetups
+        .map((setup) => String(setup).trim().toUpperCase())
+        .filter((setup) => setup.length > 0);
+      if (!setupType || setupType === 'NONE') {
+        rulesFailed.push('AI setup type is not actionable');
+      } else if (allowedSetups.length === 0 || !allowedSetups.includes(setupType)) {
+        rulesFailed.push(`AI setup ${setupType} not in allowed setup list`);
+      } else {
+        rulesPassed.push(`AI setup ${setupType} allowed`);
       }
       
       // Deterministic validation of AI-generated financial parameters

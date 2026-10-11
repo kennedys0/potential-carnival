@@ -8,6 +8,7 @@ import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
 import { escapeHtml } from '../telegram/formatters/messageFormatter';
+import { appSettings } from '../../config/settings.js';
 
 export class TrendScanner {
   private intervalId?: NodeJS.Timeout;
@@ -42,7 +43,10 @@ export class TrendScanner {
     // Primary source: GeckoTerminal — organic trending pools sorted by volume (no paid promotions)
     try {
       const url = 'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=1';
-      const res = await fetch(url, { headers: { 'Accept': 'application/json;version=20230302' } });
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json;version=20230302' },
+        signal: AbortSignal.timeout(appSettings.MARKET_DATA_FETCH_TIMEOUT_MS),
+      });
       if (!res.ok) throw new Error(`GeckoTerminal responded ${res.status}`);
       const data: any = await res.json();
       const pools: any[] = data?.data ?? [];

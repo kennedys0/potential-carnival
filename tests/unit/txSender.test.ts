@@ -42,7 +42,7 @@ describe('TxSender', () => {
     expect(result.signature).toBeDefined();
   });
 
-  it('returns UNKNOWN if blockhash expires and status is still unknown', async () => {
+  it('keeps a signed transaction UNKNOWN if blockhash expires and status is still unproven', async () => {
     const mockConnection: any = {
       sendTransaction: vi.fn().mockResolvedValue('mock-sig'),
       getSignatureStatuses: vi.fn().mockResolvedValue({
@@ -58,6 +58,7 @@ describe('TxSender', () => {
     };
 
     const result = await TxSender.sendAndConfirm(mockConnection, mockTx, [], { pollingIntervalMs: 1 });
-    expect(result.status).toBe('EXPIRED');
+    expect(result.status).toBe('UNKNOWN');
+    expect(result.err).toContain('outcome remains unproven');
   });
 });

@@ -23,13 +23,131 @@ export interface OrderRequest {
   strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER' | 'COPY_TRADE';
   exitPolicy?: Record<string, unknown>;
   strategyReservationId?: string;
+  copySourceSignature?: string;
+  copyTargetWallet?: string;
 }
 
 import { WalletService } from '../wallet/walletService';
 import { JupiterClient, JupiterSwapBuildResult } from './jupiterClient';
 import { PumpPortalClient } from './pumpPortalClient';
-import { VersionedTransaction } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SwapTransactionIntent } from '../wallet/transactionValidator.js';
+
+const MAX_TOKEN_DECIMALS = 255;
+
+function positiveNumberRatio(value: number): { numerator: bigint; denominator: bigint } {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('Independent market-value validation data is invalid');
+  }
+
+  const [mantissa, exponentText = '0'] = value.toString().toLowerCase().split('e');
+  const exponent = Number(exponentText);
+  const [whole, fraction = ''] = mantissa.split('.');
+  const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '');
+  let numerator = BigInt(digits);
+  const decimalPlaces = fraction.length - exponent;
+  let denominator = 1n;
+  if (decimalPlaces > 0) {
+    denominator = 10n ** BigInt(decimalPlaces);
+  } else if (decimalPlaces < 0) {
+    numerator *= 10n ** BigInt(-decimalPlaces);
+  }
+  return { numerator, denominator };
+}
+
+export interface ClosePositionOptions {
+  mode?: 'STANDARD' | 'EMERGENCY_EXIT';
+  reason?: string;
+}
+
+function ceilDivide(numerator: bigint, denominator: bigint): bigint {
+  return (numerator + denominator - 1n) / denominator;
+}
+
+export function minimumOutputRawForMarketFloor(params: {
+  inputAmountRaw: bigint;
+  inputDecimals: number;
+  inputPriceUsd: number;
+  outputDecimals: number;
+  outputPriceUsd: number;
+  maxLossPercent: number;
+}): bigint {
+  const {
+    inputAmountRaw,
+    inputDecimals,
+    inputPriceUsd,
+    outputDecimals,
+    outputPriceUsd,
+    maxLossPercent,
+  } = params;
+  if (
+    inputAmountRaw <= 0n
+    || !Number.isInteger(inputDecimals)
+    || !Number.isInteger(outputDecimals)
+    || inputDecimals < 0
+    || inputDecimals > MAX_TOKEN_DECIMALS
+    || outputDecimals < 0
+    || outputDecimals > MAX_TOKEN_DECIMALS
+    || !Number.isFinite(maxLossPercent)
+    || maxLossPercent < 0
+    || maxLossPercent >= 100
+  ) {
+    throw new Error('Independent market-value validation data is invalid');
+  }
+
+  const inputPrice = positiveNumberRatio(inputPriceUsd);
+  const outputPrice = positiveNumberRatio(outputPriceUsd);
+  const retainedValue = positiveNumberRatio(100 - maxLossPercent);
+  const numerator = inputAmountRaw
+    * inputPrice.numerator
+    * retainedValue.numerator
+    * (10n ** BigInt(outputDecimals));
+  const denominator = (10n ** BigInt(inputDecimals))
+    * inputPrice.denominator
+    * 100n
+    * outputPrice.numerator
+    * retainedValue.denominator;
+  const adjustedNumerator = numerator * outputPrice.denominator;
+  return ceilDivide(adjustedNumerator, denominator);
+}
+
+export function assertMinimumQuoteMarketValue(params: {
+  inputAmountRaw: bigint;
+  inputDecimals: number;
+  inputPriceUsd: number;
+  minimumOutputRaw: bigint;
+  outputDecimals: number;
+  outputPriceUsd: number;
+  maxLossPercent: number;
+}): bigint {
+  const {
+    inputAmountRaw,
+    inputDecimals,
+    inputPriceUsd,
+    minimumOutputRaw,
+    outputDecimals,
+    outputPriceUsd,
+    maxLossPercent,
+  } = params;
+  if (minimumOutputRaw <= 0n) {
+    throw new Error('Independent market-value validation data is invalid');
+  }
+
+  const requiredMinimumOutputRaw = minimumOutputRawForMarketFloor({
+    inputAmountRaw,
+    inputDecimals,
+    inputPriceUsd,
+    outputDecimals,
+    outputPriceUsd,
+    maxLossPercent,
+  });
+  if (minimumOutputRaw < requiredMinimumOutputRaw) {
+    throw new Error(
+      `Swap quote rejected by independent market-value floor: ${minimumOutputRaw} < ${requiredMinimumOutputRaw} raw output units`,
+    );
+  }
+  return requiredMinimumOutputRaw;
+}
 
 export class TraderService {
   private readonly WSOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -81,6 +199,8 @@ export class TraderService {
         fee_lamports: appSettings.PAPER_TRADE_FEE_LAMPORTS,
         status: 'OPEN',
         strategy: req.strategy || 'TRENDING',
+        copy_source_signature: req.copySourceSignature ?? null,
+        copy_target_wallet: req.copyTargetWallet ?? null,
         exit_policy_snapshot: req.exitPolicy ?? null,
       });
     }
@@ -114,6 +234,21 @@ export class TraderService {
     let useJupiter = !req.tokenMint.endsWith('pump');
 
     if (!useJupiter) {
+      await currencyService.fetchRates();
+      const referenceUsdPerSol = currencyService.getUsdPerSol();
+      if (!referenceUsdPerSol) throw new Error('Fresh SOL/USD rate is unavailable for Pump transaction validation');
+      const tokenSupply = await this.walletService.getConnection().getTokenSupply(
+        new PublicKey(req.tokenMint),
+        'confirmed',
+      );
+      const economicFloorRaw = minimumOutputRawForMarketFloor({
+        inputAmountRaw: BigInt(amountLamports),
+        inputDecimals: 9,
+        inputPriceUsd: referenceUsdPerSol,
+        outputDecimals: tokenSupply.value.decimals,
+        outputPriceUsd: req.currentPriceUsd,
+        maxLossPercent: appSettings.MAX_PRICE_IMPACT_PCT + slippageLimit / 100,
+      });
       try {
         const result = await this.pumpPortalClient.getSwapTransaction({
           publicKey: wallet.publicKey,
@@ -133,6 +268,7 @@ export class TraderService {
           inputMint: this.WSOL_MINT,
           outputMint: req.tokenMint,
           inputAmountRaw: BigInt(amountLamports),
+          minimumEconomicOutputAmountRaw: economicFloorRaw,
         };
       } catch (err: any) {
         logger.warn(`PumpPortal gagal untuk buy ${req.tokenMint}, fallback ke Jupiter. Error: ${err.message}`);
@@ -166,9 +302,25 @@ export class TraderService {
           dynamicSlippageBps,
           wallet.publicKey,
         );
+      await currencyService.fetchRates();
+      const referenceUsdPerSol = currencyService.getUsdPerSol();
+      if (!referenceUsdPerSol) throw new Error('Fresh SOL/USD rate is unavailable for quote validation');
+      const tokenSupply = await this.walletService.getConnection().getTokenSupply(
+        new PublicKey(req.tokenMint),
+        'confirmed',
+      );
+      const economicFloorRaw = assertMinimumQuoteMarketValue({
+        inputAmountRaw: BigInt(jupResult.quote.inAmount),
+        inputDecimals: 9,
+        inputPriceUsd: referenceUsdPerSol,
+        minimumOutputRaw: BigInt(jupResult.quote.otherAmountThreshold),
+        outputDecimals: tokenSupply.value.decimals,
+        outputPriceUsd: req.currentPriceUsd,
+        maxLossPercent: appSettings.MAX_PRICE_IMPACT_PCT + dynamicSlippageBps / 100,
+      });
       transaction = jupResult.transaction;
       lastValidBlockHeight = jupResult.lastValidBlockHeight;
-      transactionIntent = this.jupiterIntent(jupResult, wallet.publicKey, 'BUY');
+      transactionIntent = this.jupiterIntent(jupResult, wallet.publicKey, 'BUY', economicFloorRaw);
     }
     const blockhash = transaction.message.recentBlockhash;
 
@@ -195,6 +347,8 @@ export class TraderService {
         last_valid_block_height: lastValidBlockHeight,
         pending_since: new Date().toISOString(),
         strategy: req.strategy || 'TRENDING',
+        copy_source_signature: req.copySourceSignature ?? null,
+        copy_target_wallet: req.copyTargetWallet ?? null,
         exit_policy_snapshot: req.exitPolicy ?? null,
       });
     } catch (e: any) {
@@ -310,7 +464,12 @@ export class TraderService {
     }
   }
 
-  async closePosition(trade: TradeRecord, currentPriceUsd: number, percentageToClose: number = 100): Promise<string> {
+  async closePosition(
+    trade: TradeRecord,
+    currentPriceUsd: number | null,
+    percentageToClose: number = 100,
+    options: ClosePositionOptions = {},
+  ): Promise<string> {
     if (!trade.id) throw new Error('Trade ID is missing');
     if (trade.status !== 'OPEN' && trade.status !== 'PARTIAL_EXIT') return 'SKIPPED';
     if (percentageToClose <= 0 || percentageToClose > 100) throw new Error('Invalid percentage');
@@ -332,13 +491,20 @@ export class TraderService {
     try {
 
     const isPartial = percentageToClose < 100;
+    const emergencyExit = options.mode === 'EMERGENCY_EXIT';
+    let accountingPriceUsd = Number.isFinite(currentPriceUsd) && (currentPriceUsd ?? 0) > 0
+      ? currentPriceUsd!
+      : undefined;
 
     if (trade.is_dry_run) {
+      if (accountingPriceUsd === undefined) {
+        throw new Error('Current token price is required for a paper-trade exit');
+      }
       // Paper Trading close logic
       const tradeBalanceRaw = BigInt(trade.remaining_raw ?? trade.token_amount_raw ?? 0);
       const amountToCloseRaw = (tradeBalanceRaw * BigInt(Math.floor(percentageToClose * 100))) / 10000n;
       
-      const priceMultiplier = trade.entry_price_usd > 0 ? (currentPriceUsd / trade.entry_price_usd) : 1;
+      const priceMultiplier = trade.entry_price_usd > 0 ? (accountingPriceUsd / trade.entry_price_usd) : 1;
       const initialSolSpent = trade.sol_amount ?? 0;
       if (trade.token_amount_raw === null || trade.token_amount_raw === undefined) {
         throw new Error('Paper trade is missing its initial token amount');
@@ -355,7 +521,7 @@ export class TraderService {
 
       await this.tradeRepo.atomicReconcileExit(trade.id, undefined, {
         tx_signature: `PAPER_${Date.now()}`,
-        exit_price_usd: currentPriceUsd,
+        exit_price_usd: accountingPriceUsd,
         token_delta_raw: amountToCloseRaw.toString(),
         sol_delta_lamports: Number(solReceivedLamports),
         fee_lamports: 0,
@@ -388,9 +554,7 @@ export class TraderService {
       throw new Error('Calculated token amount to close is 0.');
     }
     
-    // Increment exit attempts immediately
     const currentAttempts = (trade.exit_attempts ?? 0) + 1;
-    await this.tradeRepo.updateTradeStatus(trade.id, { exit_attempts: currentAttempts });
 
     const baseSlippage = appSettings.EXIT_SLIPPAGE_BASE_BPS;
     const stepSlippage = appSettings.EXIT_SLIPPAGE_STEP_BPS;
@@ -401,9 +565,25 @@ export class TraderService {
     let lastValidBlockHeight: number | undefined;
     let transactionIntent!: SwapTransactionIntent;
 
-    let useJupiter = !trade.token_mint.endsWith('pump');
+    // Emergency exits always use Jupiter so a structured quote supplies a
+    // positive, bounded minimum output. This mode is never used for BUYs.
+    let useJupiter = emergencyExit || !trade.token_mint.endsWith('pump');
 
     if (!useJupiter) {
+      if (accountingPriceUsd === undefined) {
+        throw new Error('Independent token price is required for a standard exit');
+      }
+      await currencyService.fetchRates();
+      const referenceUsdPerSol = currencyService.getUsdPerSol();
+      if (!referenceUsdPerSol) throw new Error('Fresh SOL/USD rate is unavailable for Pump transaction validation');
+      const economicFloorRaw = minimumOutputRawForMarketFloor({
+        inputAmountRaw: amountLamportsBigInt,
+        inputDecimals: totalTokenBalance.decimals,
+        inputPriceUsd: accountingPriceUsd,
+        outputDecimals: 9,
+        outputPriceUsd: referenceUsdPerSol,
+        maxLossPercent: appSettings.MAX_PRICE_IMPACT_PCT + exitSlippageBps / 100,
+      });
       try {
         const result = await this.pumpPortalClient.getSwapTransaction({
           publicKey: wallet.publicKey,
@@ -423,6 +603,7 @@ export class TraderService {
           inputMint: trade.token_mint,
           outputMint: this.WSOL_MINT,
           inputAmountRaw: amountLamportsBigInt,
+          minimumEconomicOutputAmountRaw: economicFloorRaw,
         };
       } catch (err: any) {
         logger.warn(`PumpPortal gagal untuk sell ${trade.token_mint}, fallback ke Jupiter. Error: ${err.message}`);
@@ -439,9 +620,45 @@ export class TraderService {
         exitSlippageBps,
         wallet.publicKey,
       );
+      let economicFloorRaw: bigint | undefined;
+      if (emergencyExit) {
+        const quotedOutputRaw = BigInt(jupResult.quote.outAmount);
+        const initialAmountRaw = BigInt(trade.token_amount_raw ?? 0);
+        const initialCostLamports = BigInt(trade.sol_spent_lamports ?? 0);
+        if (accountingPriceUsd === undefined && initialAmountRaw > 0n && initialCostLamports > 0n) {
+          const costBasisLamports = (initialCostLamports * amountLamportsBigInt) / initialAmountRaw;
+          if (costBasisLamports > 0n && quotedOutputRaw > 0n && trade.entry_price_usd > 0) {
+            accountingPriceUsd = trade.entry_price_usd
+              * (Number(quotedOutputRaw) / Number(costBasisLamports));
+          }
+        }
+        logger.warn({
+          tradeId: trade.id,
+          reason: options.reason ?? 'unspecified',
+          quotedOutputRaw: jupResult.quote.outAmount,
+          minimumOutputRaw: jupResult.quote.otherAmountThreshold,
+          exitSlippageBps,
+        }, 'Executing emergency exit with route minimum instead of independent market-price floor');
+      } else {
+        if (accountingPriceUsd === undefined) {
+          throw new Error('Independent token price is required for a standard exit');
+        }
+        await currencyService.fetchRates();
+        const referenceUsdPerSol = currencyService.getUsdPerSol();
+        if (!referenceUsdPerSol) throw new Error('Fresh SOL/USD rate is unavailable for quote validation');
+        economicFloorRaw = assertMinimumQuoteMarketValue({
+          inputAmountRaw: BigInt(jupResult.quote.inAmount),
+          inputDecimals: totalTokenBalance.decimals,
+          inputPriceUsd: accountingPriceUsd,
+          minimumOutputRaw: BigInt(jupResult.quote.otherAmountThreshold),
+          outputDecimals: 9,
+          outputPriceUsd: referenceUsdPerSol,
+          maxLossPercent: appSettings.MAX_PRICE_IMPACT_PCT + exitSlippageBps / 100,
+        });
+      }
       transaction = jupResult.transaction;
       lastValidBlockHeight = jupResult.lastValidBlockHeight;
-      transactionIntent = this.jupiterIntent(jupResult, wallet.publicKey, 'SELL');
+      transactionIntent = this.jupiterIntent(jupResult, wallet.publicKey, 'SELL', economicFloorRaw);
     }
     
     const blockhash = transaction.message.recentBlockhash;
@@ -457,6 +674,10 @@ export class TraderService {
       blockhash,
       last_valid_block_height: lastValidBlockHeight,
     });
+    // Count only a transaction attempt that was built and durably recorded.
+    // Provider/oracle failures before this point must not ratchet future
+    // slippage upward without any transaction ever reaching the signer.
+    await this.tradeRepo.updateTradeStatus(trade.id, { exit_attempts: currentAttempts });
     
     let result;
     let exitSignature: string | undefined;
@@ -515,7 +736,8 @@ export class TraderService {
     if (
       result.status === 'UNKNOWN' ||
       result.status === 'SUBMISSION_TIMEOUT' ||
-      result.status === 'CONFIRMING'
+      result.status === 'CONFIRMING' ||
+      result.status === 'EXPIRED'
     ) {
        await this.tradeRepo.updateTradeStatus(trade.id, {
           last_exit_error: `Uncertain status: ${result.status}`,
@@ -523,19 +745,6 @@ export class TraderService {
        });
        // UNKNOWN status stays PENDING
        return 'UNCERTAIN';
-    }
-
-    if (result.status === 'EXPIRED') {
-       await this.tradeRepo.updateTradeStatus(trade.id, {
-          last_exit_error: 'Exit failed: blockhash expired before confirmation',
-       });
-       if (exitAttempt.id) {
-         await this.tradeRepo.updateExitAttempt(exitAttempt.id, {
-           status: 'EXPIRED',
-           failure_reason: 'Blockhash expired and final signature lookup returned no transaction',
-         });
-       }
-       throw new Error('Exit transaction expired before confirmation');
     }
 
     // SUCCESS flow - DO NOT mark attempt SUCCESS until atomic reconciliation
@@ -572,7 +781,7 @@ export class TraderService {
       actualTokensSpentRaw: BigInt(tokenSpentRaw),
       solReceivedLamports: solReceivedLamports,
       feeLamports: feeLamports,
-      currentPriceUsd
+      currentPriceUsd: accountingPriceUsd,
     });
 
     const updates: Partial<TradeRecord> & { token_delta_raw?: string, sol_delta_lamports?: string | number, fee_lamports?: string | number } = {
@@ -589,7 +798,9 @@ export class TraderService {
 
     if (acctResult.newStatus === 'CLOSED') {
       updates.closed_at = new Date().toISOString();
-      updates.exit_price_usd = currentPriceUsd;
+      if (accountingPriceUsd !== undefined) {
+        updates.exit_price_usd = accountingPriceUsd;
+      }
     }
 
     // Removed edge case that falsely closed trades on zero balance
@@ -636,6 +847,7 @@ export class TraderService {
     build: JupiterSwapBuildResult,
     walletPublicKey: string,
     side: 'BUY' | 'SELL',
+    minimumEconomicOutputAmountRaw?: bigint,
   ): SwapTransactionIntent {
     return {
       provider: 'JUPITER',
@@ -645,6 +857,7 @@ export class TraderService {
       outputMint: build.quote.outputMint,
       inputAmountRaw: BigInt(build.quote.inAmount),
       minimumOutputAmountRaw: BigInt(build.quote.otherAmountThreshold),
+      ...(minimumEconomicOutputAmountRaw === undefined ? {} : { minimumEconomicOutputAmountRaw }),
       addressLookupTableAccounts: build.addressLookupTableAccounts,
     };
   }

@@ -65,8 +65,9 @@ export class AutopilotRepository {
         allowed_levels: ['SAFE', 'CAUTION'],
         min_liquidity_usd: 10000,
         max_top10_percent: 25,
-        max_deployer_percent: 5,
-        lp_burn_or_lock_required: true,
+        // Deployer and LP-lock resolvers are not currently authoritative.
+        // They remain opt-in strict policies instead of impossible defaults.
+        lp_burn_or_lock_required: false,
       },
       ai_params: {
         min_confidence: 70,

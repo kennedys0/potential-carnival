@@ -14,6 +14,7 @@ import { getRedisConnection } from './queue/connection';
 import { createQueues } from './queue/queues';
 import { createMonitorWorker } from './queue/workers/monitorWorker';
 import { createReconcileWorker } from './queue/workers/reconcileWorker';
+import { createSecureMessageDeleteWorker } from './queue/workers/secureMessageDeleteWorker';
 import { WalletService } from './modules/wallet/walletService';
 import { ScannerService } from './modules/scanner/scannerService';
 import { DexScreenerClient } from './modules/scanner/dexScreenerClient';
@@ -61,6 +62,10 @@ async function main() {
 
   // Core Services
   const walletService = new WalletService(walletRepo, solanaConnection);
+  const upgradedWallets = await walletService.upgradeLegacyWalletEncryption();
+  if (upgradedWallets > 0) {
+    logger.info({ upgradedWallets }, 'Upgraded legacy wallet ciphertexts to identity-bound encryption');
+  }
   const dexScreenerClient = new DexScreenerClient();
   const geckoTerminalClient = new GeckoTerminalClient();
 
@@ -128,12 +133,17 @@ async function main() {
   // BullMQ Workers
   const monitorWorker = createMonitorWorker(tradeRepo, traderService, scannerService, autopilotRepo, jupiterClient, bot.api, sniperRepo);
   const reconcileWorker = createReconcileWorker(tradeRepo, walletService, strategyReservations);
+  const secureMessageDeleteWorker = createSecureMessageDeleteWorker(bot.api);
 
   // Position Monitoring Scheduler (runs every minute)
   if (process.env.NODE_ENV !== 'test') {
     setInterval(async () => {
       try {
-        const { data: openTrades, error } = await supabase.from('trades').select('*').in('status', ['OPEN', 'PARTIAL_EXIT']);
+        const { data: openTrades, error } = await supabase
+          .from('trades')
+          .select('*')
+          .eq('source', 'AUTOPILOT')
+          .in('status', ['OPEN', 'PARTIAL_EXIT']);
         if (!error && openTrades) {
           for (const trade of openTrades) {
             await queues.monitorQueue.add('monitor-position', {
@@ -184,6 +194,7 @@ async function main() {
     tradeRepo,
     traderService,
     copyTradeRepo,
+    secureMessageDeleteQueue: queues.secureMessageDeleteQueue,
   });
 
   // Start Bot Polling (in development or non-test mode)
@@ -219,11 +230,13 @@ async function main() {
       copyTradeTracker.stop();
       await monitorWorker.close();
       await reconcileWorker.close();
+      await secureMessageDeleteWorker.close();
       await queues.scanQueue.close();
       await queues.evalQueue.close();
       await queues.execQueue.close();
       await queues.monitorQueue.close();
       await queues.reconcileQueue.close();
+      await queues.secureMessageDeleteQueue.close();
       await redis.quit();
       logger.info('Graceful shutdown completed successfully');
       process.exit(0);

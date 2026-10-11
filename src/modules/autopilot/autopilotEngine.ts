@@ -17,6 +17,9 @@ const SafetyParamsSchema = z.object({
   min_safety_score: z.number().default(75),
   allowed_levels: z.array(z.string()).default(['SAFE']),
   min_liquidity_usd: z.number().default(10000),
+  max_top10_percent: z.number().min(0).max(100).optional(),
+  max_deployer_percent: z.number().min(0).max(100).optional(),
+  lp_burn_or_lock_required: z.boolean().optional(),
 });
 
 const AiParamsSchema = z.object({
@@ -147,6 +150,9 @@ export class AutopilotEngine {
       minSafetyScore: safeConf.min_safety_score,
       allowedLevels: safeConf.allowed_levels,
       minLiquidityUsd: safeConf.min_liquidity_usd,
+      maxTop10Percent: safeConf.max_top10_percent,
+      maxDeployerPercent: safeConf.max_deployer_percent,
+      requireLpBurnOrLock: safeConf.lp_burn_or_lock_required,
     };
     let aiParams = {
       minConfidence: aiConf.min_confidence,
@@ -161,6 +167,9 @@ export class AutopilotEngine {
         minSafetyScore: config.minimum_safety_score ?? appSettings.SNIPER_PARAMS.MIN_SAFETY_SCORE,
         allowedLevels: appSettings.SNIPER_PARAMS.ALLOWED_LEVELS,
         minLiquidityUsd: config.min_liquidity_usd ?? appSettings.SNIPER_PARAMS.MIN_LIQUIDITY_USD,
+        maxTop10Percent: undefined,
+        maxDeployerPercent: undefined,
+        requireLpBurnOrLock: false,
       };
       aiParams.requireAi = appSettings.SNIPER_PARAMS.REQUIRE_AI;
     }

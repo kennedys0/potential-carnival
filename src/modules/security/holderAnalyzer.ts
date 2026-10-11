@@ -10,8 +10,9 @@ export interface HolderDistributionResult {
 export class HolderAnalyzer {
   constructor(private readonly connection: Connection) {}
 
-  async analyzeHolders(mintAddress: string, totalSupply: number): Promise<HolderDistributionResult> {
+  async analyzeHolders(mintAddress: string, totalSupplyRaw: bigint): Promise<HolderDistributionResult> {
     try {
+      if (totalSupplyRaw <= 0n) throw new Error('Token supply must be positive');
       const mintPubkey = new PublicKey(mintAddress);
       const largestAccounts = await this.connection.getTokenLargestAccounts(mintPubkey);
 
@@ -19,17 +20,20 @@ export class HolderAnalyzer {
         throw new Error('No holder data found');
       }
 
-      // Filter out typical zero/burn or known addresses if needed
-      // TODO: Proper resolve owner and EXCLUDE pool/LP/vault/burn/program-owned
-      const validAccounts = largestAccounts.value.filter(acc => acc.uiAmount && acc.uiAmount > 0);
+      // Raw amounts remain exact even when RPC uiAmount is null or exceeds
+      // JavaScript's safe-integer range.
+      const validAccounts = largestAccounts.value
+        .map((account) => ({ account, amountRaw: BigInt(account.amount) }))
+        .filter(({ amountRaw }) => amountRaw > 0n)
+        .sort((a, b) => (a.amountRaw === b.amountRaw ? 0 : a.amountRaw > b.amountRaw ? -1 : 1));
       const topAccounts = validAccounts.slice(0, 10);
-      const top10Amount = topAccounts.reduce((acc, curr) => acc + (curr.uiAmount ?? 0), 0);
+      const top10AmountRaw = topAccounts.reduce((sum, holder) => sum + holder.amountRaw, 0n);
+      if (top10AmountRaw > totalSupplyRaw) {
+        throw new Error('Holder balances exceed token supply');
+      }
 
-      const top10Percent = totalSupply > 0 ? (top10Amount / totalSupply) * 100 : 0;
-      const largestHolderPercent =
-        totalSupply > 0 && topAccounts[0]?.uiAmount
-          ? (topAccounts[0].uiAmount / totalSupply) * 100
-          : 0;
+      const top10Percent = this.rawPercent(top10AmountRaw, totalSupplyRaw);
+      const largestHolderPercent = this.rawPercent(topAccounts[0]?.amountRaw ?? 0n, totalSupplyRaw);
 
       return {
         top10Percent: {
@@ -59,5 +63,11 @@ export class HolderAnalyzer {
         totalHoldersSampled: 0,
       };
     }
+  }
+
+  private rawPercent(amountRaw: bigint, supplyRaw: bigint): number {
+    const precision = 1_000_000n;
+    const scaledPercent = (amountRaw * 100n * precision + supplyRaw - 1n) / supplyRaw;
+    return Number(scaledPercent) / Number(precision);
   }
 }

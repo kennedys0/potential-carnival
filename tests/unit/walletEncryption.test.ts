@@ -23,4 +23,22 @@ describe('AES-256-GCM Encryption', () => {
     const tampered = { ...encrypted, authTag: '00'.repeat(16) };
     expect(() => decryptPrivateKey(tampered, masterKeyHex)).toThrow();
   });
+
+  it('binds ciphertext to both the user id and public key', () => {
+    const context = {
+      userId: 12345,
+      publicKey: '11111111111111111111111111111111',
+    };
+    const encrypted = encryptPrivateKey(dummySecretKey, masterKeyHex, context);
+
+    expect(decryptPrivateKey(encrypted, masterKeyHex, context)).toEqual(dummySecretKey);
+    expect(() => decryptPrivateKey(encrypted, masterKeyHex, {
+      ...context,
+      userId: 54321,
+    })).toThrow();
+    expect(() => decryptPrivateKey(encrypted, masterKeyHex, {
+      ...context,
+      publicKey: 'So11111111111111111111111111111111111111112',
+    })).toThrow();
+  });
 });

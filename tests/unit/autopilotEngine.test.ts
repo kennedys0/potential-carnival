@@ -165,4 +165,51 @@ describe('AutopilotEngine', () => {
     expect(mockTraderService.executeOrder).toHaveBeenCalled();
     expect(mockAutopilotRepo.saveDecisionLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'BUY' }));
   });
+
+  it('fails closed when configured LP and ownership limits cannot be verified', async () => {
+    mockAutopilotRepo.getOrCreateConfig.mockResolvedValue({
+      is_active: true,
+      mode: 'PAPER',
+      safety_params: {
+        lp_burn_or_lock_required: true,
+        max_top10_percent: 25,
+        max_deployer_percent: 5,
+      },
+      ai_params: {},
+      sizing_params: { mode: 'FIXED_SOL', fixed_sol: 0.1 },
+      circuit_breaker_params: {},
+    });
+    const engine = new AutopilotEngine(mockAutopilotRepo, mockTraderService, mockSniperRepo, mockReservations);
+
+    const result = await engine.processCandidate(
+      1, 'MINT', 'TKN', 1, 100000,
+      {
+        score: 100,
+        level: 'SAFE',
+        isHardBlocked: false,
+        hardBlockReasons: [],
+        riskFlags: [],
+        coverage: 100,
+        report: [],
+        criticalChecks: {
+          dangerousExtensions: [],
+          lpBurnedOrLocked: null,
+          top10HolderPercent: 10,
+          deployerHoldingPercent: null,
+        },
+      },
+      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2 } as any,
+      {
+        openPositionsCount: 0,
+        availableBalanceSol: 10,
+        dailyLossSol: 0,
+        consecutiveLosses: 0,
+      },
+    );
+
+    expect(result.executed).toBe(false);
+    expect(result.reason).toContain('LP burn/lock status is unavailable');
+    expect(result.reason).toContain('Deployer holding is unavailable');
+    expect(mockTraderService.executeOrder).not.toHaveBeenCalled();
+  });
 });

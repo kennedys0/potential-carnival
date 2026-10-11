@@ -34,6 +34,12 @@ export interface SecurityScoreResult {
   riskFlags: string[];
   coverage: number;
   report: FactorReport[];
+  criticalChecks: {
+    dangerousExtensions: string[] | null;
+    lpBurnedOrLocked: boolean | null;
+    top10HolderPercent: number | null;
+    deployerHoldingPercent: number | null;
+  };
 }
 
 export class ScoreCalculator {
@@ -71,13 +77,15 @@ export class ScoreCalculator {
     }
 
     addReport('Dangerous Extensions', input.dangerousExtensions, input.dangerousExtensions.value?.length ? input.dangerousExtensions.value.join(', ') : 'None');
-    if (input.dangerousExtensions.status === 'OK' && input.dangerousExtensions.value && input.dangerousExtensions.value.length > 0) {
+    if (input.dangerousExtensions.status === 'UNAVAILABLE') {
+      hardBlockReasons.push('Dangerous Token-2022 extension data UNAVAILABLE');
+    } else if (input.dangerousExtensions.value && input.dangerousExtensions.value.length > 0) {
       hardBlockReasons.push(`Dangerous Token-2022 extensions: ${input.dangerousExtensions.value.join(', ')}`);
     }
 
     addReport('Sell Route Quote', input.sellSimulationSuccess, input.sellSimulationSuccess.value ? 'Route Available' : 'No Route');
     if (input.sellSimulationSuccess.status === 'UNAVAILABLE') {
-      riskFlags.push('Sell route quote data UNAVAILABLE');
+      hardBlockReasons.push('Sell route quote data UNAVAILABLE');
     } else if (!input.sellSimulationSuccess.value) {
       hardBlockReasons.push('Sell route quote failed (Honeypot/liquidity risk)');
     }
@@ -175,6 +183,12 @@ export class ScoreCalculator {
     }
 
     const coverage = (availableWeights / totalWeights) * 100;
+    const criticalChecks = {
+      dangerousExtensions: input.dangerousExtensions.status === 'OK' ? input.dangerousExtensions.value : null,
+      lpBurnedOrLocked: input.lpBurnedOrLocked.status === 'OK' ? input.lpBurnedOrLocked.value : null,
+      top10HolderPercent: input.top10HolderPercent.status === 'OK' ? input.top10HolderPercent.value : null,
+      deployerHoldingPercent: input.deployerHoldingPercent.status === 'OK' ? input.deployerHoldingPercent.value : null,
+    };
     
     // Hard blocks -> Score 0, DANGER
     if (hardBlockReasons.length > 0) {
@@ -186,6 +200,7 @@ export class ScoreCalculator {
         riskFlags: [...new Set([...hardBlockReasons, ...riskFlags])],
         coverage,
         report,
+        criticalChecks,
       };
     }
 
@@ -211,6 +226,7 @@ export class ScoreCalculator {
       riskFlags,
       coverage,
       report,
+      criticalChecks,
     };
   }
 }

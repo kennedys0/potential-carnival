@@ -48,6 +48,7 @@ export interface SwapTransactionIntent {
   outputMint: string;
   inputAmountRaw: bigint;
   minimumOutputAmountRaw?: bigint;
+  minimumEconomicOutputAmountRaw?: bigint;
   addressLookupTableAccounts?: AddressLookupTableAccount[];
 }
 
@@ -86,7 +87,9 @@ export class TransactionValidator {
     }
 
     const wallet = new PublicKey(intent.walletPublicKey);
-    const lookupTables = intent.addressLookupTableAccounts ?? await this.resolveLookupTables(transaction);
+    // Never use lookup-table contents supplied by the transaction provider.
+    // Resolve the message's table keys independently from the configured RPC.
+    const lookupTables = await this.resolveLookupTables(transaction);
     const validated = this.validateMessage(transaction, wallet, intent, lookupTables);
     this.validateComputeBudget(validated.instructions);
     await this.validateSimulation(transaction, intent, wallet, validated.instructions, validated.minimumOutputAmountRaw);
@@ -159,7 +162,24 @@ export class TransactionValidator {
     const minimumOutputAmountRaw = intent.provider === 'PUMP_PORTAL'
       ? this.validatePumpInstruction(instructions, wallet, intent)
       : this.validateJupiterMinimumOutput(intent);
+    this.validateEconomicMinimum(minimumOutputAmountRaw, intent);
     return { instructions, minimumOutputAmountRaw };
+  }
+
+  private validateEconomicMinimum(
+    transactionMinimumOutputRaw: bigint,
+    intent: SwapTransactionIntent,
+  ): void {
+    const economicFloor = intent.minimumEconomicOutputAmountRaw;
+    if (economicFloor === undefined) return;
+    if (economicFloor <= 0n) {
+      throw new TransactionValidationError('independent economic output floor must be positive');
+    }
+    if (transactionMinimumOutputRaw < economicFloor) {
+      throw new TransactionValidationError(
+        `transaction minimum output ${transactionMinimumOutputRaw} is below independent economic floor ${economicFloor}`,
+      );
+    }
   }
 
   private validateJupiterMinimumOutput(intent: SwapTransactionIntent): bigint {

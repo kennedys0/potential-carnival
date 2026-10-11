@@ -102,3 +102,60 @@ test('036 proves exit expiry and safely reconciles stale strategy reservations',
   assert.match(sql, /REVOKE ALL ON FUNCTION public\.reconcile_stale_strategy_reservations/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.reconcile_stale_strategy_reservations/);
 });
+
+test('037 preserves the immutable entry signature during exit reconciliation', () => {
+  const sql = load('037_preserve_entry_signature_on_exit.sql');
+  assert.match(sql, /SET tx_signature = pending_signature/);
+  assert.match(sql, /status IN \('OPEN', 'PARTIAL_EXIT', 'CLOSED'\)/);
+  assert.match(sql, /pending_signature IS NOT NULL/);
+  const functionStart = sql.indexOf('CREATE OR REPLACE FUNCTION');
+  const functionTradeStart = sql.indexOf('UPDATE public.trades', functionStart);
+  const functionTradeUpdate = sql.slice(
+    functionTradeStart,
+    sql.indexOf('IF p_exit_attempt_id IS NOT NULL THEN', functionTradeStart),
+  );
+  assert.doesNotMatch(functionTradeUpdate, /tx_signature\s*=/i);
+  assert.match(sql, /UPDATE public\.exit_attempts[\s\S]*tx_signature\s*=\s*COALESCE\(p_tx_signature/i);
+  assert.match(sql, /SET search_path = public/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.atomic_reconcile_exit/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.atomic_reconcile_exit/);
+});
+
+test('038 creates wallets atomically without overwriting an existing custody key', () => {
+  const sql = load('038_atomic_wallet_creation.sql');
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.get_or_create_user_wallet/);
+  assert.match(sql, /SECURITY INVOKER/);
+  assert.match(sql, /SET search_path = ''/);
+  assert.match(sql, /ON CONFLICT \(user_id\) DO NOTHING/);
+  assert.doesNotMatch(sql, /DO UPDATE/i);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.get_or_create_user_wallet[\s\S]*FROM PUBLIC/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.get_or_create_user_wallet[\s\S]*TO service_role/);
+
+  const walletRepo = fs.readFileSync(new URL('../../src/database/repositories/walletRepository.ts', import.meta.url), 'utf8');
+  assert.match(walletRepo, /\.rpc\('get_or_create_user_wallet'/);
+  assert.doesNotMatch(walletRepo, /\.upsert\(record, \{ onConflict: 'user_id' \}\)/);
+  assert.match(walletRepo, /Failed to getWalletByUserId/);
+});
+
+test('039 versions identity-bound wallet ciphertexts and marks new wallets as v2', () => {
+  const sql = load('039_wallet_ciphertext_binding.sql');
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS encryption_version SMALLINT NOT NULL DEFAULT 1/);
+  assert.match(sql, /CHECK \(encryption_version IN \(1, 2\)\)/);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.get_or_create_user_wallet/);
+  assert.match(sql, /auth_tag,\s+encryption_version[\s\S]*p_auth_tag,\s+2/);
+  assert.match(sql, /ON CONFLICT \(user_id\) DO NOTHING/);
+  assert.doesNotMatch(sql, /DO UPDATE/i);
+  assert.match(sql, /SECURITY INVOKER/);
+  assert.match(sql, /SET search_path = ''/);
+});
+
+test('040 persists finalized copy-trade source proof and blocks durable replay', () => {
+  const sql = load('040_copy_trade_source_proof.sql');
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS copy_source_signature TEXT/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS copy_target_wallet TEXT/);
+  assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS trades_unique_copy_source/);
+  assert.match(sql, /WHERE strategy = 'COPY_TRADE'/);
+  assert.match(sql, /BEFORE INSERT OR UPDATE OF strategy, copy_source_signature, copy_target_wallet/);
+  assert.match(sql, /COPY_TRADE requires a valid source signature and target wallet/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.enforce_copy_trade_source_proof\(\)/);
+});

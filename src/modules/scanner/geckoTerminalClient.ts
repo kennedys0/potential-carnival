@@ -1,5 +1,6 @@
 import type { Candle } from '../analyzer/indicators/atr';
 import type { NewPoolCandidate } from './sniperPoolSelection';
+const MARKET_DATA_FETCH_TIMEOUT_MS = 8_000;
 
 export class GeckoTerminalClient {
   private readonly baseUrl = 'https://api.geckoterminal.com/api/v2';
@@ -13,7 +14,9 @@ export class GeckoTerminalClient {
   ): Promise<Candle[]> {
     try {
       const url = `${this.baseUrl}/networks/${network}/pools/${poolAddress}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}`;
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(MARKET_DATA_FETCH_TIMEOUT_MS),
+      });
       
       if (!res.ok) return [];
 
@@ -42,7 +45,10 @@ export class GeckoTerminalClient {
   async getNewPools(network: string = 'solana', page: number = 1): Promise<NewPoolCandidate[]> {
     try {
       const url = `${this.baseUrl}/networks/${network}/new_pools?page=${page}`;
-      const res = await fetch(url, { headers: { 'Accept': 'application/json;version=20230302' } });
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json;version=20230302' },
+        signal: AbortSignal.timeout(MARKET_DATA_FETCH_TIMEOUT_MS),
+      });
       if (!res.ok) return [];
       
       const data: any = await res.json();

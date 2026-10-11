@@ -40,6 +40,7 @@ import { handleReportCommand } from './handlers/reportHandler';
 import { handleCopyTradeCommand, handleCopyTradeMenu } from './handlers/copyTradeHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
 import { escapeHtml } from './formatters/messageFormatter';
+import type { SecureMessageDeleteJobPayload } from '../../queue/queues';
 
 export interface BotRouteServices {
   userRepo: UserRepository;
@@ -53,6 +54,9 @@ export interface BotRouteServices {
   tradeRepo: TradeRepository;
   traderService: TraderService;
   copyTradeRepo: any; // We'll use any to avoid circular import if needed, or import CopyTradeRepository
+  secureMessageDeleteQueue: {
+    add(name: string, data: SecureMessageDeleteJobPayload, options: Record<string, unknown>): Promise<unknown>;
+  };
 }
 
 function cyclePreset(current: number, presets: readonly number[]): number {
@@ -228,13 +232,14 @@ export function registerBotRoutes(
 
   // Command /export_key
   bot.command('export_key', async (ctx) => {
-    const match = ctx.match?.trim();
-    if (match === 'SAYA_MENGERTI_RISIKONYA') {
-      const redis = getRedisConnection();
-      await handleWalletExportExecute(ctx, services.walletService, redis);
-    } else {
-      await ctx.reply('⚠️ Anda harus mengetik perintah konfirmasi dengan benar jika ingin mengekspor Private Key.');
-    }
+    const redis = getRedisConnection();
+    await handleWalletExportExecute(
+      ctx,
+      services.walletService,
+      redis,
+      services.secureMessageDeleteQueue,
+      ctx.match?.trim() ?? '',
+    );
   });
 
   // Command /livefeed
@@ -392,7 +397,7 @@ export function registerBotRoutes(
       await handleWalletMenu(ctx, services.walletService);
     } else if (data === 'wallet_export') {
       await ctx.answerCallbackQuery();
-      await handleWalletExportPrompt(ctx);
+      await handleWalletExportPrompt(ctx, services.walletService, getRedisConnection());
     }
 
     // 3. Autopilot Actions
@@ -646,15 +651,41 @@ export function registerBotRoutes(
         
         const pair = await services.scannerService.scanTokenByAddress(trade.token_mint);
         const priceUsd = pair ? parseFloat(pair.priceUsd || '0') : 0;
-        if (priceUsd === 0) throw new Error('Gagal mendapatkan harga terkini token');
+        const marketPriceAvailable = Number.isFinite(priceUsd) && priceUsd > 0;
+        if (trade.is_dry_run && !marketPriceAvailable) {
+          throw new Error('Gagal mendapatkan harga terkini token untuk simulasi sell');
+        }
 
-        const closeStatus = await services.traderService.closePosition(trade, priceUsd, percent);
+        const closeStatus = trade.is_dry_run
+          ? await services.traderService.closePosition(trade, priceUsd, percent)
+          : await services.traderService.closePosition(
+              trade,
+              marketPriceAvailable ? priceUsd : null,
+              percent,
+              { mode: 'EMERGENCY_EXIT', reason: 'Manual user-requested exit' },
+            );
         if (closeStatus === 'UNCERTAIN') {
           await ctx.reply('⚠️ <b>Sell sudah dibroadcast tetapi status akhirnya belum pasti.</b> Posisi dikunci untuk rekonsiliasi; jangan mengulang sell.', { parse_mode: 'HTML' });
           return;
         }
         if (closeStatus === 'SKIPPED') {
           await ctx.reply('ℹ️ Posisi sudah tidak aktif; tidak ada transaksi sell yang dikirim.');
+          return;
+        }
+
+        if (!marketPriceAvailable) {
+          await ctx.reply(
+            `âœ… <b>Posisi Terkonfirmasi Ditutup (${percent}%)!</b>\n\n` +
+            `â€¢ <b>Token:</b> ${escapeHtml(trade.token_symbol)}\n` +
+            'â€¢ Harga pasar sekunder sedang tidak tersedia. PnL disimpan berdasarkan fill on-chain, bukan harga perkiraan.',
+            {
+              parse_mode: 'HTML',
+              reply_markup: new InlineKeyboard()
+                .text('ðŸ“Š Cek Posisi', 'menu_positions')
+                .text('ðŸ  Menu Utama', 'menu_main'),
+            },
+          );
+          await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
           return;
         }
         
@@ -700,6 +731,13 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
     const priceUsd = Number(pair.priceUsd);
     if (!Number.isFinite(priceUsd) || priceUsd <= 0) throw new Error('Harga token tidak valid; buy manual ditolak');
     const symbol = pair.baseToken.symbol || 'UNKNOWN';
+    const security = await services.securityService.evaluateToken(mint, {
+      liquidityUsd: pair.liquidity?.usd ?? null,
+      marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
+    });
+    if (security.isHardBlocked) {
+      throw new Error(`Pemeriksaan keamanan gagal: ${security.hardBlockReasons.join('; ')}`);
+    }
 
     const trade = await services.traderService.executeOrder({
       userId: ctx.from.id,

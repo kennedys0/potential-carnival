@@ -6,7 +6,7 @@ export interface AuthorityCheckResult {
   mintAuthorityActive: FactorResult<boolean>;
   freezeAuthorityActive: FactorResult<boolean>;
   programId: PublicKey;
-  totalSupply: number;
+  totalSupplyRaw: bigint;
 }
 
 export class AuthorityChecker {
@@ -30,11 +30,9 @@ export class AuthorityChecker {
       }
 
       const mintInfo = await getMint(this.connection, mintPubkey, 'confirmed', programId);
-      const supply = Number(mintInfo.supply.toString()) / (10 ** mintInfo.decimals);
-
       return {
         programId,
-        totalSupply: supply,
+        totalSupplyRaw: mintInfo.supply,
         mintAuthorityActive: {
           value: mintInfo.mintAuthority !== null,
           status: 'OK',
@@ -49,7 +47,7 @@ export class AuthorityChecker {
     } catch (e: any) {
       return {
         programId: TOKEN_PROGRAM_ID, // Fallback
-        totalSupply: 0,
+        totalSupplyRaw: 0n,
         mintAuthorityActive: {
           value: null,
           status: 'UNAVAILABLE',

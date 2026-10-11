@@ -49,6 +49,10 @@ export const EnvSchema = z.object({
     .enum(['true', 'false'], { errorMap: () => ({ message: 'LIVE_TRADING_ENABLED must be exactly "true" or "false"' }) })
     .default('false')
     .transform((v) => v === 'true'),
+  PRIVATE_KEY_EXPORT_ENABLED: z
+    .enum(['true', 'false'], { errorMap: () => ({ message: 'PRIVATE_KEY_EXPORT_ENABLED must be exactly true or false' }) })
+    .default('false')
+    .transform((v) => v === 'true'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;

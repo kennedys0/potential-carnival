@@ -32,6 +32,17 @@ test('safety filter fails closed on critical unverified check', () => {
   assert.match(failClosedSniperSafety({ isHardBlocked:false,hardBlockReasons:[], report:[{ name:'Mint Authority',value:'N/A'}] },true),/Mint Authority/);
 });
 
+test('critical sniper safety accepts the canonical sell-route report field', () => {
+  const report = [
+    { name: 'Mint Authority', value: 'Renounced' },
+    { name: 'Freeze Authority', value: 'Renounced' },
+    { name: 'Dangerous Extensions', value: 'None' },
+    { name: 'Sell Route Quote', value: 'Route Available' },
+    { name: 'Liquidity', value: '$10000' },
+  ];
+  assert.equal(failClosedSniperSafety({ isHardBlocked:false, hardBlockReasons:[], report }, true), null);
+});
+
 test('GeckoTerminal new-pools includes creation time and normalizes mint/pool identities', async () => {
   const { GeckoTerminalClient } = await import('../../src/modules/scanner/geckoTerminalClient.ts');
   const originalFetch = globalThis.fetch;

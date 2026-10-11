@@ -164,7 +164,7 @@ export class SniperScanner {
               continue;
             }
             const safetyReject = failClosedSniperSafety(security, latest.reject_unknown_critical_safety_checks);
-            if (safetyReject || (latest.require_sell_route && security.report?.find(r => r.name === 'Sell Simulation')?.value !== 'Success')) {
+            if (safetyReject || (latest.require_sell_route && security.report?.find(r => r.name === 'Sell Route Quote')?.value !== 'Route Available')) {
               // Security conditions may change; do not permanently suppress an early pool.
               await notifyUserLiveFeed('Gagal pengecekan rute jual (Sell Route)');
               continue;

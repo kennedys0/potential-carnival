@@ -87,4 +87,45 @@ describe('ScoreCalculator', () => {
     expect(result.hardBlockReasons).toContain('Sell route quote failed (Honeypot/liquidity risk)');
     expect(result.level).not.toBe('SAFE');
   });
+
+  it('hard-blocks when sell-route evidence is unavailable', () => {
+    const input: SecurityEvaluationInput = {
+      mintAuthorityActive: { value: false, status: 'OK', source: 'test' },
+      freezeAuthorityActive: { value: false, status: 'OK', source: 'test' },
+      dangerousExtensions: { value: [], status: 'OK', source: 'test' },
+      lpBurnedOrLocked: { value: null, status: 'UNAVAILABLE', source: 'test' },
+      top10HolderPercent: { value: 10, status: 'OK', source: 'test' },
+      deployerHoldingPercent: { value: null, status: 'UNAVAILABLE', source: 'test' },
+      liquidityUsd: { value: 80_000, status: 'OK', source: 'test' },
+      marketCapUsd: { value: 350_000, status: 'OK', source: 'test' },
+      sellSimulationSuccess: { value: null, status: 'UNAVAILABLE', source: 'rpc timeout' },
+      effectiveTaxPercent: { value: null, status: 'UNAVAILABLE', source: 'rpc timeout' },
+      deployerRugCount: { value: null, status: 'UNAVAILABLE', source: 'test' },
+    };
+
+    const result = ScoreCalculator.calculate(input);
+    expect(result.isHardBlocked).toBe(true);
+    expect(result.score).toBe(0);
+    expect(result.hardBlockReasons).toContain('Sell route quote data UNAVAILABLE');
+  });
+
+  it('hard-blocks when Token-2022 extension inspection is unavailable', () => {
+    const input: SecurityEvaluationInput = {
+      mintAuthorityActive: { value: false, status: 'OK', source: 'test' },
+      freezeAuthorityActive: { value: false, status: 'OK', source: 'test' },
+      dangerousExtensions: { value: null, status: 'UNAVAILABLE', source: 'rpc error' },
+      lpBurnedOrLocked: { value: true, status: 'OK', source: 'test' },
+      top10HolderPercent: { value: 10, status: 'OK', source: 'test' },
+      deployerHoldingPercent: { value: 1, status: 'OK', source: 'test' },
+      liquidityUsd: { value: 80000, status: 'OK', source: 'test' },
+      marketCapUsd: { value: 350000, status: 'OK', source: 'test' },
+      sellSimulationSuccess: { value: true, status: 'OK', source: 'test' },
+      effectiveTaxPercent: { value: 0, status: 'OK', source: 'test' },
+      deployerRugCount: { value: 0, status: 'OK', source: 'test' },
+    };
+
+    const result = ScoreCalculator.calculate(input);
+    expect(result.isHardBlocked).toBe(true);
+    expect(result.hardBlockReasons).toContain('Dangerous Token-2022 extension data UNAVAILABLE');
+  });
 });

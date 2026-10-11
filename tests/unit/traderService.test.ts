@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TraderService } from '../../src/modules/trader/traderService';
+import {
+  TraderService,
+  assertMinimumQuoteMarketValue,
+  minimumOutputRawForMarketFloor,
+} from '../../src/modules/trader/traderService';
 import { LiveTradingDisabledError, KillSwitchActiveError } from '../../src/utils/errors';
 import { currencyService } from '../../src/utils/currencyService';
 import { getEnv } from '../../src/config/env';
@@ -38,8 +42,8 @@ const mockBuildSwap = (priceImpactPct = '0') => vi.fn().mockImplementation(
       inputMint,
       outputMint,
       inAmount: amount.toString(),
-      outAmount: '10000000',
-      otherAmountThreshold: '1',
+      outAmount: (amount * 100n).toString(),
+      otherAmountThreshold: ((amount * 100n * BigInt(10_000 - slippageBps)) / 10_000n).toString(),
       slippageBps,
       priceImpactPct,
     },
@@ -60,6 +64,57 @@ describe('TraderService', () => {
 
     const capped = service.calculateDynamicSlippage(150, 2.5, 250); // 150 + 2.5*120 = 450 > 250
     expect(capped).toBe(250);
+  });
+
+  it('rejects a Jupiter minimum output far below an independent market reference', () => {
+    expect(() => assertMinimumQuoteMarketValue({
+      inputAmountRaw: 1_000_000_000n,
+      inputDecimals: 9,
+      inputPriceUsd: 150,
+      minimumOutputRaw: 10_000_000n,
+      outputDecimals: 6,
+      outputPriceUsd: 1,
+      maxLossPercent: 3,
+    })).toThrow(/independent market-value floor/);
+
+    expect(() => assertMinimumQuoteMarketValue({
+      inputAmountRaw: 1_000_000_000n,
+      inputDecimals: 9,
+      inputPriceUsd: 150,
+      minimumOutputRaw: 148_000_000n,
+      outputDecimals: 6,
+      outputPriceUsd: 1,
+      maxLossPercent: 3,
+    })).not.toThrow();
+  });
+
+  it('computes a conservative market floor without converting raw amounts to Number', () => {
+    expect(minimumOutputRawForMarketFloor({
+      inputAmountRaw: 1_000_000_000n,
+      inputDecimals: 9,
+      inputPriceUsd: 150,
+      outputDecimals: 6,
+      outputPriceUsd: 1,
+      maxLossPercent: 3,
+    })).toBe(145_500_000n);
+
+    expect(minimumOutputRawForMarketFloor({
+      inputAmountRaw: 9_007_199_254_740_993n,
+      inputDecimals: 0,
+      inputPriceUsd: 1,
+      outputDecimals: 0,
+      outputPriceUsd: 1,
+      maxLossPercent: 0,
+    })).toBe(9_007_199_254_740_993n);
+
+    expect(minimumOutputRawForMarketFloor({
+      inputAmountRaw: 1n,
+      inputDecimals: 0,
+      inputPriceUsd: 1,
+      outputDecimals: 0,
+      outputPriceUsd: 3,
+      maxLossPercent: 0,
+    })).toBe(1n);
   });
 
   it('creates dry-run trade record in database for paper trading', async () => {
@@ -130,6 +185,9 @@ describe('TraderService', () => {
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
       getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
+      getConnection: vi.fn().mockReturnValue({
+        getTokenSupply: vi.fn().mockResolvedValue({ value: { decimals: 6 } }),
+      }),
       signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'mock-tx-sig-123' }),
       getParsedTransaction: vi.fn().mockResolvedValue({
         meta: { 
@@ -165,6 +223,56 @@ describe('TraderService', () => {
     expect(result.is_dry_run).toBe(false);
     expect(result.idempotency_key).toMatch(/^[0-9a-f]{64}$/);
     expect(result.sol_spent_lamports).toBeDefined();
+  });
+
+  it('attaches an independent economic floor to a Pump buy before signing', async () => {
+    const pumpMint = '2qEHjDLDLbuBgRYvsxhc5D6uDWAivNFZGan56P1tpump';
+    const mockTradeRepo: any = {
+      createTrade: vi.fn().mockImplementation(async (trade: any) => ({ id: 'pump-buy', ...trade })),
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockWalletService: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '11111111111111111111111111111111' }),
+      getBalance: vi.fn().mockResolvedValue({ sol: 1 }),
+      getConnection: vi.fn().mockReturnValue({
+        getTokenSupply: vi.fn().mockResolvedValue({ value: { decimals: 6 } }),
+      }),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue({
+        status: 'UNKNOWN',
+        signature: 'pump-buy-signature',
+      }),
+    };
+    const pump: any = {
+      getSwapTransaction: vi.fn().mockResolvedValue({
+        transaction: {
+          message: { recentBlockhash: 'pump-buy-blockhash' },
+          signatures: [Buffer.alloc(64)],
+        },
+      }),
+    };
+    const service = new TraderService(mockTradeRepo, mockWalletService, {} as any, pump);
+
+    await service.executeOrder({
+      userId: 111,
+      tokenMint: pumpMint,
+      tokenSymbol: 'PUMP',
+      solAmount: 0.1,
+      currentPriceUsd: 0.001,
+      isDryRun: false,
+      source: 'MANUAL',
+    });
+
+    expect(mockWalletService.signAndSendVersionedTransaction).toHaveBeenCalledWith(
+      111,
+      expect.anything(),
+      expect.objectContaining({
+        intent: expect.objectContaining({
+          provider: 'PUMP_PORTAL',
+          inputAmountRaw: 100_000_000n,
+          minimumEconomicOutputAmountRaw: 14_325_000_000n,
+        }),
+      }),
+    );
   });
 
   it('rejects BUY order if kill-switch is active', async () => {
@@ -362,6 +470,58 @@ describe('TraderService', () => {
     expect(ups).toContainEqual(expect.objectContaining({ last_exit_error: 'Uncertain status: UNKNOWN' }));
   });
 
+  it('does not ratchet exit slippage attempts when quote construction fails before signing', async () => {
+    const { service, repo, jup, wallet } = exitDeps({ status: 'UNKNOWN', signature: 'unused' });
+    jup.buildSwap.mockRejectedValueOnce(new Error('provider unavailable'));
+
+    await expect(service.closePosition(liveTrade() as any, 1.5, 100))
+      .rejects.toThrow('provider unavailable');
+
+    expect(wallet.signAndSendVersionedTransaction).not.toHaveBeenCalled();
+    expect(repo.createExitAttempt).not.toHaveBeenCalled();
+    expect(repo.updateTradeStatus).not.toHaveBeenCalledWith(
+      'trade-live',
+      expect.objectContaining({ exit_attempts: expect.any(Number) }),
+    );
+  });
+
+  it('emergency exit for a pump token uses Jupiter and does not require an external price floor', async () => {
+    const { service, jup, wallet } = exitDeps({ status: 'UNKNOWN', signature: 'emergency-sig' });
+    const pumpTrade = liveTrade({ token_mint: `${MINT}pump` });
+
+    await expect(service.closePosition(
+      pumpTrade as any,
+      null,
+      100,
+      { mode: 'EMERGENCY_EXIT', reason: 'Manual user-requested exit' },
+    )).resolves.toBe('UNCERTAIN');
+
+    expect(jup.buildSwap).toHaveBeenCalledWith(
+      pumpTrade.token_mint,
+      expect.any(String),
+      10_000_000n,
+      100,
+      '1111',
+    );
+    const intent = wallet.signAndSendVersionedTransaction.mock.calls[0][2].intent;
+    expect(intent.minimumOutputAmountRaw).toBeGreaterThan(0n);
+    expect(intent.minimumEconomicOutputAmountRaw).toBeUndefined();
+    expect(currencyService.fetchRates).not.toHaveBeenCalled();
+  });
+
+  it('keeps an EXPIRED signed exit non-terminal to prevent a duplicate sell', async () => {
+    const { service, repo } = exitDeps({ status: 'EXPIRED', signature: 'signed-expired' });
+    await expect(service.closePosition(liveTrade() as any, 1.5, 100)).resolves.toBe('UNCERTAIN');
+
+    expect(repo.updateExitAttempt).not.toHaveBeenCalledWith(
+      'mock-exit',
+      expect.objectContaining({ status: 'EXPIRED' }),
+    );
+    expect(updatesOf(repo)).toContainEqual(expect.objectContaining({
+      last_exit_error: 'Uncertain status: EXPIRED',
+    }));
+  });
+
   it('R3: percobaan exit ke-3 yang gagal menyalakan needs_attention', async () => {
     const { service, repo } = exitDeps({ status: 'FAILED_ONCHAIN', signature: 's', err: 'x' });
     await expect(service.closePosition(liveTrade({ exit_attempts: 2 }) as any, 1.5, 100)).rejects.toThrow();
@@ -389,6 +549,9 @@ describe('TraderService', () => {
     const wallet: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
       getBalance: vi.fn().mockResolvedValue({ sol: 1.0 }),
+      getConnection: vi.fn().mockReturnValue({
+        getTokenSupply: vi.fn().mockResolvedValue({ value: { decimals: 6 } }),
+      }),
       signAndSendVersionedTransaction: sendImpl,
       getParsedTransaction: parsedImpl ?? vi.fn().mockResolvedValue({
         meta: { 
@@ -561,8 +724,13 @@ describe('TraderService', () => {
       trade.user_id,
       expect.anything(),
       expect.objectContaining({
-        intent: expect.objectContaining({ inputAmountRaw: 617283n }),
+        intent: expect.objectContaining({
+          inputAmountRaw: 617283n,
+          minimumEconomicOutputAmountRaw: expect.anything(),
+        }),
       }),
     );
+    const signingIntent = wallet.signAndSendVersionedTransaction.mock.calls[0][2].intent;
+    expect(signingIntent.minimumEconomicOutputAmountRaw).toBeGreaterThan(0n);
   });
 });

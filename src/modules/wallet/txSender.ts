@@ -135,7 +135,13 @@ export class TxSender {
            }
         }
         
-        return { status: 'EXPIRED', signature, err: 'Blockhash expired' };
+        // A single RPC returning no status is not proof that every validator
+        // missed the transaction. Keep the signed outcome non-terminal.
+        return {
+          status: 'UNKNOWN',
+          signature,
+          err: 'Blockhash expired but the signed transaction outcome remains unproven',
+        };
       }
 
       await new Promise(resolve => setTimeout(resolve, pollingIntervalMs));

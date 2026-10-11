@@ -2,7 +2,7 @@ import { Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMess
 import QRCode from 'qrcode';
 import bs58 from 'bs58';
 import { KeypairService } from './keypairService';
-import { WalletRepository } from '../../database/repositories/walletRepository';
+import { WalletRecord, WalletRepository } from '../../database/repositories/walletRepository';
 import { getEnv } from '../../config/env';
 import { TxSender, TxSendResult } from './txSender';
 import { verifyWithdrawalTransfer } from './withdrawalVerification.js';
@@ -30,18 +30,30 @@ export class WalletService {
     }
 
     const keypair = KeypairService.createNewKeypair();
-    const env = getEnv();
-    const encrypted = KeypairService.encrypt(keypair, env.MASTER_ENCRYPTION_KEY);
+    try {
+      const env = getEnv();
+      const publicKey = keypair.publicKey.toBase58();
+      const encrypted = KeypairService.encrypt(keypair, env.MASTER_ENCRYPTION_KEY, {
+        userId,
+        publicKey,
+      });
+      const storedWallet = await this.walletRepo.getOrCreateWallet({
+        user_id: userId,
+        public_key: publicKey,
+        encrypted_private_key: encrypted.encryptedData,
+        iv: encrypted.iv,
+        auth_tag: encrypted.authTag,
+      });
 
-    await this.walletRepo.saveWallet({
-      user_id: userId,
-      public_key: keypair.publicKey.toBase58(),
-      encrypted_private_key: encrypted.encryptedData,
-      iv: encrypted.iv,
-      auth_tag: encrypted.authTag,
-    });
-
-    return { publicKey: keypair.publicKey.toBase58() };
+      // A concurrent request may have inserted a different candidate first.
+      // The database row is authoritative; never return the losing candidate.
+      if (storedWallet.encryption_version !== 2) {
+        throw new Error('Wallet encryption migration 039 is required before wallet creation');
+      }
+      return { publicKey: storedWallet.public_key };
+    } finally {
+      KeypairService.clearKeypair(keypair);
+    }
   }
 
   async getWalletRecord(userId: number) {
@@ -89,20 +101,18 @@ export class WalletService {
   }
 
   async exportPrivateKey(userId: number): Promise<string> {
+    const env = getEnv();
+    if (!env.PRIVATE_KEY_EXPORT_ENABLED) {
+      throw new Error('Export private key dinonaktifkan oleh operator.');
+    }
     const wallet = await this.walletRepo.getWalletByUserId(userId);
     if (!wallet) throw new Error('Wallet belum terdaftar. Ketik /start terlebih dahulu.');
-    const env = getEnv();
-    const keypair = KeypairService.decrypt(
-      {
-        encryptedData: wallet.encrypted_private_key,
-        iv: wallet.iv,
-        authTag: wallet.auth_tag,
-      },
-      env.MASTER_ENCRYPTION_KEY
-    );
-    const pk = bs58.encode(keypair.secretKey);
-    KeypairService.clearKeypair(keypair); // zero out memory
-    return pk;
+    const keypair = await this.decryptWalletRecord(wallet);
+    try {
+      return bs58.encode(keypair.secretKey);
+    } finally {
+      KeypairService.clearKeypair(keypair);
+    }
   }
 
   async requestWithdrawal(userId: number, destinationAddress: string, amountSol: number | 'MAX', idempotencyKey: string): Promise<string> {
@@ -164,14 +174,7 @@ export class WalletService {
     if (balance === 0) throw new Error('Saldo kosong.');
 
     const env = getEnv();
-    const keypair = KeypairService.decrypt(
-      {
-        encryptedData: wallet.encrypted_private_key,
-        iv: wallet.iv,
-        authTag: wallet.auth_tag,
-      },
-      env.MASTER_ENCRYPTION_KEY
-    );
+    const keypair = await this.decryptWalletRecord(wallet);
 
     try {
       const secureUrl = env.SECURE_WITHDRAWAL_RPC_URL || env.SOLANA_RPC_URL;
@@ -330,15 +333,7 @@ export class WalletService {
 
     await new TransactionValidator(this.connection).validateSwap(transaction, options.intent);
 
-    const env = getEnv();
-    const keypair = KeypairService.decrypt(
-      {
-        encryptedData: wallet.encrypted_private_key,
-        iv: wallet.iv,
-        authTag: wallet.auth_tag,
-      },
-      env.MASTER_ENCRYPTION_KEY
-    );
+    const keypair = await this.decryptWalletRecord(wallet);
 
     try {
       return await TxSender.sendAndConfirm(this.connection, transaction, [keypair], options);
@@ -377,5 +372,77 @@ export class WalletService {
         'confirmed'
       );
     }
+  }
+
+  async upgradeLegacyWalletEncryption(): Promise<number> {
+    const legacyWallets = await this.walletRepo.getLegacyWallets();
+    for (const wallet of legacyWallets) {
+      const keypair = await this.decryptWalletRecord(wallet);
+      KeypairService.clearKeypair(keypair);
+    }
+    return legacyWallets.length;
+  }
+
+  private async decryptWalletRecord(wallet: WalletRecord) {
+    const version = wallet.encryption_version ?? 1;
+    if (version !== 1 && version !== 2) {
+      throw new Error(`Unsupported wallet encryption version: ${version}`);
+    }
+
+    const env = getEnv();
+    const context = { userId: wallet.user_id, publicKey: wallet.public_key };
+    const payload = {
+      encryptedData: wallet.encrypted_private_key,
+      iv: wallet.iv,
+      authTag: wallet.auth_tag,
+    };
+    const keypair = KeypairService.decrypt(
+      payload,
+      env.MASTER_ENCRYPTION_KEY,
+      version === 2 ? context : undefined,
+    );
+
+    if (keypair.publicKey.toBase58() !== wallet.public_key) {
+      KeypairService.clearKeypair(keypair);
+      throw new Error('Encrypted wallet key does not match its stored public key');
+    }
+
+    if (version === 1) {
+      try {
+        const rebound = KeypairService.encrypt(keypair, env.MASTER_ENCRYPTION_KEY, context);
+        const upgraded = await this.walletRepo.upgradeWalletEncryption(wallet, {
+          encrypted_private_key: rebound.encryptedData,
+          iv: rebound.iv,
+          auth_tag: rebound.authTag,
+        });
+        if (!upgraded) {
+          const current = await this.walletRepo.getWalletByUserId(wallet.user_id);
+          if (!current || current.encryption_version !== 2) {
+            throw new Error('Legacy wallet encryption upgrade lost ownership of the database row');
+          }
+          const verificationKeypair = KeypairService.decrypt(
+            {
+              encryptedData: current.encrypted_private_key,
+              iv: current.iv,
+              authTag: current.auth_tag,
+            },
+            env.MASTER_ENCRYPTION_KEY,
+            { userId: current.user_id, publicKey: current.public_key },
+          );
+          try {
+            if (verificationKeypair.publicKey.toBase58() !== wallet.public_key) {
+              throw new Error('Concurrent wallet encryption upgrade changed the custody key');
+            }
+          } finally {
+            KeypairService.clearKeypair(verificationKeypair);
+          }
+        }
+      } catch (error) {
+        KeypairService.clearKeypair(keypair);
+        throw error;
+      }
+    }
+
+    return keypair;
   }
 }

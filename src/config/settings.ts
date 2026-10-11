@@ -30,6 +30,12 @@ export const AppSettingsSchema = z.object({
   TX_MAX_INCIDENTAL_LAMPORTS: z.number().int().nonnegative().default(10_000_000),
   NETWORK_FEE_FALLBACK_LAMPORTS: z.number().int().positive().default(5_000),
   LLM_REQUEST_TIMEOUT_MS: z.number().int().positive().default(8_000),
+  MARKET_DATA_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(60_000).default(8_000),
+  SWAP_PROVIDER_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(60_000).default(10_000),
+  RPC_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(120_000).default(15_000),
+  MONITOR_WORKER_CONCURRENCY: z.number().int().min(1).max(20).default(4),
+  COPY_SOURCE_FINALITY_TIMEOUT_MS: z.number().int().min(5_000).max(120_000).default(45_000),
+  COPY_SOURCE_FINALITY_POLL_MS: z.number().int().min(250).max(10_000).default(2_000),
   ORPHAN_DUST_LIMIT_RAW: z.number().default(1000),
   MONITOR_PARAMS: z.object({
     DEFAULT_TP1_PERCENT: z.number().default(15),

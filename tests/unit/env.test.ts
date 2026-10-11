@@ -20,6 +20,7 @@ describe('Environment Validation', () => {
     const parsed = validateEnv(valid);
     expect(parsed.TELEGRAM_BOT_TOKEN).toBe(valid.TELEGRAM_BOT_TOKEN);
     expect(parsed.MASTER_ENCRYPTION_KEY).toHaveLength(64);
+    expect(parsed.PRIVATE_KEY_EXPORT_ENABLED).toBe(false);
   });
 
   describe('LIVE_TRADING_ENABLED (flag pengaman live trading)', () => {
@@ -48,6 +49,24 @@ describe('Environment Validation', () => {
 
     it.each(['0', 'no', 'FALSE', 'True', 'abc', '1'])("nilai ambigu '%s' membuat startup GAGAL (bukan diam-diam hidup)", (v) => {
       expect(() => validateEnv({ ...base, LIVE_TRADING_ENABLED: v })).toThrow();
+    });
+  });
+
+  describe('PRIVATE_KEY_EXPORT_ENABLED', () => {
+    const base = {
+      NODE_ENV: 'test',
+      TELEGRAM_BOT_TOKEN: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+      SOLANA_RPC_URL: 'https://api.mainnet-beta.solana.com',
+      SOLANA_WSS_URL: 'wss://api.mainnet-beta.solana.com',
+      SUPABASE_URL: 'https://xyzcompany.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+      MASTER_ENCRYPTION_KEY: 'e1a49f7b3c2d8e6f1a5b9d3c4e7f8a2b5d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a',
+    };
+
+    it('is disabled by default and accepts only explicit booleans', () => {
+      expect(validateEnv(base).PRIVATE_KEY_EXPORT_ENABLED).toBe(false);
+      expect(validateEnv({ ...base, PRIVATE_KEY_EXPORT_ENABLED: 'true' }).PRIVATE_KEY_EXPORT_ENABLED).toBe(true);
+      expect(() => validateEnv({ ...base, PRIVATE_KEY_EXPORT_ENABLED: 'yes' })).toThrow();
     });
   });
   describe('production live guardrails', () => {

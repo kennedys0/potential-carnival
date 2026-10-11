@@ -1,4 +1,4 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, ParsedTransactionWithMeta, PublicKey } from '@solana/web3.js';
 import crypto from 'node:crypto';
 import { logger } from '../../utils/logger';
 import { currencyService } from '../../utils/currencyService';
@@ -13,6 +13,82 @@ import { RiskManager } from '../autopilot/riskManager';
 import { getRedisConnection } from '../../queue/connection';
 import { escapeHtml } from '../telegram/formatters/messageFormatter';
 import { appSettings } from '../../config/settings';
+import { RuleEvaluator } from '../autopilot/ruleEvaluator';
+import bs58 from 'bs58';
+
+const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+
+export function isValidSolanaSignature(signature: string): boolean {
+  try {
+    return bs58.decode(signature).length === 64;
+  } catch {
+    return false;
+  }
+}
+
+type VerifiedTargetBuy = {
+  tokenMint: string;
+  nativeSpendLamports: bigint;
+  wrappedSolSpendRaw: bigint;
+};
+
+function tokenBalancesByMint(
+  balances: NonNullable<ParsedTransactionWithMeta['meta']>['postTokenBalances'],
+  owner: string,
+): Map<string, bigint> {
+  const totals = new Map<string, bigint>();
+  for (const balance of balances ?? []) {
+    if (balance.owner !== owner) continue;
+    const current = totals.get(balance.mint) ?? 0n;
+    totals.set(balance.mint, current + BigInt(balance.uiTokenAmount.amount));
+  }
+  return totals;
+}
+
+/**
+ * Derive a copyable SOL buy only from value changes owned and authorized by the
+ * watched wallet. A token transfer to the wallet is not proof that it bought it.
+ */
+export function extractVerifiedTargetBuy(
+  transaction: ParsedTransactionWithMeta,
+  walletAddress: string,
+): VerifiedTargetBuy | null {
+  if (!transaction.meta || transaction.meta.err) return null;
+
+  const accountKeys = transaction.transaction.message.accountKeys;
+  const targetIndex = accountKeys.findIndex((account) => account.pubkey.toBase58() === walletAddress);
+  if (targetIndex < 0 || !accountKeys[targetIndex]?.signer) return null;
+
+  const preLamports = transaction.meta.preBalances[targetIndex];
+  const postLamports = transaction.meta.postBalances[targetIndex];
+  if (!Number.isSafeInteger(preLamports) || !Number.isSafeInteger(postLamports)) return null;
+
+  const paidFee = targetIndex === 0 ? transaction.meta.fee : 0;
+  const nativeSpendLamports = BigInt(Math.max(0, preLamports - postLamports - paidFee));
+
+  try {
+    const preByMint = tokenBalancesByMint(transaction.meta.preTokenBalances, walletAddress);
+    const postByMint = tokenBalancesByMint(transaction.meta.postTokenBalances, walletAddress);
+    const allMints = new Set([...preByMint.keys(), ...postByMint.keys()]);
+    const deltas = new Map<string, bigint>();
+    for (const mint of allMints) {
+      deltas.set(mint, (postByMint.get(mint) ?? 0n) - (preByMint.get(mint) ?? 0n));
+    }
+
+    const wrappedSolDelta = deltas.get(WSOL_MINT) ?? 0n;
+    const wrappedSolSpendRaw = wrappedSolDelta < 0n ? -wrappedSolDelta : 0n;
+    if (nativeSpendLamports <= 0n && wrappedSolSpendRaw <= 0n) return null;
+
+    const boughtMints = [...deltas.entries()]
+      .filter(([mint, delta]) => mint !== WSOL_MINT && delta > 0n)
+      .map(([mint]) => mint);
+    if (boughtMints.length !== 1) return null;
+
+    return { tokenMint: boughtMints[0], nativeSpendLamports, wrappedSolSpendRaw };
+  } catch {
+    return null;
+  }
+}
 
 export class CopyTradeTracker {
   private activeSubscriptions = new Map<string, number>();
@@ -84,39 +160,51 @@ export class CopyTradeTracker {
   }
 
   private async handlePotentialSwap(walletAddress: string, signature: string): Promise<void> {
+    if (!isValidSolanaSignature(signature)) {
+      logger.warn({ walletAddress }, 'Copy trade skipped: invalid source transaction signature');
+      return;
+    }
     const redis = getRedisConnection();
-    const dedupeKey = `copy_tx_processed:${signature}`;
-    const claimed = await redis.set(dedupeKey, '1', 'EX', 3600, 'NX');
+    const dedupeKey = `copy_tx_processed:${walletAddress}:${signature}`;
+    const claimed = await redis.set(dedupeKey, '1', 'EX', 7 * 24 * 60 * 60, 'NX');
     if (!claimed) return;
 
-    setTimeout(async () => {
-      try {
+    try {
+      const transaction = await this.waitForFinalizedSourceTransaction(signature);
+      if (!transaction) {
+        await redis.del(dedupeKey);
+        logger.warn({ signature, walletAddress }, 'Copy trade skipped: source transaction did not finalize in time');
+        return;
+      }
+
+      const verifiedBuy = extractVerifiedTargetBuy(transaction, walletAddress);
+      if (!verifiedBuy) {
+        logger.warn({ signature, walletAddress }, 'Copy trade skipped: source wallet did not authorize a verifiable SOL buy');
+        return;
+      }
+      await this.executeCopies(walletAddress, verifiedBuy.tokenMint, signature);
+    } catch (error) {
+      await redis.del(dedupeKey).catch(() => undefined);
+      logger.error({ err: error, signature }, 'Error proving finalized copy-trade source transaction');
+    }
+  }
+
+  private async waitForFinalizedSourceTransaction(signature: string): Promise<ParsedTransactionWithMeta | null> {
+    const deadline = Date.now() + appSettings.COPY_SOURCE_FINALITY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const statuses = await this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+      const status = statuses.value[0];
+      if (status?.err) return null;
+      if (status?.confirmationStatus === 'finalized') {
         const transaction = await this.connection.getParsedTransaction(signature, {
           maxSupportedTransactionVersion: 1,
-          commitment: 'confirmed',
+          commitment: 'finalized',
         });
-        if (!transaction?.meta) return;
-
-        const preBalances = transaction.meta.preTokenBalances ?? [];
-        const boughtMints = (transaction.meta.postTokenBalances ?? [])
-          .filter((post) => post.owner === walletAddress)
-          .filter((post) => {
-            const pre = preBalances.find((candidate) => candidate.accountIndex === post.accountIndex);
-            return BigInt(post.uiTokenAmount.amount) > BigInt(pre?.uiTokenAmount.amount ?? '0');
-          })
-          .map((post) => post.mint)
-          .filter((mint) => mint !== 'So11111111111111111111111111111111111111112');
-
-        const uniqueBoughtMints = [...new Set(boughtMints)];
-        if (uniqueBoughtMints.length !== 1) {
-          logger.warn({ signature, walletAddress, boughtMints: uniqueBoughtMints }, 'Copy trade skipped: ambiguous bought asset set');
-          return;
-        }
-        await this.executeCopies(walletAddress, uniqueBoughtMints[0], signature);
-      } catch (error) {
-        logger.error({ err: error, signature }, 'Error parsing copy-trade source transaction');
+        if (transaction) return transaction;
       }
-    }, 2_000);
+      await new Promise((resolve) => setTimeout(resolve, appSettings.COPY_SOURCE_FINALITY_POLL_MS));
+    }
+    return null;
   }
 
   private async executeCopies(targetWallet: string, tokenMint: string, sourceSignature: string): Promise<void> {
@@ -159,10 +247,25 @@ export class CopyTradeTracker {
     sourceSignature: string,
   ): Promise<void> {
     const config = await this.autopilotRepo.getOrCreateConfig(follower.user_id);
+    if (!config.is_active) throw new Error('autopilot is inactive for this follower');
     const safety = config.safety_params as Record<string, unknown>;
     const minimumScore = Number(safety.min_safety_score ?? appSettings.COPY_TRADE_PARAMS.DEFAULT_MIN_SAFETY_SCORE);
     const allowedLevels = Array.isArray(safety.allowed_levels) ? safety.allowed_levels.map(String) : ['SAFE'];
     const minimumLiquidity = Number(safety.min_liquidity_usd ?? appSettings.COPY_TRADE_PARAMS.DEFAULT_MIN_LIQUIDITY_USD);
+    if (security.isHardBlocked) {
+      throw new Error(`hard-block triggered: ${security.hardBlockReasons.join('; ')}`);
+    }
+    const criticalPolicy = RuleEvaluator.evaluateCriticalChecks(security, {
+      minSafetyScore: minimumScore,
+      allowedLevels,
+      minLiquidityUsd: minimumLiquidity,
+      maxTop10Percent: safety.max_top10_percent === undefined ? undefined : Number(safety.max_top10_percent),
+      maxDeployerPercent: safety.max_deployer_percent === undefined ? undefined : Number(safety.max_deployer_percent),
+      requireLpBurnOrLock: safety.lp_burn_or_lock_required === true,
+    });
+    if (criticalPolicy.failed.length > 0) {
+      throw new Error(`critical security policy failed: ${criticalPolicy.failed.join('; ')}`);
+    }
     if (security.score < minimumScore || !allowedLevels.includes(security.level) || liquidityUsd < minimumLiquidity) {
       throw new Error(`security gate failed (${security.score}/100, ${security.level}, liquidity $${liquidityUsd.toFixed(0)})`);
     }
@@ -238,6 +341,8 @@ export class CopyTradeTracker {
         source: 'AUTOPILOT',
         ownerToken,
         strategy: 'COPY_TRADE',
+        copySourceSignature: sourceSignature,
+        copyTargetWallet: follower.target_wallet_address,
         exitPolicy: { enabled: true, ...config.exit_params },
         strategyReservationId: reservationId,
       });

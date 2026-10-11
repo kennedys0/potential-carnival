@@ -7,6 +7,7 @@ export const QUEUE_NAMES = {
   EXEC: 'exec-queue',
   MONITOR: 'monitor-queue',
   RECONCILE: 'reconcile-queue',
+  SECURE_MESSAGE_DELETE: 'secure-message-delete-queue',
 } as const;
 
 export interface ScanJobPayload {
@@ -38,6 +39,11 @@ export interface MonitorJobPayload {
   tokenMint: string;
 }
 
+export interface SecureMessageDeleteJobPayload {
+  chatId: number;
+  messageId: number;
+}
+
 export function createQueues() {
   const redis = getRedisConnection();
   return {
@@ -46,5 +52,9 @@ export function createQueues() {
     execQueue: new Queue<ExecJobPayload>(QUEUE_NAMES.EXEC, { connection: redis }),
     monitorQueue: new Queue<MonitorJobPayload>(QUEUE_NAMES.MONITOR, { connection: redis }),
     reconcileQueue: new Queue<void>(QUEUE_NAMES.RECONCILE, { connection: redis }),
+    secureMessageDeleteQueue: new Queue<SecureMessageDeleteJobPayload>(
+      QUEUE_NAMES.SECURE_MESSAGE_DELETE,
+      { connection: redis },
+    ),
   };
 }

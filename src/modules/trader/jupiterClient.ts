@@ -88,6 +88,9 @@ export class JupiterClient {
     slippageBps: number,
   ): Promise<JupiterBuildQuote> {
     const amount = BigInt(inputAmountRaw);
+    if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps >= 10_000) {
+      throw new Error('Invalid Jupiter slippage');
+    }
     const build = await this.fetchBuild(inputMint, outputMint, amount, slippageBps, this.indicativeTaker);
     return {
       inputMint: build.inputMint,
@@ -108,11 +111,13 @@ export class JupiterClient {
     taker: string,
   ): Promise<JupiterSwapBuildResult> {
     if (inputAmountRaw <= 0n) throw new Error('Jupiter input amount must be positive');
-    if (!Number.isInteger(slippageBps) || slippageBps < 1) throw new Error('Invalid Jupiter slippage');
+    if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps >= 10_000) {
+      throw new Error('Invalid Jupiter slippage');
+    }
     const build = await this.fetchBuild(inputMint, outputMint, inputAmountRaw, slippageBps, taker);
     if (build.tipInstruction) throw new Error('Jupiter returned an unsolicited tip instruction');
 
-    const addressLookupTableAccounts = this.transformLookupTables(build.addressesByLookupTableAddress);
+    const addressLookupTableAccounts = await this.resolveLookupTables(build.addressesByLookupTableAddress);
     const instructions = [
       ...build.setupInstructions.map((instruction) => this.toInstruction(instruction)),
       this.toInstruction(build.swapInstruction),
@@ -179,7 +184,9 @@ export class JupiterClient {
   ): Promise<z.infer<typeof BuildResponseSchema>> {
     if (!this.apiKey) throw new Error('JUPITER_API_KEY is required for Jupiter Swap API V2');
     if (inputAmountRaw <= 0n) throw new Error('Jupiter input amount must be positive');
-    if (!Number.isInteger(slippageBps) || slippageBps < 1) throw new Error('Invalid Jupiter slippage');
+    if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps >= 10_000) {
+      throw new Error('Invalid Jupiter slippage');
+    }
 
     await this.waitForRateLimit();
     const params = new URLSearchParams({
@@ -194,6 +201,7 @@ export class JupiterClient {
     });
     const response = await fetch(`${this.baseUrl}/build?${params.toString()}`, {
       headers: { 'x-api-key': this.apiKey },
+      signal: AbortSignal.timeout(appSettings.SWAP_PROVIDER_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) {
       throw new Error(`Jupiter Swap API V2 error (${response.status}): ${await response.text()}`);
@@ -217,8 +225,23 @@ export class JupiterClient {
     if (build.slippageBps !== requested.slippageBps) {
       throw new Error('Jupiter response slippage does not match request');
     }
-    if (BigInt(build.outAmount) <= 0n || BigInt(build.otherAmountThreshold) <= 0n) {
+    if (build.swapMode !== 'ExactIn') {
+      throw new Error('Jupiter response must use ExactIn swap mode');
+    }
+    if (build.routePlan.length === 0) {
+      throw new Error('Jupiter returned an empty route plan');
+    }
+    const outAmount = BigInt(build.outAmount);
+    const minimumOutput = BigInt(build.otherAmountThreshold);
+    if (outAmount <= 0n || minimumOutput <= 0n) {
       throw new Error('Jupiter returned a zero output quote');
+    }
+    if (minimumOutput > outAmount) {
+      throw new Error('Jupiter minimum output exceeds quoted output');
+    }
+    const expectedMinimum = (outAmount * BigInt(10_000 - requested.slippageBps)) / 10_000n;
+    if (minimumOutput + 1n < expectedMinimum) {
+      throw new Error('Jupiter minimum output is weaker than the requested slippage');
     }
     const priceImpact = Number(build.priceImpactPct);
     if (!Number.isFinite(priceImpact) || priceImpact < 0) {
@@ -252,17 +275,22 @@ export class JupiterClient {
     });
   }
 
-  private transformLookupTables(raw: Record<string, string[]> | null): AddressLookupTableAccount[] {
+  private async resolveLookupTables(raw: Record<string, string[]> | null): Promise<AddressLookupTableAccount[]> {
     if (!raw) return [];
-    return Object.entries(raw).map(([key, addresses]) => new AddressLookupTableAccount({
-      key: new PublicKey(key),
-      state: {
-        deactivationSlot: BigInt('18446744073709551615'),
-        lastExtendedSlot: 0,
-        lastExtendedSlotStartIndex: 0,
-        authority: undefined,
-        addresses: addresses.map((address) => new PublicKey(address)),
-      },
+    return Promise.all(Object.entries(raw).map(async ([key, addresses]) => {
+      const tableKey = new PublicKey(key);
+      const response = await this.connection.getAddressLookupTable(tableKey, { commitment: 'confirmed' });
+      if (!response.value) {
+        throw new Error(`Jupiter address lookup table not found on-chain: ${key}`);
+      }
+      const onChainAddresses = response.value.state.addresses;
+      if (
+        onChainAddresses.length !== addresses.length
+        || onChainAddresses.some((address, index) => address.toBase58() !== addresses[index])
+      ) {
+        throw new Error(`Jupiter address lookup table does not match on-chain state: ${key}`);
+      }
+      return response.value;
     }));
   }
 

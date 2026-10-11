@@ -25,5 +25,34 @@ describe('DexScreenerClient', () => {
     const data = await client.getTokenData('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
     expect(data?.baseToken.symbol).toBe('USDC');
     expect(data?.liquidity.usd).toBe(25000000);
+    expect(mockFetch.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('does not use a higher-liquidity pair where the requested token is only the quote asset', async () => {
+    const requested = 'RequestedToken111111111111111111111111111111';
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        pairs: [
+          {
+            chainId: 'solana',
+            baseToken: { address: 'OtherToken111111111111111111111111111111111', symbol: 'OTHER', name: 'Other' },
+            quoteToken: { address: requested },
+            priceUsd: '999',
+            liquidity: { usd: 1_000_000 },
+          },
+          {
+            chainId: 'solana',
+            baseToken: { address: requested, symbol: 'RIGHT', name: 'Requested' },
+            priceUsd: '2',
+            liquidity: { usd: 100_000 },
+          },
+        ],
+      }),
+    }) as any;
+
+    const data = await new DexScreenerClient().getTokenData(requested);
+    expect(data?.baseToken.symbol).toBe('RIGHT');
+    expect(data?.priceUsd).toBe('2');
   });
 });

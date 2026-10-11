@@ -37,6 +37,10 @@ export function createMonitorWorker(
           // Trade already closed, pending, or doesn't exist
           return;
         }
+        if (trade.source !== 'AUTOPILOT') {
+          logger.info({ positionId, source: trade.source }, 'Skipping non-autopilot position monitoring');
+          return;
+        }
 
         // Use immutable per-position exit policy, not current unrelated strategy settings.
         // Legacy sniper positions without a snapshot use Sniper settings, NEVER Trending.
@@ -55,6 +59,7 @@ export function createMonitorWorker(
         // Get current price
         let pnlPercent = 0;
         let currentPriceUsd = 0;
+        let independentPriceUsd = 0;
         let pnlSol = 0;
 
         if (trade.is_dry_run) {
@@ -62,6 +67,7 @@ export function createMonitorWorker(
            if (!pair) return;
            currentPriceUsd = parseFloat(pair.priceUsd || '0');
            if (currentPriceUsd <= 0) return;
+           independentPriceUsd = currentPriceUsd;
            const entryPrice = trade.entry_price_usd;
            pnlPercent = ((currentPriceUsd - entryPrice) / entryPrice) * 100;
            pnlSol = trade.sol_amount * (pnlPercent / 100);
@@ -117,6 +123,7 @@ export function createMonitorWorker(
         
         let percentageToClose = 0;
         let reason = '';
+        let emergencyExit = false;
 
         // Track highest PnL for trailing stop
         let highestPnl = trade.highest_pnl_percent ?? pnlPercent;
@@ -140,12 +147,30 @@ export function createMonitorWorker(
         } else if (trailingStopEnabled && highestPnl >= trailingActivationPercent && (highestPnl - pnlPercent) >= trailingStopPercent) {
            percentageToClose = 100;
            reason = `Trailing Stop Triggered (Highest: ${highestPnl.toFixed(2)}%, Current: ${pnlPercent.toFixed(2)}%)`;
+           emergencyExit = !trade.is_dry_run;
         } else if (pnlPercent <= -slPercent) {
            percentageToClose = 100;
            reason = `Stop Loss Reached (${pnlPercent.toFixed(2)}%)`;
+           emergencyExit = !trade.is_dry_run;
         }
 
         if (percentageToClose > 0) {
+          let exitReferencePriceUsd = independentPriceUsd;
+          if (!trade.is_dry_run) {
+            if (emergencyExit) {
+              // The Jupiter route quote already showed the loss trigger. Do not
+              // let a failed/stale secondary oracle disable loss containment.
+              exitReferencePriceUsd = currentPriceUsd;
+            } else {
+              const independentPair = await scannerService.scanTokenByAddress(tokenMint);
+              exitReferencePriceUsd = Number(independentPair?.priceUsd);
+              if (!Number.isFinite(exitReferencePriceUsd) || exitReferencePriceUsd <= 0) {
+                logger.warn({ positionId, reason }, 'Independent market price unavailable; refusing non-emergency exit');
+                return;
+              }
+            }
+          }
+
           const lockKey = `lock:monitor:close:${positionId}`;
           const lockOwner = crypto.randomUUID();
           const locked = await redis.set(lockKey, lockOwner, 'EX', 120, 'NX');
@@ -156,7 +181,12 @@ export function createMonitorWorker(
           
           logger.info({ positionId, reason, percentageToClose }, 'Exiting position');
           try {
-            const status = await traderService.closePosition(trade, currentPriceUsd, percentageToClose);
+            const status = emergencyExit
+              ? await traderService.closePosition(trade, exitReferencePriceUsd, percentageToClose, {
+                  mode: 'EMERGENCY_EXIT',
+                  reason,
+                })
+              : await traderService.closePosition(trade, exitReferencePriceUsd, percentageToClose);
             try {
               const statusEmoji = pnlPercent >= 0 ? '🟢' : '🔴';
               const actionTitle = pnlPercent >= 0 ? 'TAKE PROFIT REACHED' : 'STOP LOSS TRIGGERED';
@@ -213,7 +243,7 @@ export function createMonitorWorker(
         throw err;
       }
     },
-    { connection: redis }
+    { connection: redis, concurrency: appSettings.MONITOR_WORKER_CONCURRENCY }
   );
 
   worker.on('failed', (job, err) => {

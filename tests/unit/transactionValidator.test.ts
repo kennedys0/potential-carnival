@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AddressLookupTableAccount,
   ComputeBudgetProgram,
   Keypair,
   PublicKey,
@@ -98,6 +99,46 @@ function pumpInstruction(
 }
 
 describe('TransactionValidator', () => {
+  it('ignores provider-supplied lookup table contents and resolves the table on-chain', async () => {
+    const wallet = Keypair.generate().publicKey;
+    const lookedUpAccount = Keypair.generate().publicKey;
+    const table = new AddressLookupTableAccount({
+      key: Keypair.generate().publicKey,
+      state: {
+        deactivationSlot: 18_446_744_073_709_551_615n,
+        lastExtendedSlot: 1,
+        lastExtendedSlotStartIndex: 0,
+        authority: undefined,
+        addresses: [lookedUpAccount],
+      },
+    });
+    const instruction = new TransactionInstruction({
+      programId: JUPITER_PROGRAM,
+      keys: [
+        { pubkey: wallet, isSigner: true, isWritable: true },
+        { pubkey: lookedUpAccount, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.from([1]),
+    });
+    const transaction = new VersionedTransaction(new TransactionMessage({
+      payerKey: wallet,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [instruction],
+    }).compileToV0Message([table]));
+    expect(transaction.message.addressTableLookups).toHaveLength(1);
+
+    const connection: any = {
+      getAddressLookupTable: vi.fn().mockResolvedValue({ value: null }),
+    };
+    const validator = new TransactionValidator(connection);
+
+    await expect(validator.validateSwap(transaction, {
+      ...intentFor(wallet),
+      addressLookupTableAccounts: [table],
+    })).rejects.toThrow(/address lookup table not found/);
+    expect(connection.getAddressLookupTable).toHaveBeenCalled();
+  });
+
   it('rejects an unexpected top-level program before signing', () => {
     const wallet = Keypair.generate().publicKey;
     const maliciousProgram = Keypair.generate().publicKey;
@@ -188,6 +229,24 @@ describe('TransactionValidator', () => {
     });
 
     expect(validated.minimumOutputAmountRaw).toBe(55_000n);
+  });
+
+  it('rejects a Pump transaction whose encoded minimum is below the independent economic floor', () => {
+    const wallet = Keypair.generate().publicKey;
+    const transaction = transactionFor(wallet, [
+      pumpInstruction(wallet, OUTPUT_MINT, [56, 252, 116, 8, 158, 223, 205, 95], 100_000_000n, 55_000n),
+    ]);
+    const validator = new TransactionValidator({} as any);
+
+    expect(() => validator.validateMessage(transaction, wallet, {
+      provider: 'PUMP_PORTAL',
+      side: 'BUY',
+      walletPublicKey: wallet.toBase58(),
+      inputMint: WSOL,
+      outputMint: OUTPUT_MINT.toBase58(),
+      inputAmountRaw: 100_000_000n,
+      minimumEconomicOutputAmountRaw: 55_001n,
+    })).toThrow(/below independent economic floor/);
   });
 
   it('rejects a Pump buy whose on-chain spend cap exceeds the approved input', () => {

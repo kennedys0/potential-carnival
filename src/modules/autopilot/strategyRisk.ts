@@ -61,7 +61,7 @@ export function failClosedSniperSafety(
     return security.hardBlockReasons.join('; ') || 'Critical security veto';
   }
   if (requireKnownCritical) {
-    const required = ['Mint Authority', 'Freeze Authority', 'Dangerous Extensions', 'Sell Simulation', 'Liquidity'];
+    const required = ['Mint Authority', 'Freeze Authority', 'Dangerous Extensions', 'Sell Route Quote', 'Liquidity'];
     for (const name of required) {
       const result = security.report?.find(r => r.name === name);
       if (!result || result.value === 'N/A' || result.value === 'undefined') return `${name} is unverified`;

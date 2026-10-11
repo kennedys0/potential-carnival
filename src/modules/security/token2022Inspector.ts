@@ -8,7 +8,8 @@ export const DANGEROUS_EXTENSIONS = [
   'TransferHook',
   'ConfidentialTransferMint',
   'NonTransferable',
-  'DefaultAccountState'
+  'DefaultAccountState',
+  'PausableConfig',
 ];
 
 export class Token2022Inspector {
@@ -16,12 +17,7 @@ export class Token2022Inspector {
     try {
       if (programId.equals(TOKEN_2022_PROGRAM_ID)) {
         const mintInfo = await getMint(connection, mintPubkey, 'confirmed', TOKEN_2022_PROGRAM_ID);
-        // getExtensionTypes requires the tlvData which is part of mintInfo if retrieved correctly.
-        // spl-token getMint doesn't return raw data with extensions easily in older versions, but let's assume it works or we read account info
-        const accountInfo = await connection.getAccountInfo(mintPubkey);
-        if (!accountInfo) throw new Error('Mint not found');
-        
-        const extensionTypes = getExtensionTypes(accountInfo.data);
+        const extensionTypes = getExtensionTypes(mintInfo.tlvData);
         const typesStr = extensionTypes.map(e => ExtensionType[e]);
         
         const dangerousExtensionsFound = typesStr.filter((ext) =>

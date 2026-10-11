@@ -216,7 +216,7 @@ describe('ReconcileWorker', () => {
     }));
   });
 
-  it('releases a signed exit only after blockhash expiry and a final empty status lookup', async () => {
+  it('retains a signed exit after blockhash expiry when the final lookup is empty', async () => {
     const getSignatureStatuses = vi.fn()
       .mockResolvedValueOnce({ value: [null] })
       .mockResolvedValueOnce({ value: [null] });
@@ -248,8 +248,11 @@ describe('ReconcileWorker', () => {
 
     expect(getSignatureStatuses).toHaveBeenCalledTimes(2);
     expect(mockTradeRepo.updateExitAttempt).toHaveBeenCalledWith('exit-expired', expect.objectContaining({
-      status: 'EXPIRED',
-      failure_reason: expect.stringContaining('final signature lookup'),
+      status: 'CONFIRMING',
+      failure_reason: expect.stringContaining('cannot prove non-execution'),
+    }));
+    expect(mockTradeRepo.updateTradeStatus).toHaveBeenCalledWith('trade-expired', expect.objectContaining({
+      needs_attention: true,
     }));
   });
 });

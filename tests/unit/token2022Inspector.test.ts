@@ -8,18 +8,22 @@ vi.mock('@solana/spl-token', async () => {
   const actual: any = await vi.importActual('@solana/spl-token');
   return {
     ...actual,
-    getMint: vi.fn().mockResolvedValue({}),
+    getMint: vi.fn().mockImplementation(async (connection: any) => ({
+      tlvData: connection.tlvData ?? Buffer.alloc(0),
+    })),
     getExtensionTypes: vi.fn((data) => {
       // Return extension types based on mocked data length
       if (data.length === 1) return [1, 2]; // e.g. TransferFeeConfig
-      if (data.length === 2) return [10, 11]; // safe
+      if (data.length === 2) return [10, 11];
+      if (data.length === 3) return [12];
       return [];
     }),
     ExtensionType: {
       1: 'TransferFeeConfig',
       2: 'MintCloseAuthority',
       10: 'MemoTransfer',
-      11: 'DefaultAccountState'
+      11: 'DefaultAccountState',
+      12: 'PausableConfig',
     }
   };
 });
@@ -27,7 +31,7 @@ vi.mock('@solana/spl-token', async () => {
 describe('Token2022Inspector', () => {
   it('detects TransferFeeConfig as dangerous', async () => {
     const mockConnection: any = {
-      getAccountInfo: vi.fn().mockResolvedValue({ data: Buffer.alloc(1) }),
+      tlvData: Buffer.alloc(1),
     };
     
     const result = await Token2022Inspector.inspectExtensions(
@@ -42,7 +46,7 @@ describe('Token2022Inspector', () => {
 
   it('passes safe extensions list', async () => {
     const mockConnection: any = {
-      getAccountInfo: vi.fn().mockResolvedValue({ data: Buffer.alloc(2) }),
+      tlvData: Buffer.alloc(2),
     };
 
     const result = await Token2022Inspector.inspectExtensions(
@@ -55,6 +59,17 @@ describe('Token2022Inspector', () => {
     // DefaultAccountState is actually marked as dangerous in our code now
     // Wait, DANGEROUS_EXTENSIONS includes 'DefaultAccountState'
     expect(result.value).toContain('DefaultAccountState');
+  });
+
+  it('detects PausableConfig as dangerous', async () => {
+    const result = await Token2022Inspector.inspectExtensions(
+      { tlvData: Buffer.alloc(3) } as any,
+      new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    expect(result.status).toBe('OK');
+    expect(result.value).toContain('PausableConfig');
   });
 
   it('ignores classic SPL token', async () => {

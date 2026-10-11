@@ -1,9 +1,54 @@
 import { Context, InlineKeyboard, InputFile } from 'grammy';
 import { WalletService } from '../../wallet/walletService';
+import { getEnv } from '../../../config/env';
+import { logger } from '../../../utils/logger';
+import bs58 from 'bs58';
 
 import { currencyService } from '../../../utils/currencyService';
 import { getRedisConnection } from '../../../queue/connection';
 import { escapeHtml } from '../formatters/messageFormatter';
+import crypto from 'node:crypto';
+import type { SecureMessageDeleteJobPayload } from '../../../queue/queues';
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
+type WalletExportChallenge = {
+  version: 1;
+  userId: number;
+  ownerPubkey: string;
+  walletPublicKey: string;
+  expiresAt: number;
+  message: string;
+};
+
+export function verifyWalletExportSignature(
+  ownerPubkey: string,
+  message: string,
+  signatureBase58: string,
+): boolean {
+  try {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{80,100}$/.test(signatureBase58)) return false;
+    const publicKeyBytes = Buffer.from(bs58.decode(ownerPubkey));
+    const signature = Buffer.from(bs58.decode(signatureBase58));
+    if (publicKeyBytes.length !== 32 || signature.length !== 64) return false;
+    const publicKey = crypto.createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, publicKeyBytes]),
+      format: 'der',
+      type: 'spki',
+    });
+    return crypto.verify(null, Buffer.from(message, 'utf8'), publicKey, signature);
+  } catch {
+    return false;
+  }
+}
+
+type SecureMessageDeleteQueue = {
+  add(
+    name: string,
+    data: SecureMessageDeleteJobPayload,
+    options: Record<string, unknown>,
+  ): Promise<unknown>;
+};
 
 export async function handleWalletMenu(ctx: Context, walletService: WalletService): Promise<void> {
   if (!ctx.from) return;
@@ -32,10 +77,11 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Saldo', 'wallet_refresh')
     .text('💸 Withdraw', 'wallet_withdraw')
-    .row()
-    .text('🔑 Export Private Key', 'wallet_export')
-    .row()
-    .text('🏠 Menu Utama', 'menu_main');
+    .row();
+  if (getEnv().PRIVATE_KEY_EXPORT_ENABLED) {
+    keyboard.text('🔑 Export Private Key', 'wallet_export').row();
+  }
+  keyboard.text('🏠 Menu Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     const isPhotoMessage = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
@@ -91,10 +137,11 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Saldo', 'wallet_refresh')
     .text('💸 Withdraw', 'wallet_withdraw')
-    .row()
-    .text('🔑 Export Private Key', 'wallet_export')
-    .row()
-    .text('🏠 Menu Utama', 'menu_main');
+    .row();
+  if (getEnv().PRIVATE_KEY_EXPORT_ENABLED) {
+    keyboard.text('🔑 Export Private Key', 'wallet_export').row();
+  }
+  keyboard.text('🏠 Menu Utama', 'menu_main');
 
   const isPhotoMessage = ctx.callbackQuery?.message && 'caption' in ctx.callbackQuery.message;
 
@@ -185,19 +232,71 @@ Demi keamanan, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahu
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
 
-export async function handleWalletExportPrompt(ctx: Context): Promise<void> {
-  if (!ctx.from) return;
+export async function handleWalletExportPrompt(
+  ctx: Context,
+  walletService: WalletService,
+  redis: any,
+): Promise<void> {
+  if (!ctx.from || !ctx.chat) return;
+  if (!getEnv().PRIVATE_KEY_EXPORT_ENABLED) {
+    await ctx.reply('Export private key dinonaktifkan oleh operator demi keamanan.');
+    return;
+  }
+  if (ctx.chat.type !== 'private') {
+    await ctx.reply('âš ï¸ Export private key hanya bisa dilakukan di Private Chat (DM) dengan bot.');
+    return;
+  }
+
+  if (await redis.get(`withdraw_cooldown:${ctx.from.id}`)) {
+    await ctx.reply('Export ditangguhkan selama 24 jam setelah perubahan withdrawal-owner wallet.');
+    return;
+  }
+  const wallet = await walletService.getWalletRecord(ctx.from.id);
+  if (!wallet?.owner_pubkey) {
+    await ctx.reply('Daftarkan withdrawal-owner wallet terlebih dahulu sebelum meminta export private key.');
+    return;
+  }
+  if (wallet.owner_pubkey === wallet.public_key) {
+    await ctx.reply('Withdrawal-owner wallet harus berbeda dari wallet bot untuk otorisasi export.');
+    return;
+  }
+
+  const expiresAt = Date.now() + 120_000;
+  const nonce = crypto.randomBytes(32).toString('hex');
+  const message = [
+    'Solana Scalping Bot - Wallet Export Authorization',
+    `Telegram user: ${ctx.from.id}`,
+    `Bot wallet: ${wallet.public_key}`,
+    `Nonce: ${nonce}`,
+    `Expires at: ${new Date(expiresAt).toISOString()}`,
+  ].join('\n');
+  const challenge: WalletExportChallenge = {
+    version: 1,
+    userId: ctx.from.id,
+    ownerPubkey: wallet.owner_pubkey,
+    walletPublicKey: wallet.public_key,
+    expiresAt,
+    message,
+  };
+  await redis.set(
+    `wallet_export_challenge:${ctx.from.id}`,
+    JSON.stringify(challenge),
+    'EX',
+    120,
+  );
 
   const text = `
 ⚠️ <b>PERINGATAN KEAMANAN TINGGI!</b> ⚠️
 
 Private Key memberikan akses penuh dan tak terbatas ke seluruh aset di wallet Anda.
 <b>JANGAN PERNAH</b> membagikan Private Key ini kepada siapa pun! 
-Jika Anda mengerti risiko ini dan tetap ingin mengekspor Private Key Anda, balas pesan ini dengan mengetik perintah berikut dengan persis:
+Tandatangani pesan berikut memakai withdrawal-owner wallet Anda:
 
-<code>/export_key SAYA_MENGERTI_RISIKONYA</code>
+<pre>${escapeHtml(message)}</pre>
 
-<i>Pesan berisi private key akan diproteksi agar tidak bisa di-forward, dan akan terhapus otomatis dalam 1 menit.</i>
+Lalu kirim <code>/export_key &lt;SIGNATURE_BASE58&gt;</code>.
+
+<i>Challenge hanya berlaku satu kali selama 2 menit. Pesan private key akan diproteksi agar tidak bisa di-forward, dan dihapus otomatis dalam 1 menit.</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
@@ -230,7 +329,9 @@ Jika Anda mengerti risiko ini dan tetap ingin mengekspor Private Key Anda, balas
 export async function handleWalletExportExecute(
   ctx: Context,
   walletService: WalletService,
-  redis: any
+  redis: any,
+  deleteQueue: SecureMessageDeleteQueue,
+  signatureBase58: string,
 ): Promise<void> {
   if (!ctx.from || !ctx.chat) return;
 
@@ -241,7 +342,65 @@ export async function handleWalletExportExecute(
   }
 
   try {
+    if (!getEnv().PRIVATE_KEY_EXPORT_ENABLED) {
+      throw new Error('Export private key dinonaktifkan oleh operator.');
+    }
+    if (await redis.get(`withdraw_cooldown:${ctx.from.id}`)) {
+      throw new Error('Export ditangguhkan selama 24 jam setelah perubahan withdrawal-owner wallet.');
+    }
+    if (!/^[1-9A-HJ-NP-Za-km-z]{80,100}$/.test(signatureBase58)) {
+      throw new Error('Signature Base58 tidak valid. Buat challenge export baru dan tandatangani pesannya.');
+    }
+    const challengeKey = `wallet_export_challenge:${ctx.from.id}`;
+    const serializedChallenge = await redis.eval(
+      `
+        local value = redis.call('get', KEYS[1])
+        if value then
+          redis.call('del', KEYS[1])
+          return value
+        end
+        return nil
+      `,
+      1,
+      challengeKey,
+    );
+    if (!serializedChallenge) {
+      throw new Error('Challenge export sudah dipakai atau kedaluwarsa.');
+    }
+
+    let challenge: WalletExportChallenge;
+    try {
+      challenge = JSON.parse(String(serializedChallenge)) as WalletExportChallenge;
+    } catch {
+      throw new Error('Challenge export rusak; buat challenge baru.');
+    }
+    if (
+      challenge.version !== 1
+      || challenge.userId !== ctx.from.id
+      || !challenge.ownerPubkey
+      || !challenge.walletPublicKey
+      || !challenge.message
+      || !Number.isSafeInteger(challenge.expiresAt)
+      || challenge.expiresAt < Date.now()
+    ) {
+      throw new Error('Challenge export tidak valid atau kedaluwarsa.');
+    }
+
+    const wallet = await walletService.getWalletRecord(ctx.from.id);
+    if (
+      !wallet
+      || wallet.owner_pubkey !== challenge.ownerPubkey
+      || wallet.public_key !== challenge.walletPublicKey
+      || wallet.owner_pubkey === wallet.public_key
+    ) {
+      throw new Error('Konfigurasi wallet berubah setelah challenge dibuat; export dibatalkan.');
+    }
+    if (!verifyWalletExportSignature(challenge.ownerPubkey, challenge.message, signatureBase58)) {
+      throw new Error('Signature withdrawal-owner wallet tidak valid.');
+    }
+
     const privateKey = await walletService.exportPrivateKey(ctx.from.id);
+    logger.warn({ userId: ctx.from.id }, '[AUDIT] Private key export authorized by owner-wallet signature');
 
     const text = `
 🔑 <b>Base58 Private Key Anda:</b>
@@ -258,19 +417,27 @@ export async function handleWalletExportExecute(
     const chatId = ctx.chat.id;
     const messageId = msg.message_id;
 
-    // Schedule deletion via Redis to survive restarts
-    const jobId = `delete_msg:${chatId}:${messageId}`;
-    await redis.set(jobId, JSON.stringify({ chatId, messageId }), 'EX', 60);
-    
-    // Also try doing it in-memory immediately just in case
-    setTimeout(async () => {
+    try {
+      await deleteQueue.add(
+        'delete-secure-message',
+        { chatId, messageId },
+        {
+          jobId: `delete-${chatId}-${messageId}`,
+          delay: 60_000,
+          attempts: 10,
+          backoff: { type: 'exponential', delay: 10_000 },
+          removeOnComplete: true,
+          removeOnFail: 100,
+        },
+      );
+    } catch (error) {
       try {
         await ctx.api.deleteMessage(chatId, messageId);
-        await redis.del(jobId);
       } catch {
-        // ignore
+        throw new Error('KRITIS: penghapusan otomatis gagal. Hapus pesan private key secara manual sekarang.');
       }
-    }, 60000);
+      throw new Error(`Penjadwalan penghapusan aman gagal; pesan private key langsung dihapus. ${error instanceof Error ? error.message : String(error)}`);
+    }
 
   } catch (err: any) {
     await ctx.reply(`⚠️ Gagal mengekspor Private Key: ${escapeHtml(err.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });

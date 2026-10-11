@@ -207,11 +207,15 @@ export function createReconcileWorker(
                 );
                 const finalStatus = finalStatusRes.value[0];
                 if (!finalStatus) {
-                  await tradeRepo.updateExitAttempt(attempt.id!, {
-                    status: 'EXPIRED',
-                    failure_reason: 'Blockhash expired and final signature lookup returned no transaction',
+                  await tradeRepo.updateTradeStatus(attempt.trade_id, {
+                    needs_attention: true,
+                    last_exit_error: 'Signed exit outcome remains unknown after blockhash expiry',
                   });
-                  logger.info({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Released expired exit attempt after final signature check');
+                  await tradeRepo.updateExitAttempt(attempt.id!, {
+                    status: 'CONFIRMING',
+                    failure_reason: 'Blockhash expired but a final signature lookup cannot prove non-execution',
+                  });
+                  logger.warn({ attemptId: attempt.id, signature: attempt.tx_signature }, 'Retained ambiguous signed exit attempt for continued reconciliation');
                 } else if (finalStatus.err) {
                   await tradeRepo.updateExitAttempt(attempt.id!, {
                     status: 'FAILED',

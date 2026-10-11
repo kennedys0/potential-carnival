@@ -1,5 +1,6 @@
 import { VersionedTransaction } from '@solana/web3.js';
 import { logger } from '../../utils/logger';
+import { appSettings } from '../../config/settings.js';
 
 export interface PumpPortalTradeParams {
   publicKey: string;
@@ -22,6 +23,7 @@ export class PumpPortalClient {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(appSettings.SWAP_PROVIDER_FETCH_TIMEOUT_MS),
         body: JSON.stringify({
           publicKey: params.publicKey,
           action: params.action,

@@ -7,6 +7,7 @@ export interface WalletRecord {
   encrypted_private_key: string;
   iv: string;
   auth_tag: string;
+  encryption_version?: number;
   owner_pubkey?: string | null;
   created_at?: string;
 }
@@ -14,14 +15,19 @@ export interface WalletRecord {
 export class WalletRepository {
   constructor(private readonly db: SupabaseClient) {}
 
-  async saveWallet(record: Omit<WalletRecord, 'id' | 'created_at'>): Promise<WalletRecord> {
+  async getOrCreateWallet(record: Omit<WalletRecord, 'id' | 'created_at' | 'owner_pubkey'>): Promise<WalletRecord> {
     const { data, error } = await this.db
-      .from('user_wallets')
-      .upsert(record, { onConflict: 'user_id' })
-      .select()
+      .rpc('get_or_create_user_wallet', {
+        p_user_id: record.user_id,
+        p_public_key: record.public_key,
+        p_encrypted_private_key: record.encrypted_private_key,
+        p_iv: record.iv,
+        p_auth_tag: record.auth_tag,
+      })
       .single();
 
-    if (error) throw new Error(`Failed to saveWallet: ${error.message}`);
+    if (error) throw new Error(`Failed to getOrCreateWallet: ${error.message}`);
+    if (!data) throw new Error('Failed to getOrCreateWallet: database returned no wallet');
     return data as WalletRecord;
   }
 
@@ -30,9 +36,10 @@ export class WalletRepository {
       .from('user_wallets')
       .select('*')
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
-    if (error) return null;
+    if (error) throw new Error(`Failed to getWalletByUserId: ${error.message}`);
+    if (!data) return null;
     return data as WalletRecord;
   }
 
@@ -42,6 +49,39 @@ export class WalletRepository {
       .select('*');
     if (error) throw new Error(`Failed to getAllWallets: ${error.message}`);
     return data as WalletRecord[];
+  }
+
+  async getLegacyWallets(): Promise<WalletRecord[]> {
+    const { data, error } = await this.db
+      .from('user_wallets')
+      .select('*')
+      .eq('encryption_version', 1);
+    if (error) throw new Error(`Failed to getLegacyWallets: ${error.message}`);
+    return data as WalletRecord[];
+  }
+
+  async upgradeWalletEncryption(
+    existing: WalletRecord,
+    encrypted: Pick<WalletRecord, 'encrypted_private_key' | 'iv' | 'auth_tag'>,
+  ): Promise<boolean> {
+    const { data, error } = await this.db
+      .from('user_wallets')
+      .update({
+        encrypted_private_key: encrypted.encrypted_private_key,
+        iv: encrypted.iv,
+        auth_tag: encrypted.auth_tag,
+        encryption_version: 2,
+      })
+      .eq('user_id', existing.user_id)
+      .eq('public_key', existing.public_key)
+      .eq('encrypted_private_key', existing.encrypted_private_key)
+      .eq('iv', existing.iv)
+      .eq('auth_tag', existing.auth_tag)
+      .eq('encryption_version', 1)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new Error(`Failed to upgradeWalletEncryption: ${error.message}`);
+    return !!data;
   }
 
   async updateOwnerPubkey(userId: number, pubkey: string): Promise<boolean> {

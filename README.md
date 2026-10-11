@@ -395,7 +395,12 @@ Keamanan private key pengguna adalah prioritas tertinggi sistem:
    - Menggunakan Initialization Vector (IV) 12-byte unik per enkripsi dan Authentication Tag 16-byte untuk menjamin integritas data (anti-tamper).
 2. **Isolasi Master Key**:
    - `MASTER_ENCRYPTION_KEY` hanya disimpan dalam variabel lingkungan (`.env`) dan tidak pernah disimpan di database atau diekspos ke klien.
-3. **Default Paper Trading**:
+3. **Binding Identitas Ciphertext**:
+   - Ciphertext wallet versi 2 memakai AES-GCM AAD yang mengikat `user_id` dan public key. Pemindahan ciphertext antar-row akan gagal saat dekripsi.
+4. **Export Private Key Default-Off**:
+   - Export dinonaktifkan kecuali operator secara eksplisit mengatur `PRIVATE_KEY_EXPORT_ENABLED=true`.
+   - Saat diaktifkan, pengguna tetap harus membuktikan kepemilikan withdrawal-owner wallet dengan menandatangani challenge sekali pakai.
+5. **Default Paper Trading**:
    - Seluruh akun baru secara default berada dalam mode **Paper Trading (Simulasi)**. Modal asli Anda tidak akan tersentuh sampai Anda secara sengaja beralih ke mode Live di menu Pengaturan.
 
 ---

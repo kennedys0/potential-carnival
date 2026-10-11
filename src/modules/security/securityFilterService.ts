@@ -39,7 +39,7 @@ export class SecurityFilterService {
       );
     }
 
-    const holderResultPromise = this.holderAnalyzer.analyzeHolders(mintAddress, authority.totalSupply);
+    const holderResultPromise = this.holderAnalyzer.analyzeHolders(mintAddress, authority.totalSupplyRaw);
 
     const [dangerousExtensions, holderResult, sellSimulation] = await Promise.all([
       dangerousExtensionsPromise,
