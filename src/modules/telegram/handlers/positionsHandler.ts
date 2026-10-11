@@ -29,18 +29,25 @@ export async function handlePositionsMenu(
   if (openTrades.length === 0) {
     text = `
 📊 <b>Portofolio Kosong</b>
-
+───────────────────────────
 <i>Tidak ada posisi trading yang sedang aktif.</i>
 
-💡 <b>Cara Membuka Posisi:</b>
-1. Ketik <code>/scan &lt;CA&gt;</code> untuk menganalisis token.
-2. Gunakan tombol Buy untuk eksekusi manual.
-3. Aktifkan <b>🤖 Autopilot</b> untuk auto-snipe.
+💡 <b>Cara Memulai Trading:</b>
+1. Ketik <code>/scan &lt;CA&gt;</code> untuk menganalisis token on-chain.
+2. Gunakan tombol Buy untuk eksekusi manual cepat.
+3. Aktifkan <b>🤖 Autopilot</b> untuk auto-trading otomatis.
 
 • <i>Diperbarui: ${timestamp}</i>
 `.trim();
+
+    keyboard
+      .text('🔍 Scan Token Baru', 'menu_scan')
+      .text('🤖 Nyalakan Autopilot', 'menu_autopilot')
+      .row()
+      .text('🔄 Refresh', 'menu_positions')
+      .text('🏠 Dashboard', 'menu_main');
   } else {
-    text = `📊 <b>Portofolio Aktif (${openTrades.length})</b>\n\n`;
+    text = `📊 <b>Portofolio Aktif (${openTrades.length})</b>\n───────────────────────────\n\n`;
     await currencyService.fetchRates();
 
     const pricePromises = openTrades.map(t => scannerService.scanTokenByAddress(t.token_mint));
@@ -74,36 +81,47 @@ export async function handlePositionsMenu(
       }
       
       const pnlIdr = currencyService.solToIdr(pnlSol);
+      const pnlIdrFormatted = pnlIdr !== null ? currencyService.formatIdr(pnlIdr) : 'N/A';
 
       if (isPending) {
-         text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ⏳ <b>${trade.status}</b>\n`;
-         text += `   ↳ <code>Membeli...</code> | Harap tunggu konfirmasi\n\n`;
+        text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ⏳ <b>${trade.status}</b>\n`;
+        text += `   ├ Status: <code>Membeli...</code> | Harap tunggu konfirmasi\n`;
+        text += `   └ Modal: <code>${trade.sol_amount} SOL</code>\n\n`;
+        keyboard.text(`⏳ ${trade.token_symbol}`, `view_pos:${trade.id}`);
       } else {
-         text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
-         text += `   ↳ <code>${trade.sol_amount} SOL</code> | PnL: ${pnlSol >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)}\n\n`;
+        text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
+        text += `   ├ Ukuran: <code>${trade.sol_amount} SOL</code>\n`;
+        text += `   └ PnL: ${pnlSol >= 0 ? '+' : ''}${pnlIdrFormatted}\n\n`;
+        
+        const btnPnlTag = `${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%`;
+        keyboard.text(`${pnlIcon} ${trade.token_symbol} (${btnPnlTag})`, `view_pos:${trade.id}`);
       }
       
-      keyboard.text(`${trade.token_symbol}`, `view_pos:${trade.id}`);
       if ((i + 1) % 2 === 0) keyboard.row();
     }
     
     if (openTrades.length % 2 !== 0) keyboard.row();
 
     const totalPnlIdr = currencyService.solToIdr(totalPnlSol);
-    text += `\n💰 <b>Total Unre. PnL:</b> ${totalPnlSol >= 0 ? '+' : ''}${totalPnlSol.toFixed(4)} SOL (≈ ${totalPnlIdr !== null && totalPnlIdr >= 0 ? '+' : ''}${currencyService.formatIdr(totalPnlIdr)})\n`;
+    const totalPnlIdrText = totalPnlIdr !== null ? currencyService.formatIdr(totalPnlIdr) : 'N/A';
+    text += `───────────────────────────\n`;
+    text += `💰 <b>Total Unre. PnL:</b> ${totalPnlSol >= 0 ? '+' : ''}${totalPnlSol.toFixed(4)} SOL (≈ ${totalPnlSol >= 0 ? '+' : ''}${totalPnlIdrText})\n`;
     text += `• <i>Diperbarui: ${timestamp}</i>`;
-  }
 
-  keyboard.row();
-  keyboard
-    .text('🔄 Refresh', 'menu_positions')
-    .text('🏠 Dashboard', 'menu_main');
+    keyboard.row();
+    keyboard
+      .text('🔍 Scan Token', 'menu_scan')
+      .text('🔄 Refresh', 'menu_positions')
+      .row()
+      .text('🏠 Dashboard Utama', 'menu_main');
+  }
 
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
     } catch (err: any) {
       if (err?.description?.includes('message is not modified')) return;
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
     }
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -153,45 +171,52 @@ export async function handlePositionDetail(
 
   const text = isPending ? `
 📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
-<code>${escapeHtml(trade.token_mint)}</code>
-
+<code>${escapeHtml(trade.token_mint)}</code> <i>(Tap to copy)</i>
+───────────────────────────
 • <b>Mode:</b> ${modeBadge}
 • <b>Status:</b> ⏳ <code>${trade.status}</code>
-• <b>Alokasi:</b> ${trade.sol_amount} SOL
+• <b>Alokasi:</b> <code>${trade.sol_amount} SOL</code>
 
-<i>Order Anda sedang diproses dan menunggu konfirmasi jaringan. Silakan refresh dalam beberapa detik.</i>
-
-<i>Diperbarui: ${timestamp}</i>
+<i>Order Anda sedang diproses dan menunggu konfirmasi jaringan Solana. Silakan refresh dalam beberapa detik.</i>
+───────────────────────────
+🕒 <i>Diperbarui: ${timestamp}</i>
 `.trim() : `
 📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
-<code>${escapeHtml(trade.token_mint)}</code>
-
+<code>${escapeHtml(trade.token_mint)}</code> <i>(Tap to copy)</i>
+───────────────────────────
 • <b>Mode:</b> ${modeBadge}
 • <b>Status:</b> <code>${trade.status}</code>
-• <b>Ukuran:</b> ${trade.sol_amount} SOL (${trade.token_amount.toFixed(2)} tokens)
+• <b>Ukuran:</b> <code>${trade.sol_amount} SOL</code> (${trade.token_amount.toFixed(2)} tokens)
 
 <b>Performa Harga:</b>
-• <b>Entry:</b> $${trade.entry_price_usd.toFixed(6)}
-• <b>Sekarang:</b> $${currentPriceUsd.toFixed(6)}
+• <b>Entry:</b> <code>$${trade.entry_price_usd.toFixed(6)}</code>
+• <b>Sekarang:</b> <code>$${currentPriceUsd.toFixed(6)}</code>
 • <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>
-• <b>Value:</b> ${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL (≈ ${pnlIdr !== null && pnlIdr >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)})
-
-<i>Diperbarui: ${timestamp}</i>
+• <b>Value:</b> <code>${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL</code> (≈ ${pnlIdr !== null && pnlIdr >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)})
+───────────────────────────
+🕒 <i>Diperbarui: ${timestamp}</i>
 `.trim();
 
   const keyboard = new InlineKeyboard();
   if (!isPending) {
-    keyboard.text('🔴 Jual Semua (100%)', `sell:${trade.id}:100`).row();
+    keyboard
+      .text('🔴 Jual Semua (100%)', `sell:${trade.id}:100`)
+      .text('🟠 Jual Sebagian (50%)', `sell:${trade.id}:50`)
+      .row();
   }
   keyboard
+    .url('📊 Chart DexScreener', `https://dexscreener.com/solana/${trade.token_mint}`)
     .text('🔄 Refresh', `view_pos:${trade.id}`)
-    .text('🔙 Kembali', 'menu_positions');
+    .row()
+    .text('🔙 Kembali ke Portofolio', 'menu_positions')
+    .text('🏠 Dashboard', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
     } catch (err: any) {
       if (err?.description?.includes('message is not modified')) return;
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
     }
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });

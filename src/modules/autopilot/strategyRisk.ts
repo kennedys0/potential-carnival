@@ -1,6 +1,8 @@
 /** Pure helpers: exact SOL-to-lamport conversion and position policy snapshots. */
 export function solToLamports(amount: number | string): bigint {
-  const value = String(amount);
+  const value = typeof amount === 'number'
+    ? (Number.isFinite(amount) && amount > 0 ? amount.toFixed(9).replace(/\.?0+$/, '') || '0' : String(amount))
+    : String(amount);
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/.test(value)) {
     throw new Error('Invalid SOL amount: must be a positive decimal with <=9 places');
   }
@@ -15,20 +17,88 @@ export function solToLamports(amount: number | string): bigint {
 export interface ExitPolicySnapshot extends Record<string, unknown> {
   enabled: boolean;
   tp1_percent: number;
+  tp1_sell_share: number;
   tp2_percent: number;
   sl_percent: number;
   trailing_stop_enabled: boolean;
-  trailing_stop_percent: number;
+  trailing_stop_delta_percent: number;
   trailing_activation_percent: number;
+}
+
+function policyNumber(
+  value: unknown,
+  fallback: number,
+  field: string,
+  minimum: number,
+  maximum: number,
+  allowMinimum: boolean,
+): number {
+  const resolved = value === undefined ? fallback : value;
+  if (
+    typeof resolved !== 'number'
+    || !Number.isFinite(resolved)
+    || (allowMinimum ? resolved < minimum : resolved <= minimum)
+    || resolved > maximum
+  ) {
+    throw new Error(`Invalid exit policy: ${field}: out of range or wrong type`);
+  }
+  return resolved;
+}
+
+function policyBoolean(value: unknown, fallback: boolean, field: string): boolean {
+  const resolved = value === undefined ? fallback : value;
+  if (typeof resolved !== 'boolean') {
+    throw new Error(`Invalid exit policy: ${field}: wrong type`);
+  }
+  return resolved;
+}
+
+export function parseExitPolicy(input: unknown): ExitPolicySnapshot {
+  if (input !== undefined && input !== null && (typeof input !== 'object' || Array.isArray(input))) {
+    throw new Error('Invalid exit policy: policy: expected an object');
+  }
+  const value = (input ?? {}) as Record<string, unknown>;
+  const tp1 = policyNumber(value.tp1_percent, 15, 'tp1_percent', 0, 1000, false);
+  const tp2 = policyNumber(value.tp2_percent, 30, 'tp2_percent', 0, 1000, false);
+  if (tp2 < tp1) {
+    throw new Error('Invalid exit policy: tp2_percent: must be greater than or equal to tp1_percent');
+  }
+  const trailingDistance = value.trailing_stop_delta_percent ?? value.trailing_stop_percent;
+  const trailingEnabled = policyBoolean(value.trailing_stop_enabled, true, 'trailing_stop_enabled');
+
+  return {
+    enabled: policyBoolean(value.enabled, true, 'enabled'),
+    tp1_percent: tp1,
+    tp1_sell_share: policyNumber(value.tp1_sell_share, 50, 'tp1_sell_share', 0, 100, false),
+    tp2_percent: tp2,
+    sl_percent: policyNumber(value.sl_percent, 8, 'sl_percent', 0, 100, false),
+    trailing_stop_enabled: trailingEnabled,
+    trailing_stop_delta_percent: policyNumber(
+      trailingDistance,
+      5,
+      'trailing_stop_delta_percent',
+      0,
+      100,
+      !trailingEnabled,
+    ),
+    trailing_activation_percent: policyNumber(
+      value.trailing_activation_percent,
+      20,
+      'trailing_activation_percent',
+      0,
+      1000,
+      true,
+    ),
+  };
 }
 
 export function sniperExitPolicy(config: {
   tp_sl_enabled: boolean;
   take_profit_percent: number;
   stop_loss_percent: number;
-}): ExitPolicySnapshot {
-  const tp = Number(config.take_profit_percent);
-  const sl = Number(config.stop_loss_percent);
+}): Record<string, unknown> {
+  const tp = config.take_profit_percent;
+  const sl = config.stop_loss_percent;
   if (!(tp > 0 && tp <= 1000 && sl > 0 && sl <= 100)) {
     throw new Error('Invalid sniper TP/SL configuration');
   }

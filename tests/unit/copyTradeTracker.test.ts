@@ -114,10 +114,133 @@ describe('CopyTradeTracker risk controls', () => {
   });
 });
 
+describe('CopyTradeTracker durable delivery', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const target = {
+    id: 'target-1',
+    user_id: 7,
+    target_wallet_address: '11111111111111111111111111111111',
+    label: null,
+    max_buy_usd: 10,
+    is_active: true,
+    created_at: '2026-10-11T00:00:00Z',
+    updated_at: '2026-10-11T00:00:00Z',
+  };
+
+  const delivery = {
+    id: 'delivery-1',
+    target_id: target.id,
+    user_id: target.user_id,
+    target_wallet_address: target.target_wallet_address,
+    source_signature: bs58.encode(Buffer.alloc(64, 2)),
+    token_mint: 'TokenMint111111111111111111111111111111111',
+    max_buy_usd: 10,
+    status: 'PROCESSING',
+    attempts: 1,
+    trade_id: null,
+    last_error: null,
+  };
+
+  it('persists follower deliveries before attempting execution', async () => {
+    const repo: any = {
+      getAllActiveTargets: vi.fn().mockResolvedValue([target]),
+      enqueueDeliveries: vi.fn().mockResolvedValue(undefined),
+      claimNextDelivery: vi.fn().mockResolvedValue(null),
+    };
+    const tracker = new CopyTradeTracker(
+      {} as any, repo, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any,
+    );
+
+    await (tracker as any).executeCopies(
+      target.target_wallet_address,
+      delivery.token_mint,
+      delivery.source_signature,
+    );
+
+    expect(repo.enqueueDeliveries).toHaveBeenCalledWith(
+      [target],
+      delivery.token_mint,
+      delivery.source_signature,
+    );
+    expect(repo.claimNextDelivery).toHaveBeenCalled();
+  });
+
+  it('schedules a retry when transient market data is unavailable', async () => {
+    const repo: any = {
+      findDeliveredTradeId: vi.fn().mockResolvedValue(null),
+      getActiveTargetById: vi.fn().mockResolvedValue(target),
+      finishDelivery: vi.fn().mockResolvedValue(undefined),
+    };
+    const tracker = new CopyTradeTracker(
+      {} as any,
+      repo,
+      {} as any,
+      { scanTokenByAddress: vi.fn().mockResolvedValue(null) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { sendMessage: vi.fn() },
+    );
+
+    await (tracker as any).processDelivery(delivery);
+
+    expect(repo.finishDelivery).toHaveBeenCalledWith(
+      delivery.id,
+      delivery.attempts,
+      'RETRY',
+      expect.stringContaining('market data'),
+    );
+  });
+
+  it('completes a reclaimed delivery from its exact existing trade without executing again', async () => {
+    const repo: any = {
+      findDeliveredTradeId: vi.fn().mockResolvedValue('trade-existing'),
+      finishDelivery: vi.fn().mockResolvedValue(undefined),
+      getActiveTargetById: vi.fn(),
+    };
+    const trader: any = { executeOrder: vi.fn() };
+    const scanner: any = { scanTokenByAddress: vi.fn() };
+    const tracker = new CopyTradeTracker(
+      {} as any, repo, trader, scanner, {} as any,
+      {} as any, {} as any, {} as any, { sendMessage: vi.fn() },
+    );
+
+    await (tracker as any).processDelivery(delivery);
+
+    expect(repo.finishDelivery).toHaveBeenCalledWith(
+      delivery.id,
+      delivery.attempts,
+      'COMPLETED',
+      undefined,
+      'trade-existing',
+    );
+    expect(repo.getActiveTargetById).not.toHaveBeenCalled();
+    expect(scanner.scanTokenByAddress).not.toHaveBeenCalled();
+    expect(trader.executeOrder).not.toHaveBeenCalled();
+  });
+
+  it('marks an ambiguous broadcast for manual attention and never retries it', () => {
+    const tracker = new CopyTradeTracker(
+      {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any,
+    );
+    expect((tracker as any).classifyDeliveryFailure(
+      'copy BUY outcome ambiguous; reservation abc retained',
+      1,
+    )).toBe('NEEDS_ATTENTION');
+  });
+});
+
 describe('copy-trade source transaction verification', () => {
   const target = '11111111111111111111111111111111';
   const tokenMint = 'TokenMint111111111111111111111111111111111';
   const wsolMint = 'So11111111111111111111111111111111111111112';
+  const tokenAccount = 'TokenAccount1111111111111111111111111111111';
+  const wsolAccount = 'WsolAccount11111111111111111111111111111111';
+  const jupiterProgram = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4';
 
   it('accepts only a canonical 64-byte base58 transaction signature', () => {
     expect(isValidSolanaSignature(bs58.encode(Buffer.alloc(64, 1)))).toBe(true);
@@ -132,25 +255,50 @@ describe('copy-trade source transaction verification', () => {
     fee?: number;
     preTokens?: Array<{ mint: string; amount: string }>;
     postTokens?: Array<{ mint: string; amount: string }>;
+    includeSwapInstruction?: boolean;
+    swapOutputAccount?: string;
     err?: unknown;
   } = {}): any {
-    const toBalances = (balances: Array<{ mint: string; amount: string }>) => balances.map((balance, accountIndex) => ({
-      accountIndex,
+    const accountKeys = [target, tokenAccount, wsolAccount].map((address, accountIndex) => ({
+      pubkey: { toBase58: () => address },
+      signer: accountIndex === 0 ? options.signer ?? true : false,
+    }));
+    const toBalances = (balances: Array<{ mint: string; amount: string }>) => balances.map((balance) => ({
+      accountIndex: balance.mint === wsolMint ? 2 : 1,
       mint: balance.mint,
       owner: target,
       uiTokenAmount: { amount: balance.amount, decimals: 6, uiAmount: null, uiAmountString: balance.amount },
     }));
     return {
       transaction: {
-        message: { accountKeys: [{ pubkey: { toBase58: () => target }, signer: options.signer ?? true }] },
+        message: {
+          accountKeys,
+          instructions: options.includeSwapInstruction === false ? [] : [{
+            programId: { toBase58: () => jupiterProgram },
+            accounts: [target, options.swapOutputAccount ?? tokenAccount, wsolAccount]
+              .map((address) => ({ toBase58: () => address })),
+            data: '',
+          }],
+        },
       },
       meta: {
         err: options.err ?? null,
         fee: options.fee ?? 5_000,
-        preBalances: [options.preLamports ?? 2_000_000_000],
-        postBalances: [options.postLamports ?? 1_899_995_000],
+        preBalances: [options.preLamports ?? 2_000_000_000, 0, 0],
+        postBalances: [options.postLamports ?? 1_899_995_000, 0, 0],
         preTokenBalances: toBalances(options.preTokens ?? []),
         postTokenBalances: toBalances(options.postTokens ?? [{ mint: tokenMint, amount: '1000000' }]),
+        innerInstructions: options.includeSwapInstruction === false ? [] : [{
+          index: 0,
+          instructions: [{
+            program: 'spl-token',
+            programId: { toBase58: () => 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+            parsed: {
+              type: 'transferChecked',
+              info: { destination: options.swapOutputAccount ?? tokenAccount },
+            },
+          }],
+        }],
       },
     };
   }
@@ -193,6 +341,16 @@ describe('copy-trade source transaction verification', () => {
       nativeSpendLamports: 100_000_000n,
       wrappedSolSpendRaw: 0n,
     });
+  });
+
+  it('rejects matching balance deltas when no allowlisted swap instruction proves causality', () => {
+    expect(extractVerifiedTargetBuy(transaction({ includeSwapInstruction: false }), target)).toBeNull();
+  });
+
+  it('rejects a swap instruction that does not reference the credited output account', () => {
+    expect(extractVerifiedTargetBuy(transaction({
+      swapOutputAccount: 'UnrelatedAccount11111111111111111111111111111',
+    }), target)).toBeNull();
   });
 
   it('accepts one token bought by spending wrapped SOL', () => {

@@ -22,6 +22,7 @@ export interface TradeRecord {
   pnl_percent?: number | null;
   status: 'RESERVED' | 'SIGNED' | 'BROADCAST_ATTEMPTED' | 'PENDING' | 'OPEN' | 'PARTIAL_EXIT' | 'CLOSED' | 'FAILED';
   strategy?: 'TRENDING' | 'NEW_TOKEN_SNIPER' | 'COPY_TRADE';
+  strategy_reservation_id?: string | null;
   copy_source_signature?: string | null;
   copy_target_wallet?: string | null;
   exit_policy_snapshot?: Record<string, unknown> | null;
@@ -60,6 +61,12 @@ export interface ExitAttemptRecord {
   worker_id?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface RealizedPnlEvent {
+  trade_id: string;
+  realized_pnl_sol: number;
+  occurred_at: string;
 }
 
 export class TradeRepository {
@@ -338,6 +345,18 @@ export class TradeRepository {
       throw new Error(`Failed to getClosedTradesToday: ${error.message}`);
     }
     return data as TradeRecord[];
+  }
+
+  async getDailyRealizedPnlEvents(userId: number, timezone: string): Promise<RealizedPnlEvent[]> {
+    const { data, error } = await this.db.rpc('get_daily_realized_pnl_events', {
+      p_user_id: userId,
+      p_timezone: timezone,
+    });
+
+    if (error) {
+      throw new Error(`Failed to getDailyRealizedPnlEvents: ${error.message}`);
+    }
+    return (data || []) as RealizedPnlEvent[];
   }
 }
 

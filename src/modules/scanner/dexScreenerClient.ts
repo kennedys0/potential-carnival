@@ -54,4 +54,41 @@ export class DexScreenerClient {
       return null;
     }
   }
+
+  async getTokensData(tokenAddresses: string[]): Promise<Map<string, DexScreenerPair>> {
+    const result = new Map<string, DexScreenerPair>();
+    if (!tokenAddresses || tokenAddresses.length === 0) return result;
+
+    const batchSize = 30;
+    for (let i = 0; i < tokenAddresses.length; i += batchSize) {
+      const batch = tokenAddresses.slice(i, i + batchSize);
+      try {
+        const url = `${this.baseUrl}/${batch.join(',')}`;
+        const res = await fetch(url, {
+          signal: AbortSignal.timeout(MARKET_DATA_FETCH_TIMEOUT_MS),
+        });
+        if (!res.ok) continue;
+        const data: any = await res.json();
+        const pairs: any[] = data.pairs ?? [];
+
+        for (const tokenAddr of batch) {
+          const matchingPairs = pairs
+            .filter((p: any) =>
+              p.chainId === 'solana'
+              && p.baseToken?.address === tokenAddr
+              && Number.isFinite(Number(p.priceUsd))
+              && Number(p.priceUsd) > 0
+            )
+            .sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
+
+          if (matchingPairs.length > 0) {
+            result.set(tokenAddr, matchingPairs[0]);
+          }
+        }
+      } catch {
+        // continue to next batch if any
+      }
+    }
+    return result;
+  }
 }

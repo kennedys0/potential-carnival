@@ -14,10 +14,19 @@ export class GeckoTerminalClient {
   ): Promise<Candle[]> {
     try {
       const url = `${this.baseUrl}/networks/${network}/pools/${poolAddress}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}`;
-      const res = await fetch(url, {
+      let res = await fetch(url, {
+        headers: { 'Accept': 'application/json;version=20230302' },
         signal: AbortSignal.timeout(MARKET_DATA_FETCH_TIMEOUT_MS),
       });
       
+      if (res.status === 429) {
+        await new Promise((r) => setTimeout(r, 2000));
+        res = await fetch(url, {
+          headers: { 'Accept': 'application/json;version=20230302' },
+          signal: AbortSignal.timeout(MARKET_DATA_FETCH_TIMEOUT_MS),
+        });
+      }
+
       if (!res.ok) return [];
 
       const data: any = await res.json();

@@ -159,3 +159,37 @@ test('040 persists finalized copy-trade source proof and blocks durable replay',
   assert.match(sql, /COPY_TRADE requires a valid source signature and target wallet/);
   assert.match(sql, /REVOKE ALL ON FUNCTION public\.enforce_copy_trade_source_proof\(\)/);
 });
+
+test('transaction integrity migration binds reservations to one exact trade', () => {
+  const sql = load('20261011161605_transaction_integrity_hardening.sql');
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS strategy_reservation_id UUID/);
+  assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS trades_strategy_reservation_unique/);
+  assert.match(sql, /AUTOPILOT BUY requires an exact strategy reservation/);
+  assert.match(sql, /t\.strategy_reservation_id = p_id/);
+  assert.match(sql, /t\.strategy_reservation_id = v_reservation\.id/);
+  assert.doesNotMatch(
+    sql.slice(
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.release_strategy_reservation'),
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.reconcile_stale_strategy_reservations'),
+    ),
+    /t\.user_id\s*=\s*v_record\.user_id[\s\S]*t\.token_mint\s*=\s*v_record\.token_mint/,
+  );
+  assert.match(sql, /FOR UPDATE SKIP LOCKED/);
+  assert.match(sql, /get_daily_realized_pnl_events/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.get_daily_realized_pnl_events/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.get_daily_realized_pnl_events/);
+  assert.match(sql, /v_entry_fee_share_lamports/);
+  assert.match(sql, /COALESCE\(v_trade\.fee_lamports, 0\) \* v_cumulative_sold_raw/);
+  assert.match(sql, /v_realized_pnl_sol := v_sol_received - v_basis_sol - v_exit_fee_sol/);
+  const latestExitFunction = sql.slice(sql.lastIndexOf('CREATE OR REPLACE FUNCTION public.atomic_reconcile_exit'));
+  assert.doesNotMatch(latestExitFunction, /SET\s+tx_signature\s*=/i);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.copy_trade_deliveries/);
+  assert.match(sql, /UNIQUE \(user_id, target_wallet_address, source_signature\)/);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.claim_copy_trade_delivery/);
+  assert.match(sql, /FOR UPDATE SKIP LOCKED/);
+  assert.match(sql, /candidate\.status = 'PROCESSING'/);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.finish_copy_trade_delivery/);
+  assert.match(sql, /t\.copy_source_signature = d\.source_signature/);
+  assert.match(sql, /REVOKE ALL ON TABLE public\.copy_trade_deliveries FROM PUBLIC, anon, authenticated/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.claim_copy_trade_delivery\(\) TO service_role/);
+});

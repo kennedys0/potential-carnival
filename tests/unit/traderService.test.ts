@@ -158,6 +158,36 @@ describe('TraderService', () => {
     expect(mockTradeRepo.createTrade).not.toHaveBeenCalled();
   });
 
+  it('persists the exact strategy reservation id on a paper autopilot trade', async () => {
+    const tradeRepo: any = {
+      createTrade: vi.fn().mockImplementation(async (trade: any) => ({ id: 'paper-trade', ...trade })),
+    };
+    const service = new TraderService(
+      tradeRepo,
+      {} as any,
+      {} as any,
+      undefined,
+      {
+        refreshForExecution: vi.fn().mockResolvedValue(true),
+      } as any,
+    );
+    await service.executeOrder({
+      userId: 1,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'TEST',
+      solAmount: 0.1,
+      currentPriceUsd: 1,
+      isDryRun: true,
+      source: 'AUTOPILOT',
+      strategy: 'TRENDING',
+      strategyReservationId: 'reservation-exact',
+    });
+
+    expect(tradeRepo.createTrade).toHaveBeenCalledWith(expect.objectContaining({
+      strategy_reservation_id: 'reservation-exact',
+    }));
+  });
+
   it('rejects live trade if SOL balance is insufficient', async () => {
     const mockWalletService: any = {
       getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),

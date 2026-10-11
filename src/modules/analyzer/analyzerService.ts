@@ -164,73 +164,56 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
     while (attempts < maxAttempts) {
       attempts++;
       try {
-        let analysis: AiAnalysis;
-        if (typeof this.llmClient.analyze === 'function') {
-          const result = await this.llmClient.analyze({
-            tokenSymbol,
-            currentPrice,
-            indicators,
-            securityFlags,
-            systemPrompt,
-          });
-          if (!result) throw new Error('LLM analysis returned null');
-          analysis = result;
-        } else {
-        const prompt = `Analisa scalping untuk token ${tokenSymbol} pada harga $${currentPrice}. Indikator: EMA9=${indicators.ema9}, EMA21=${indicators.ema21}, RSI14=${indicators.rsi14}, ATR14=${indicators.atr14}, VWAP=${indicators.vwap}, VolumeSpike=${indicators.volumeSpikeRatio}x. Macro (15m): EMA9=${indicators.macroEma9}, EMA21=${indicators.macroEma21}, RSI14=${indicators.macroRsi14}. StopLoss=$${indicators.calculatedStopLoss}, TP1=$${indicators.calculatedTp1}, TP2=$${indicators.calculatedTp2}. Flags: ${securityFlags.join(', ')}. Berikan response valid JSON sesuai schema.`;
-        const response = await this.llmClient.messages.create({
-          model: appSettings.FALLBACK_AI_MODEL,
-          max_tokens: 1000,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: prompt }
-          ],
+        const result = await this.llmClient.analyze({
+          tokenSymbol,
+          currentPrice,
+          indicators,
+          securityFlags,
+          systemPrompt,
         });
+        // Provider failures already have bounded, sanitized diagnostics and
+        // a cooldown. Retrying a null result immediately only duplicates a
+        // request against the same unavailable endpoint.
+        if (!result) return null;
+        const analysis: AiAnalysis = result;
 
-        // Strip backticks if the LLM wrapped it in markdown
-        let textResponse = response.content[0].text.trim();
-        if (textResponse.startsWith('```json')) textResponse = textResponse.replace(/```json\n?/, '');
-        if (textResponse.startsWith('```')) textResponse = textResponse.replace(/```\n?/, '');
-        if (textResponse.endsWith('```')) textResponse = textResponse.replace(/```$/, '');
+        // Validasi LLM output: SL < entry < TP
+        if (analysis.verdict === 'BUY') {
+          if (analysis.stop_loss_usd >= currentPrice) {
+            throw new Error('Inconsistent LLM output: SL >= Entry');
+          }
+          const minTp = analysis.take_profit_levels.reduce((min, tp) => Math.min(min, tp.price_usd), Infinity);
+          if (minTp <= currentPrice) {
+            throw new Error('Inconsistent LLM output: TP <= Entry');
+          }
 
-        const parsed = JSON.parse(textResponse);
-        analysis = AiAnalysisSchema.parse(parsed);
+          // Probabilistic Calibration & Hallucination Check
+          const calculatedRisk = currentPrice - analysis.stop_loss_usd;
+          const calculatedReward = minTp - currentPrice;
+          const actualRR = calculatedReward / calculatedRisk;
+
+          if (Math.abs(analysis.risk_reward_ratio - actualRR) > 1.0) {
+            logger.warn({ claimedRR: analysis.risk_reward_ratio, actualRR }, 'AI Hallucination detected in R:R math. Calibrating...');
+            analysis.confidence = Math.max(0, analysis.confidence - 20);
+            analysis.risk_reward_ratio = actualRR;
+          }
+
+          if (analysis.confidence > 90) {
+            analysis.confidence = 90; // Cap overconfidence
+          }
+        }
+
+        return analysis;
+      } catch (err: any) {
+        logger.warn(`LLM attempt ${attempts} failed: ${err.message}`);
+        if (attempts >= maxAttempts) {
+          return null;
+        }
+        const delayMs = process.env.NODE_ENV === 'test' ? 10 : 1000;
+        await new Promise((res) => setTimeout(res, delayMs));
       }
+    } // end while
 
-      // Validasi LLM output: SL < entry < TP
-      if (analysis.verdict === 'BUY') {
-        if (analysis.stop_loss_usd >= currentPrice) {
-          throw new Error('Inconsistent LLM output: SL >= Entry');
-        }
-        const minTp = analysis.take_profit_levels.reduce((min, tp) => Math.min(min, tp.price_usd), Infinity);
-        if (minTp <= currentPrice) {
-          throw new Error('Inconsistent LLM output: TP <= Entry');
-        }
-        
-        // Probabilistic Calibration & Hallucination Check
-        const calculatedRisk = currentPrice - analysis.stop_loss_usd;
-        const calculatedReward = minTp - currentPrice;
-        const actualRR = calculatedReward / calculatedRisk;
-        
-        if (Math.abs(analysis.risk_reward_ratio - actualRR) > 1.0) {
-           logger.warn({ claimedRR: analysis.risk_reward_ratio, actualRR }, 'AI Hallucination detected in R:R math. Calibrating...');
-           analysis.confidence = Math.max(0, analysis.confidence - 20);
-           analysis.risk_reward_ratio = actualRR;
-        }
-        
-        if (analysis.confidence > 90) {
-           analysis.confidence = 90; // Cap overconfidence
-        }
-      }
-
-      return analysis;
-    } catch (err: any) {
-      logger.warn(`LLM attempt ${attempts} failed: ${err.message}`);
-      if (attempts >= maxAttempts) {
-        return null;
-      }
-    }
-  } // end while
-
-  return null;
+    return null;
   }
 }

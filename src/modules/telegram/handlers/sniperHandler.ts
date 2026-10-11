@@ -10,53 +10,53 @@ export async function handleSniperSettings(
   const modeTag = config.trading_mode === 'PAPER' ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN';
 
   const text = `
-⚙️ <b>New Token Sniper Settings</b>
-
-• <b>Status:</b> ${config.enabled ? '🟢 Enabled' : '🔴 Disabled'}
+⚡ <b>Pengaturan New Token Sniper</b>
+───────────────────────────
+• <b>Status:</b> ${config.enabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}
 • <b>Mode Eksekusi:</b> ${modeTag}
 
-<b>Trading Rules:</b>
-• <b>Ukuran Buy:</b> ${config.buy_amount_sol} SOL
-• <b>Max Daily Buys:</b> ${config.max_buys_per_day}
-• <b>Max Daily Budget:</b> ${config.max_daily_entry_budget_sol} SOL
-• <b>Max Active Positions:</b> ${config.max_active_positions}
-• <b>Pool Age:</b> ${config.min_pool_age_seconds}s–${config.max_pool_age_minutes}min
+<b>Aturan Trading & Ukuran:</b>
+• <b>Ukuran Buy:</b> <code>${config.buy_amount_sol} SOL</code>
+• <b>Max Daily Buys:</b> <code>${config.max_buys_per_day} Trade</code>
+• <b>Max Daily Budget:</b> <code>${config.max_daily_entry_budget_sol} SOL</code>
+• <b>Max Posisi Aktif:</b> <code>${config.max_active_positions} Posisi</code>
+• <b>Rentang Umur Pool:</b> <code>${config.min_pool_age_seconds}d – ${config.max_pool_age_minutes}m</code>
 
-<b>Safety Filters:</b>
-• <b>Minimum Safety Score:</b> ${config.minimum_safety_score}/100
-• <b>Minimum Liquidity:</b> $${config.min_liquidity_usd}
-• <b>Max Slippage:</b> ${config.max_slippage_bps / 100}% (tetap dibatasi oleh global cap)
+<b>Filter Keamanan & Slippage:</b>
+• <b>Minimum Safety Score:</b> <code>${config.minimum_safety_score}/100</code>
+• <b>Minimum Likuiditas:</b> <code>$${config.min_liquidity_usd.toLocaleString('en-US')}</code>
+• <b>Max Slippage:</b> <code>${config.max_slippage_bps / 100}%</code>
 
-<b>Exits:</b>
-• <b>Take Profit:</b> +${config.take_profit_percent}%
-• <b>Stop Loss:</b> -${config.stop_loss_percent}%
-
-<i>Pilih pengaturan yang ingin diubah:</i>
+<b>Target Exit Otomatis:</b>
+• <b>Take Profit (TP):</b> <code>+${config.take_profit_percent}%</code>
+• <b>Stop Loss (SL):</b> <code>-${config.stop_loss_percent}%</code>
+───────────────────────────
+<i>Tap tombol di bawah untuk mengubah nilai secara langsung:</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text(config.enabled ? '⏸ Turn OFF Sniper' : '▶️ Turn ON Sniper', 'sniper_toggle')
+    .text(config.enabled ? '⏸ Matikan Sniper' : '⚡ Nyalakan Sniper', 'sniper_toggle')
+    .text(`🔄 Mode: ${config.trading_mode}`, 'sniper_settings_mode')
     .row()
-    .text('🔄 Mode Eksekusi', 'sniper_settings_mode')
-    .text('📏 Buy Amount', 'sniper_settings_amount')
+    .text(`📏 Size: ${config.buy_amount_sol} SOL`, 'sniper_settings_amount')
+    .text(`🎯 TP: +${config.take_profit_percent}%`, 'sniper_settings_tp')
     .row()
-    .text('📈 Take Profit', 'sniper_settings_tp')
-    .text('📉 Stop Loss', 'sniper_settings_sl')
+    .text(`🛑 SL: -${config.stop_loss_percent}%`, 'sniper_settings_sl')
+    .text(`🔢 Max: ${config.max_active_positions} Pos`, 'sniper_settings_positions')
     .row()
-    .text('🔢 Max Positions', 'sniper_settings_positions')
-    .text('🗓 Max Daily Buys', 'sniper_settings_daily_buys')
+    .text(`💰 Budget: ${config.max_daily_entry_budget_sol} SOL`, 'sniper_settings_daily_budget')
+    .text(`🗓 Daily: ${config.max_buys_per_day}x`, 'sniper_settings_daily_buys')
     .row()
-    .text('💰 Daily Budget', 'sniper_settings_daily_budget')
-    .text('⏱ Max Pool Age', 'sniper_settings_pool_age')
+    .text(`🛡 Min: ${config.minimum_safety_score}/100`, 'sniper_settings_safety')
+    .text(`💧 Liq: $${config.min_liquidity_usd >= 1000 ? `${config.min_liquidity_usd / 1000}k` : config.min_liquidity_usd}`, 'sniper_settings_liquidity')
     .row()
-    .text('💧 Min Liquidity', 'sniper_settings_liquidity')
-    .text('🛡 Min Safety', 'sniper_settings_safety')
+    .text(`⏱ Max Umur: ${config.max_pool_age_minutes}m`, 'sniper_settings_pool_age')
+    .text(`🎚 Slip: ${config.max_slippage_bps / 100}%`, 'sniper_settings_slippage')
     .row()
-    .text('🎚 Slippage Cap', 'sniper_settings_slippage')
+    .text('🔔 Toggle Notifikasi Live Feed', 'toggle_livefeed')
     .row()
-    .text('🔔 Toggle Live Feed', 'toggle_livefeed')
-    .row()
-    .text('⬅️ Back to Automation Center', 'menu_autopilot');
+    .text('🔙 Automation Center', 'menu_autopilot')
+    .text('🏠 Dashboard', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {

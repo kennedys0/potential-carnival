@@ -281,4 +281,46 @@ describe('MonitorWorker', () => {
     expect(traderService.closePosition).not.toHaveBeenCalled();
   });
 
+  it('fails safe and marks attention when a stored exit policy is malformed', async () => {
+    const trade = {
+      id: 'invalid-policy',
+      user_id: 111,
+      token_mint: 'token-invalid',
+      token_symbol: 'BAD',
+      source: 'AUTOPILOT',
+      status: 'OPEN',
+      is_dry_run: true,
+      entry_price_usd: 1,
+      exit_policy_snapshot: {
+        enabled: true,
+        tp1_percent: 50,
+        tp2_percent: 20,
+        sl_percent: -1,
+      },
+    };
+    const tradeRepo: any = {
+      getOpenTradesByUserId: vi.fn().mockResolvedValue([trade]),
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const traderService: any = { closePosition: vi.fn() };
+    const scannerService: any = { scanTokenByAddress: vi.fn() };
+    const worker: any = createMonitorWorker(
+      tradeRepo,
+      traderService,
+      scannerService,
+      {} as any,
+      {} as any,
+      mockBotApi,
+    );
+
+    await worker.processor({ data: { positionId: trade.id, userId: 111, tokenMint: trade.token_mint } });
+
+    expect(tradeRepo.updateTradeStatus).toHaveBeenCalledWith(trade.id, expect.objectContaining({
+      needs_attention: true,
+      last_exit_error: expect.stringContaining('Invalid exit policy'),
+    }));
+    expect(scannerService.scanTokenByAddress).not.toHaveBeenCalled();
+    expect(traderService.closePosition).not.toHaveBeenCalled();
+  });
+
 });

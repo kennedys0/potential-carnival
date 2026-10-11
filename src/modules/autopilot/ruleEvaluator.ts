@@ -116,7 +116,11 @@ export class RuleEvaluator {
     // 5. AI Verdict & Criteria
     if (!ai) {
       if (aiParams.requireAi !== false) {
-        rulesFailed.push('AI analysis unavailable');
+        if (!indicators) {
+          rulesFailed.push('Riwayat candle belum cukup untuk kalkulasi teknikal (<21 candle)');
+        } else {
+          rulesFailed.push('Layanan AI tidak merespons (AI analysis unavailable)');
+        }
       } else {
         // Fallback mode: Use technical indicators instead of blindly passing
         if (indicators) {

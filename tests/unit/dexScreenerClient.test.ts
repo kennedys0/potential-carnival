@@ -55,4 +55,47 @@ describe('DexScreenerClient', () => {
     expect(data?.baseToken.symbol).toBe('RIGHT');
     expect(data?.priceUsd).toBe('2');
   });
+
+  it('fetches multiple token addresses in batches and returns map of best pairs', async () => {
+    const tokenA = 'TokenA1111111111111111111111111111111111111';
+    const tokenB = 'TokenB2222222222222222222222222222222222222';
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        pairs: [
+          {
+            chainId: 'solana',
+            baseToken: { address: tokenA, symbol: 'TOKA' },
+            priceUsd: '0.05',
+            liquidity: { usd: 50_000 },
+          },
+          {
+            chainId: 'solana',
+            baseToken: { address: tokenB, symbol: 'TOKB_LOW' },
+            priceUsd: '1.20',
+            liquidity: { usd: 10_000 },
+          },
+          {
+            chainId: 'solana',
+            baseToken: { address: tokenB, symbol: 'TOKB_HIGH' },
+            priceUsd: '1.25',
+            liquidity: { usd: 200_000 },
+          },
+        ],
+      }),
+    });
+    global.fetch = mockFetch;
+
+    const client = new DexScreenerClient();
+    const map = await client.getTokensData([tokenA, tokenB]);
+
+    expect(map.size).toBe(2);
+    expect(map.get(tokenA)?.baseToken.symbol).toBe('TOKA');
+    expect(map.get(tokenB)?.baseToken.symbol).toBe('TOKB_HIGH');
+    expect(map.get(tokenB)?.liquidity.usd).toBe(200_000);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `https://api.dexscreener.com/latest/dex/tokens/${tokenA},${tokenB}`,
+      expect.any(Object)
+    );
+  });
 });

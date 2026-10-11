@@ -26,36 +26,48 @@ export async function handleDashboardMenu(
   
   // Computed values
   const isPaper = config.mode === 'PAPER';
-  const modeBadge = isPaper ? '🟢 [PAPER]' : '⚡ [LIVE]';
+  const modeBadge = isPaper ? '🟢 [PAPER] (Simulasi)' : '⚡ [LIVE] (On-Chain)';
   const autopilotStatus = config.is_active ? '🟢 AKTIF' : '⏸ JEDA';
   const cbStatus = stats.isCircuitBroken ? '🔴 TERPICU' : '🟢 AMAN';
   const pnlSign = stats.dailyRealizedPnlSol >= 0 ? '+' : '';
   const pnlIdr = currencyService.solToIdr(stats.dailyRealizedPnlSol);
+  const pnlIdrStr = pnlIdr !== null ? ` (≈ ${pnlSign}${currencyService.formatIdr(pnlIdr)})` : '';
   const balanceIdr = currencyService.solToIdr(balance.sol);
-  
+  const balanceIdrStr = balanceIdr !== null ? ` (≈ ${currencyService.formatIdr(balanceIdr)})` : '';
+
+  const shortPubkey = `${wallet.publicKey.slice(0, 4)}...${wallet.publicKey.slice(-4)}`;
+  const timeStr = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' });
+
   const text = `
-📊 <b>DASHBOARD</b>
+💎 <b>DASHBOARD UTAMA</b>
+───────────────────────────
+⚙️ <b>Status Sistem & Risiko</b>
+• <b>Mode:</b> ${modeBadge}
+• <b>Autopilot:</b> ${autopilotStatus}
+• <b>Circuit Breaker:</b> ${cbStatus}
+• <b>Realized PnL:</b> <code>${pnlSign}${stats.dailyRealizedPnlSol.toFixed(4)} SOL</code>${pnlIdrStr}
 
-<b>Status Sistem</b>
-• Mode: ${modeBadge}
-• Autopilot: ${autopilotStatus}
-• Risiko: ${cbStatus} (Harian: ${pnlSign}${stats.dailyRealizedPnlSol.toFixed(4)} SOL ≈ ${pnlSign}${currencyService.formatIdr(pnlIdr)})
+💳 <b>Dompet & Saldo</b>
+• <b>Saldo:</b> <code>${balance.sol.toFixed(4)} SOL</code>${balanceIdrStr}
+• <b>Wallet:</b> <code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
 
-<b>Dompet & Portofolio</b>
-• Saldo: <code>${balance.sol.toFixed(4)} SOL</code> (≈ ${currencyService.formatIdr(balanceIdr)})
-• Posisi Aktif: <b>${openTrades.length} Terbuka</b>
-
-<i>Gunakan menu di bawah untuk navigasi cepat:</i>
+📊 <b>Portofolio Trading</b>
+• <b>Posisi Terbuka:</b> <b>${openTrades.length} Posisi Aktif</b>
+───────────────────────────
+🕒 <i>Diperbarui: ${timeStr} WIB</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text('📊 Portfolio', 'menu_positions')
-    .text('💳 Wallet', 'menu_wallet')
+    .text('🔍 Scan Token', 'menu_scan')
+    .text(`📊 Portofolio (${openTrades.length})`, 'menu_positions')
     .row()
+    .text('💳 Dompet & Saldo', 'menu_wallet')
     .text('🤖 Autopilot', 'menu_autopilot')
-    .text('⚙️ Settings', 'menu_settings')
     .row()
-    .text('🔄 Refresh', 'menu_main');
+    .text('⚙️ Pengaturan', 'menu_settings')
+    .text('📈 Laporan', 'menu_report')
+    .row()
+    .text('🔄 Refresh Dashboard', 'menu_main');
 
   if (ctx.callbackQuery) {
     const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;

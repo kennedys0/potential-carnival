@@ -2,7 +2,12 @@ import { Connection, ParsedTransactionWithMeta, PublicKey } from '@solana/web3.j
 import crypto from 'node:crypto';
 import { logger } from '../../utils/logger';
 import { currencyService } from '../../utils/currencyService';
-import { CopyTradeRepository, CopyTradeTarget } from '../../database/repositories/copyTradeRepository';
+import {
+  CopyTradeDelivery,
+  CopyTradeRepository,
+  CopyTradeTarget,
+} from '../../database/repositories/copyTradeRepository';
+import type { TradeRecord } from '../../database/repositories/tradeRepository';
 import { StrategyReservationRepository } from '../../database/repositories/strategyReservationRepository';
 import { TraderService } from '../trader/traderService';
 import { ScannerService } from '../scanner/scannerService';
@@ -14,9 +19,14 @@ import { getRedisConnection } from '../../queue/connection';
 import { escapeHtml } from '../telegram/formatters/messageFormatter';
 import { appSettings } from '../../config/settings';
 import { RuleEvaluator } from '../autopilot/ruleEvaluator';
+import { parseExitPolicy } from '../autopilot/strategyRisk';
 import bs58 from 'bs58';
 
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+const COPY_SOURCE_SWAP_PROGRAM_IDS = new Set([
+  'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',
+  '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
+]);
 
 export function isValidSolanaSignature(signature: string): boolean {
   try {
@@ -43,6 +53,52 @@ function tokenBalancesByMint(
     totals.set(balance.mint, current + BigInt(balance.uiTokenAmount.amount));
   }
   return totals;
+}
+
+function accountAddress(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (value && typeof (value as { toBase58?: unknown }).toBase58 === 'function') {
+    return (value as { toBase58(): string }).toBase58();
+  }
+  return null;
+}
+
+function instructionAccounts(instruction: unknown): Set<string> {
+  if (!instruction || typeof instruction !== 'object' || !('accounts' in instruction)) return new Set();
+  const accounts = (instruction as { accounts?: unknown }).accounts;
+  if (!Array.isArray(accounts)) return new Set();
+  return new Set(accounts.map(accountAddress).filter((address): address is string => Boolean(address)));
+}
+
+function isOutputTransfer(instruction: unknown, outputAccounts: Set<string>): boolean {
+  if (!instruction || typeof instruction !== 'object' || !('parsed' in instruction)) return false;
+  const parsed = (instruction as { parsed?: unknown }).parsed;
+  if (!parsed || typeof parsed !== 'object') return false;
+  const parsedRecord = parsed as { type?: unknown; info?: unknown };
+  if (parsedRecord.type !== 'transfer' && parsedRecord.type !== 'transferChecked') return false;
+  if (!parsedRecord.info || typeof parsedRecord.info !== 'object') return false;
+  const destination = accountAddress((parsedRecord.info as { destination?: unknown }).destination);
+  return destination !== null && outputAccounts.has(destination);
+}
+
+function tokenAccountAddressesByMint(
+  transaction: ParsedTransactionWithMeta,
+  owner: string,
+): Map<string, Set<string>> {
+  const byMint = new Map<string, Set<string>>();
+  const keys = transaction.transaction.message.accountKeys;
+  for (const balance of [
+    ...(transaction.meta?.preTokenBalances ?? []),
+    ...(transaction.meta?.postTokenBalances ?? []),
+  ]) {
+    if (balance.owner !== owner) continue;
+    const address = accountAddress(keys[balance.accountIndex]?.pubkey);
+    if (!address) continue;
+    const addresses = byMint.get(balance.mint) ?? new Set<string>();
+    addresses.add(address);
+    byMint.set(balance.mint, addresses);
+  }
+  return byMint;
 }
 
 /**
@@ -84,6 +140,32 @@ export function extractVerifiedTargetBuy(
       .map(([mint]) => mint);
     if (boughtMints.length !== 1) return null;
 
+    const tokenAccounts = tokenAccountAddressesByMint(transaction, walletAddress);
+    const outputAccounts = tokenAccounts.get(boughtMints[0]) ?? new Set<string>();
+    const wrappedSolAccounts = tokenAccounts.get(WSOL_MINT) ?? new Set<string>();
+    if (outputAccounts.size === 0) return null;
+
+    const topLevelInstructions = transaction.transaction.message.instructions ?? [];
+    const innerByTopLevelIndex = new Map(
+      (transaction.meta.innerInstructions ?? []).map((group) => [group.index, group.instructions]),
+    );
+    const hasLinkedSwap = topLevelInstructions.some((instruction, index) => {
+      const programId = accountAddress(instruction.programId);
+      if (!programId || !COPY_SOURCE_SWAP_PROGRAM_IDS.has(programId)) return false;
+
+      const accounts = instructionAccounts(instruction);
+      if (!accounts.has(walletAddress)) return false;
+      if (![...outputAccounts].some((address) => accounts.has(address))) return false;
+      if (
+        wrappedSolSpendRaw > 0n
+        && ![...wrappedSolAccounts].some((address) => accounts.has(address))
+      ) return false;
+
+      return (innerByTopLevelIndex.get(index) ?? [])
+        .some((innerInstruction) => isOutputTransfer(innerInstruction, outputAccounts));
+    });
+    if (!hasLinkedSwap) return null;
+
     return { tokenMint: boughtMints[0], nativeSpendLamports, wrappedSolSpendRaw };
   } catch {
     return null;
@@ -93,6 +175,9 @@ export function extractVerifiedTargetBuy(
 export class CopyTradeTracker {
   private activeSubscriptions = new Map<string, number>();
   private activeTargets = new Set<string>();
+  private syncTimer?: NodeJS.Timeout;
+  private deliveryTimer?: NodeJS.Timeout;
+  private deliveryDrainRunning = false;
 
   constructor(
     private readonly connection: Connection,
@@ -108,11 +193,21 @@ export class CopyTradeTracker {
 
   async start(): Promise<void> {
     logger.info('Starting CopyTradeTracker...');
-    setInterval(() => this.syncTargets(), 30_000);
+    this.syncTimer = setInterval(() => this.syncTargets(), 30_000);
+    this.deliveryTimer = setInterval(() => {
+      void this.drainPendingDeliveries().catch((error) => {
+        logger.error({ err: error }, 'Error draining durable copy-trade deliveries');
+      });
+    }, 10_000);
     await this.syncTargets();
+    await this.drainPendingDeliveries();
   }
 
   stop(): void {
+    if (this.syncTimer) clearInterval(this.syncTimer);
+    if (this.deliveryTimer) clearInterval(this.deliveryTimer);
+    this.syncTimer = undefined;
+    this.deliveryTimer = undefined;
     for (const subscriptionId of this.activeSubscriptions.values()) {
       this.connection.removeOnLogsListener(subscriptionId).catch(() => undefined);
     }
@@ -165,14 +260,14 @@ export class CopyTradeTracker {
       return;
     }
     const redis = getRedisConnection();
-    const dedupeKey = `copy_tx_processed:${walletAddress}:${signature}`;
-    const claimed = await redis.set(dedupeKey, '1', 'EX', 7 * 24 * 60 * 60, 'NX');
+    const processingKey = `copy_tx_processing:${walletAddress}:${signature}`;
+    const processingOwner = crypto.randomUUID();
+    const claimed = await redis.set(processingKey, processingOwner, 'EX', 120, 'NX');
     if (!claimed) return;
 
     try {
       const transaction = await this.waitForFinalizedSourceTransaction(signature);
       if (!transaction) {
-        await redis.del(dedupeKey);
         logger.warn({ signature, walletAddress }, 'Copy trade skipped: source transaction did not finalize in time');
         return;
       }
@@ -184,8 +279,15 @@ export class CopyTradeTracker {
       }
       await this.executeCopies(walletAddress, verifiedBuy.tokenMint, signature);
     } catch (error) {
-      await redis.del(dedupeKey).catch(() => undefined);
       logger.error({ err: error, signature }, 'Error proving finalized copy-trade source transaction');
+    } finally {
+      const releaseScript = `
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+          return redis.call('del', KEYS[1])
+        end
+        return 0
+      `;
+      await redis.eval(releaseScript, 1, processingKey, processingOwner).catch(() => undefined);
     }
   }
 
@@ -212,29 +314,99 @@ export class CopyTradeTracker {
       .filter((target) => target.target_wallet_address === targetWallet);
     if (followers.length === 0) return;
 
-    const pair = await this.scannerService.scanTokenByAddress(tokenMint);
-    if (!pair) return;
-    const priceUsd = Number(pair.priceUsd);
-    if (!Number.isFinite(priceUsd) || priceUsd <= 0) return;
+    await this.copyTradeRepo.enqueueDeliveries(followers, tokenMint, sourceSignature);
+    await this.drainPendingDeliveries();
+  }
 
-    const security = await this.securityService.evaluateToken(tokenMint, {
-      liquidityUsd: pair.liquidity?.usd ?? null,
-      marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
-    });
+  private async drainPendingDeliveries(maxDeliveries = 25): Promise<void> {
+    if (this.deliveryDrainRunning) return;
+    this.deliveryDrainRunning = true;
+    try {
+      for (let processed = 0; processed < maxDeliveries; processed += 1) {
+        const delivery = await this.copyTradeRepo.claimNextDelivery();
+        if (!delivery) break;
+        await this.processDelivery(delivery);
+      }
+    } finally {
+      this.deliveryDrainRunning = false;
+    }
+  }
 
-    for (const follower of followers) {
-      try {
-        await this.executeFollower(follower, tokenMint, pair.baseToken.symbol, priceUsd, pair.liquidity?.usd ?? 0, security, sourceSignature);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn({ err: error, userId: follower.user_id, tokenMint }, 'Copy trade rejected');
+  private async processDelivery(delivery: CopyTradeDelivery): Promise<void> {
+    try {
+      const existingTradeId = await this.copyTradeRepo.findDeliveredTradeId(delivery);
+      if (existingTradeId) {
+        await this.copyTradeRepo.finishDelivery(
+          delivery.id,
+          delivery.attempts,
+          'COMPLETED',
+          undefined,
+          existingTradeId,
+        );
+        return;
+      }
+      if (!delivery.target_id) throw new Error('copy target was removed before delivery');
+      const currentTarget = await this.copyTradeRepo.getActiveTargetById(delivery.target_id, delivery.user_id);
+      if (!currentTarget || currentTarget.target_wallet_address !== delivery.target_wallet_address) {
+        throw new Error('copy target is no longer active');
+      }
+      const follower: CopyTradeTarget = {
+        ...currentTarget,
+        max_buy_usd: Math.min(currentTarget.max_buy_usd, delivery.max_buy_usd),
+      };
+      const pair = await this.scannerService.scanTokenByAddress(delivery.token_mint);
+      if (!pair) throw new Error('market data is temporarily unavailable');
+      const priceUsd = Number(pair.priceUsd);
+      if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
+        throw new Error('market price is temporarily unavailable');
+      }
+      const security = await this.securityService.evaluateToken(delivery.token_mint, {
+        liquidityUsd: pair.liquidity?.usd ?? null,
+        marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
+      });
+      const trade = await this.executeFollower(
+        follower,
+        delivery.token_mint,
+        pair.baseToken.symbol,
+        priceUsd,
+        pair.liquidity?.usd ?? 0,
+        security,
+        delivery.source_signature,
+      );
+      await this.copyTradeRepo.finishDelivery(
+        delivery.id,
+        delivery.attempts,
+        'COMPLETED',
+        undefined,
+        trade.id,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = this.classifyDeliveryFailure(message, delivery.attempts);
+      await this.copyTradeRepo.finishDelivery(delivery.id, delivery.attempts, status, message);
+      logger.warn({ err: error, deliveryId: delivery.id, userId: delivery.user_id }, 'Copy trade delivery failed');
+      if (status !== 'RETRY') {
         await this.botApi.sendMessage(
-          follower.user_id,
+          delivery.user_id,
           `⚠️ <b>Copy Trade Ditolak:</b> ${escapeHtml(message)}`,
           { parse_mode: 'HTML' },
         ).catch(() => undefined);
       }
     }
+  }
+
+  private classifyDeliveryFailure(
+    message: string,
+    attempts: number,
+  ): 'RETRY' | 'REJECTED' | 'NEEDS_ATTENTION' {
+    if (/outcome ambiguous|reservation .* retained/i.test(message)) return 'NEEDS_ATTENTION';
+    if (
+      /no longer active|was removed|autopilot is inactive|hard-block|critical security policy|security gate failed|circuit breaker|already held|risk limit rejected|atomic exposure|daily-budget|duplicate|invalid exit policy|requires a verified stop-loss/i
+        .test(message)
+    ) {
+      return 'REJECTED';
+    }
+    return attempts >= 5 ? 'NEEDS_ATTENTION' : 'RETRY';
   }
 
   private async executeFollower(
@@ -245,7 +417,7 @@ export class CopyTradeTracker {
     liquidityUsd: number,
     security: Awaited<ReturnType<SecurityFilterService['evaluateToken']>>,
     sourceSignature: string,
-  ): Promise<void> {
+  ): Promise<TradeRecord> {
     const config = await this.autopilotRepo.getOrCreateConfig(follower.user_id);
     if (!config.is_active) throw new Error('autopilot is inactive for this follower');
     const safety = config.safety_params as Record<string, unknown>;
@@ -306,6 +478,7 @@ export class CopyTradeTracker {
     if (!risk.allowed) throw new Error(risk.reason ?? 'risk limit rejected copy trade');
 
     const ownerToken = crypto.randomUUID();
+    const exitPolicy = parseExitPolicy({ enabled: true, ...config.exit_params });
     if (!await this.traderService.acquireBuyLock(follower.user_id, tokenMint, ownerToken, 30)) {
       throw new Error('another entry is already processing this token');
     }
@@ -343,7 +516,7 @@ export class CopyTradeTracker {
         strategy: 'COPY_TRADE',
         copySourceSignature: sourceSignature,
         copyTargetWallet: follower.target_wallet_address,
-        exitPolicy: { enabled: true, ...config.exit_params },
+        exitPolicy,
         strategyReservationId: reservationId,
       });
       if (trade.status === 'OPEN') await this.reservationRepo.finish(reservationId, 'COMPLETED');
@@ -357,6 +530,7 @@ export class CopyTradeTracker {
         `• <b>Mode:</b> ${isDryRun ? 'PAPER' : 'LIVE'}`,
         { parse_mode: 'HTML' },
       );
+      return trade;
     } catch (error) {
       if (reservationId) {
         const released = await this.reservationRepo.releaseIfUnbroadcast(reservationId);

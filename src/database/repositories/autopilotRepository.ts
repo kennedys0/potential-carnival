@@ -183,18 +183,32 @@ export class AutopilotRepository {
   }> {
     const state = await this.getAutopilotState(userId);
 
-    // Count BUY decisions as 'trades executed'
+    // A BUY decision is only a signal. Count durable trades that reached a
+    // submitted or filled state; RESERVED/FAILED candidates are not execution.
+    const executedStatuses = ['BROADCAST_ATTEMPTED', 'PENDING', 'OPEN', 'PARTIAL_EXIT', 'CLOSED'];
     const { count, error } = await this.db
-      .from('decision_logs')
+      .from('trades')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', userId)
-      .eq('action', 'BUY');
+      .eq('source', 'AUTOPILOT')
+      .eq('side', 'BUY')
+      .in('status', executedStatuses);
 
     if (error) throw new Error(`Failed to getStats count: ${error.message}`);
 
+    const { count: winCount, error: winError } = await this.db
+      .from('trades')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('source', 'AUTOPILOT')
+      .eq('side', 'BUY')
+      .eq('status', 'CLOSED')
+      .gt('realized_pnl_sol', 0);
+    if (winError) throw new Error(`Failed to getStats wins: ${winError.message}`);
+
     return {
       totalTrades: count ?? 0,
-      winCount: 0, // Win detection requires closed positions — tracked in autopilot_states
+      winCount: winCount ?? 0,
       dailyRealizedPnlSol: state?.daily_realized_pnl_sol ?? 0,
       consecutiveLosses: state?.consecutive_losses ?? 0,
       isCircuitBroken: state?.is_circuit_broken ?? false,

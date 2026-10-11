@@ -62,26 +62,26 @@ export async function handleWalletMenu(ctx: Context, walletService: WalletServic
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
-
+───────────────────────────
 🔑 <b>Alamat Deposit:</b>
 <code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
 
 💰 <b>Saldo Saat Ini:</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code>
 • <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ ${currencyService.formatUsd(solValueUsd)})
-• <i>Diperiksa: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
-
-<i>Deposit terdeteksi otomatis via WebSocket RPC.</i>
+───────────────────────────
+🕒 <i>Diperiksa: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
+<i>💡 Saldo deposit akan terdeteksi otomatis via WebSocket RPC.</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Saldo', 'wallet_refresh')
-    .text('💸 Withdraw', 'wallet_withdraw')
+    .text('💸 Withdraw Saldo', 'wallet_withdraw')
     .row();
   if (getEnv().PRIVATE_KEY_EXPORT_ENABLED) {
     keyboard.text('🔑 Export Private Key', 'wallet_export').row();
   }
-  keyboard.text('🏠 Menu Utama', 'menu_main');
+  keyboard.text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     const isPhotoMessage = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;
@@ -124,24 +124,25 @@ export async function handleWalletRefresh(ctx: Context, walletService: WalletSer
 
   const text = `
 💳 <b>Manajemen Wallet Solana</b>
-
+───────────────────────────
 🔑 <b>Alamat Deposit:</b>
 <code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
 
 💰 <b>Saldo Saat Ini (Terbaru):</b>
 • <b>SOL:</b> <code>${balance.sol.toFixed(4)} SOL</code>
 • <b>IDR:</b> <code>${currencyService.formatIdr(solValueIdr)}</code> (≈ ${currencyService.formatUsd(solValueUsd)})
-• <i>Diperbarui pada: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
+───────────────────────────
+🕒 <i>Diperbarui: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Saldo', 'wallet_refresh')
-    .text('💸 Withdraw', 'wallet_withdraw')
+    .text('💸 Withdraw Saldo', 'wallet_withdraw')
     .row();
   if (getEnv().PRIVATE_KEY_EXPORT_ENABLED) {
     keyboard.text('🔑 Export Private Key', 'wallet_export').row();
   }
-  keyboard.text('🏠 Menu Utama', 'menu_main');
+  keyboard.text('🏠 Dashboard Utama', 'menu_main');
 
   const isPhotoMessage = ctx.callbackQuery?.message && 'caption' in ctx.callbackQuery.message;
 
@@ -176,37 +177,43 @@ export async function handleWalletWithdrawPrompt(ctx: Context, walletService: Wa
   if (!wallet || !wallet.owner_pubkey) {
     text = `
 💸 <b>Withdraw Saldo SOL</b>
-
+───────────────────────────
 ⚠️ <b>Alamat Penarikan Belum Diatur!</b>
-Demi keamanan, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahulu menggunakan perintah:
+Demi keamanan aset, Anda harus mendaftarkan alamat wallet penerima Anda terlebih dahulu menggunakan perintah:
 
 <code>/set_withdraw_address &lt;ALAMAT_SOLANA_ANDA&gt;</code>
+───────────────────────────
+<i>Contoh: /set_withdraw_address 7Xw4...9zP</i>
 `.trim();
     keyboard.text('💳 Kembali ke Wallet', 'menu_wallet').row();
   } else {
     const balance = await walletService.getBalance(wallet.public_key);
+    const sol25 = (balance.sol * 0.25).toFixed(3);
+    const sol50 = (balance.sol * 0.50).toFixed(3);
+    const sol75 = (balance.sol * 0.75).toFixed(3);
+
     text = `
 💸 <b>Withdraw Saldo SOL</b>
-
-<b>Alamat Tujuan:</b>
+───────────────────────────
+<b>Alamat Penerima Terdaftar:</b>
 <code>${wallet.owner_pubkey}</code>
 
 <b>Saldo Tersedia:</b> <code>${balance.sol.toFixed(4)} SOL</code>
-
-<i>Pilih jumlah yang ingin ditarik:</i>
+───────────────────────────
+<i>Pilih persentase saldo yang ingin ditarik ke alamat Anda:</i>
 `.trim();
 
     keyboard
-      .text('25%', 'withdraw_pct:25')
-      .text('50%', 'withdraw_pct:50')
+      .text(`25% (~${sol25} SOL)`, 'withdraw_pct:25')
+      .text(`50% (~${sol50} SOL)`, 'withdraw_pct:50')
       .row()
-      .text('75%', 'withdraw_pct:75')
+      .text(`75% (~${sol75} SOL)`, 'withdraw_pct:75')
       .text('100% (MAX)', 'withdraw_pct:MAX')
       .row()
-      .text('💳 Batal', 'menu_wallet');
+      .text('💳 Kembali ke Wallet', 'menu_wallet');
   }
 
-  keyboard.row().text('🏠 Menu Utama', 'menu_main');
+  keyboard.row().text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     const isPhoto = ctx.callbackQuery.message && 'caption' in ctx.callbackQuery.message;

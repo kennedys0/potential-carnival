@@ -18,6 +18,28 @@ export interface AutopilotStateMetrics {
   heldMints: string[];
 }
 
+export function calculateMaxDrawdownPercent(
+  startingEquitySol: number,
+  pnlEvents: Array<{ realized_pnl_sol: number }>,
+): number {
+  if (!Number.isFinite(startingEquitySol) || startingEquitySol <= 0) return 0;
+  let equity = startingEquitySol;
+  let peak = startingEquitySol;
+  let maxDrawdown = 0;
+
+  for (const event of pnlEvents) {
+    const pnl = Number(event.realized_pnl_sol);
+    if (!Number.isFinite(pnl)) continue;
+    equity += pnl;
+    peak = Math.max(peak, equity);
+    if (peak > 0) {
+      maxDrawdown = Math.max(maxDrawdown, ((peak - equity) / peak) * 100);
+    }
+  }
+
+  return Math.max(0, maxDrawdown);
+}
+
 export class UserStateService {
   constructor(
     private readonly tradeRepo: TradeRepository,
@@ -65,15 +87,16 @@ export class UserStateService {
     const tz = appSettings.DAY_BOUNDARY_TZ || 'UTC';
     
     // Uses PostgreSQL timezone conversion to accurately get midnight in target timezone
-    const closedTrades = await this.tradeRepo.getClosedTradesToday(userId, tz);
+    const pnlEvents = await this.tradeRepo.getDailyRealizedPnlEvents(userId, tz);
     
     let dailyLossSol = 0;
     let dailyRealizedPnlSol = 0;
-    for (const t of closedTrades) {
-      if (t.pnl_sol) {
-        dailyRealizedPnlSol += t.pnl_sol;
-        if (t.pnl_sol < 0) {
-          dailyLossSol += Math.abs(t.pnl_sol);
+    for (const event of pnlEvents) {
+      const pnl = Number(event.realized_pnl_sol);
+      if (Number.isFinite(pnl)) {
+        dailyRealizedPnlSol += pnl;
+        if (pnl < 0) {
+          dailyLossSol += Math.abs(pnl);
         }
       }
     }
@@ -90,10 +113,28 @@ export class UserStateService {
       }
     }
 
-    // 5. Max Drawdown
-    // To calculate max drawdown, we need the equity curve. We can simplify by just tracking peak equity in autopilot_states
+    // 5. Realized daily drawdown. Open positions are valued at cost so a buy
+    // does not look like an equity loss merely because SOL left the wallet.
+    const openCostSol = openTrades.reduce((sum, trade) => {
+      const lamports = Number(trade.sol_spent_lamports ?? 0);
+      const cost = Number.isFinite(lamports) && lamports > 0 ? lamports / 1_000_000_000 : Number(trade.sol_amount ?? 0);
+      return sum + (Number.isFinite(cost) && cost > 0 ? cost : 0);
+    }, 0);
+    const estimatedEquityAtCost = balance.sol + openCostSol;
+    const estimatedSessionStartEquity = estimatedEquityAtCost - dailyRealizedPnlSol;
+    const riskCapitalSol = Math.max(
+      0.000000001,
+      Math.min(autopilotBudget, Math.max(estimatedSessionStartEquity, 0.000000001)),
+    );
+    const maxDrawdown = calculateMaxDrawdownPercent(riskCapitalSol, pnlEvents);
+
     const state = await this.autopilotRepo.getAutopilotState(userId);
-    let maxDrawdown = state?.max_drawdown ?? 0;
+    await this.autopilotRepo.updateAutopilotState(userId, {
+      daily_realized_pnl_sol: dailyRealizedPnlSol,
+      daily_trades_count: new Set(pnlEvents.map((event) => event.trade_id)).size,
+      consecutive_losses: consecutiveLosses,
+      max_drawdown: maxDrawdown,
+    });
 
     return {
       openPositionsCount,
@@ -110,8 +151,6 @@ export class UserStateService {
   }
 
   async checkCircuitBreaker(userId: number, metrics: AutopilotStateMetrics): Promise<boolean> {
-    if (metrics.isCircuitBroken) return true; // Already broken
-
     const config = await this.autopilotRepo.getOrCreateConfig(userId);
     const cbParams = config.circuit_breaker_params as any;
     const userDailyLoss = cbParams.max_daily_loss_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_MAX_DAILY_LOSS_SOL;
@@ -137,23 +176,29 @@ export class UserStateService {
     }
 
     if (reason) {
-      logger.error({ userId, reason }, `DANGER: Circuit Breaker triggered for user ${userId}. Reason: ${reason}`);
       await redis.set(`killswitch:user:${userId}`, '1', 'EX', 86400); // Lock for 24h
-
-      await this.autopilotRepo.updateAutopilotState(userId, {
-        is_circuit_broken: true,
-        circuit_break_reason: reason,
-      });
-      await this.autopilotRepo.updateConfig(userId, {
-        is_active: false,
-      });
-      
-      await this.autopilotRepo.saveCircuitBreakerEvent({
-        user_id: userId,
-        trigger_type: 'CIRCUIT_BREAKER',
-        description: reason,
-      });
+      if (!metrics.isCircuitBroken || metrics.circuitBreakReason !== reason) {
+        logger.error({ userId, reason }, `DANGER: Circuit Breaker triggered for user ${userId}. Reason: ${reason}`);
+        await this.autopilotRepo.updateAutopilotState(userId, {
+          is_circuit_broken: true,
+          circuit_break_reason: reason,
+        });
+        await this.autopilotRepo.saveCircuitBreakerEvent({
+          user_id: userId,
+          trigger_type: 'CIRCUIT_BREAKER',
+          description: reason,
+        });
+      }
       return true;
+    }
+
+    if (metrics.isCircuitBroken) {
+      await redis.del(`killswitch:user:${userId}`);
+      await this.autopilotRepo.updateAutopilotState(userId, {
+        is_circuit_broken: false,
+        circuit_break_reason: null,
+      });
+      logger.info({ userId }, 'Circuit breaker cleared after risk metrics recovered');
     }
 
     return false;

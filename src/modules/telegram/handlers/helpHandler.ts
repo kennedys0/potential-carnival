@@ -2,36 +2,46 @@ import { Context, InlineKeyboard } from 'grammy';
 
 export async function handleHelpMenu(ctx: Context): Promise<void> {
   const text = `
-❓ <b>Panduan & Bantuan Solana Scalping Bot</b>
+📖 <b>PANDUAN LENGKAP BOT TRADING SOLANA</b>
+───────────────────────────
+🚀 <b>3 Langkah Mudah Memulai:</b>
+1️⃣ <b>Mulai dengan Aman:</b> Bot default dalam mode <b>Paper Trading (Simulasi)</b>. Anda bisa mencoba scan dan trading tanpa risiko modal riil.
+2️⃣ <b>Analisis Token Instan:</b> Kirimkan Contract Address (CA) token Solana langsung di chat ini untuk audit anti-rug dan sinyal AI dalam 2 detik.
+3️⃣ <b>Gunakan Otomasi Cerdas:</b> Buka <code>/autopilot</code> untuk auto-snipe token trending atau pool likuiditas yang baru dibuat.
 
-🤖 <b>Daftar Perintah:</b>
-• <code>/start</code> - Membuka menu utama & membuat wallet Solana terenkripsi
-• <code>/scan &lt;CA&gt;</code> - Analisis token on-chain real-time + AI scalping verdict
-• <code>/wallet</code> - Cek saldo SOL, deposit QR code & kelola wallet
-• <code>/autopilot</code> - Pengaturan dan dashboard auto-trading
-• <code>/positions</code> - Pantau posisi trade yang sedang aktif
-• <code>/settings</code> - Ubah mode Paper Trading / Live, ukuran trade, dsb.
+───────────────────────────
+📋 <b>Daftar Perintah Cepat:</b>
+• <code>/dashboard</code> - Ringkasan performa & akun
+• <code>/scan &lt;CA&gt;</code> - Analisis token & tombol Quick Buy
+• <code>/positions</code> - Pantau posisi aktif & PnL live
+• <code>/autopilot</code> - Kontrol bot trending & sniper
+• <code>/wallet</code> - Cek saldo, QR deposit & withdraw
+• <code>/settings</code> - Atur ukuran trade, SL/TP, trailing stop
+• <code>/report</code> - Laporan harian profit/loss
+• <code>/livefeed</code> - Notifikasi real-time scan radar
 
-🛡️ <b>Fitur Keamanan Unggulan:</b>
-1. <b>Anti-Rug Multi-Layer:</b> Deteksi otomatis mint authority aktif, freeze authority, konsentrasi top 10 holders, LP burn/lock status, dan Token-2022 transfer fee tax.
-2. <b>AI Scalping Analyzer:</b> Evaluasi teknikal (RSI, EMA crossover, Volume surge, Risk:Reward) menggunakan Zod schema strict.
-3. <b>Enkripsi AES-256-GCM:</b> Private key disimpan terenkripsi dengan kunci master acak dan IV unik.
-4. <b>Safety First:</b> Selalu default ke <b>Paper Trading (Simulasi)</b> sebelum Anda mengaktifkan Live On-Chain.
-
-Butuh bantuan lebih lanjut? Hubungi admin bot.
+───────────────────────────
+🛡️ <b>Proteksi Keamanan:</b>
+• <b>Anti-Rug Multi-Layer:</b> Honeypot filter, freeze/mint authority check, dan LP burn/lock verification.
+• <b>Risk Management:</b> Circuit Breaker otomatis membatasi kerugian harian.
+• <b>Enkripsi AES-256-GCM:</b> Kunci wallet disimpan terenkripsi dengan aman.
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text('🔍 Coba Scan Token', 'menu_scan')
-    .text('💳 Cek Wallet', 'menu_wallet')
+    .text('🔍 Scan Token', 'menu_scan')
+    .text('📊 Cek Portofolio', 'menu_positions')
     .row()
-    .text('🏠 Menu Utama', 'menu_main');
+    .text('💳 Dompet & Saldo', 'menu_wallet')
+    .text('⚙️ Pengaturan', 'menu_settings')
+    .row()
+    .text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {
       await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
     } catch (err: any) {
       if (err?.description?.includes('message is not modified')) return;
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
     }
   } else {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });

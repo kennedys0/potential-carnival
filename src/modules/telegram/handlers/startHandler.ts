@@ -10,27 +10,40 @@ export async function handleStartCommand(
   if (!ctx.from) return;
 
   await userRepo.getOrCreateUser(ctx.from.id, ctx.from.username);
-  await walletService.getOrCreateWallet(ctx.from.id);
+  const wallet = await walletService.getOrCreateWallet(ctx.from.id);
 
   const text = `
-⚡ <b>Selamat Datang di Solana Scalping Bot!</b>
+💎 <b>Selamat Datang di Solana Scalper Bot!</b>
+───────────────────────────
+Bot trading otomatis dan manual tercepat di Solana dengan proteksi anti-rug dan analisa AI terintegrasi.
 
-Bot auto-trading pintar dengan proteksi anti-rug dan analisa AI.
-Untuk memulai, silakan buka <b>Dashboard</b>.
+🛡️ <b>Keunggulan Sistem:</b>
+• <b>Paper Trading Default:</b> Berlatih dan uji strategi tanpa risiko dana riil.
+• <b>Proteksi Anti-Rug:</b> Filter otomatis mint authority, freeze, dan likuiditas palsu.
+• <b>AI Scalping Signals:</b> Kalkulasi indikator teknikal (RSI, EMA, Volume) otomatis.
+• <b>Eksekusi Cepat:</b> Integrasi Jupiter DEX swap berkecepatan tinggi.
+
+🔑 <b>Wallet Solana Anda:</b>
+<code>${wallet.publicKey}</code> <i>(Tap to copy)</i>
+───────────────────────────
+<i>Tap tombol di bawah untuk membuka terminal trading:</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text('🏠 Buka Dashboard', 'menu_main')
+    .text('🏠 Buka Dashboard Utama', 'menu_main')
     .row()
-    .text('❓ Bantuan', 'menu_help');
+    .text('🔍 Scan Token', 'menu_scan')
+    .text('⚙️ Pengaturan', 'menu_settings')
+    .row()
+    .text('❓ Panduan Bantuan', 'menu_help');
 
   // Persistent menu using regular Keyboard
   const persistentKeyboard = new Keyboard()
-    .text('/dashboard').text('/autopilot').text('/positions').text('/livefeed')
+    .text('/dashboard').text('/positions').text('/autopilot').text('/wallet')
     .row()
-    .text('/wallet').text('/settings').text('/report').text('/help')
+    .text('/settings').text('/report').text('/livefeed').text('/help')
     .resized();
 
-  await ctx.reply('Menu cepat tersedia di bawah:', { reply_markup: persistentKeyboard });
+  await ctx.reply('⚡ Menu pintasan cepat siap digunakan di keyboard bawah:', { reply_markup: persistentKeyboard });
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }

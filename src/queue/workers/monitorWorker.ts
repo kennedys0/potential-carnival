@@ -6,7 +6,7 @@ import { TraderService } from '../../modules/trader/traderService';
 import { ScannerService } from '../../modules/scanner/scannerService';
 import { AutopilotRepository } from '../../database/repositories/autopilotRepository';
 import { SniperRepository } from '../../database/repositories/sniperRepository';
-import { sniperExitPolicy } from '../../modules/autopilot/strategyRisk';
+import { parseExitPolicy, sniperExitPolicy, type ExitPolicySnapshot } from '../../modules/autopilot/strategyRisk';
 import { logger } from '../../utils/logger';
 import { JupiterClient } from '../../modules/trader/jupiterClient';
 import { appSettings } from '../../config/settings';
@@ -44,16 +44,36 @@ export function createMonitorWorker(
 
         // Use immutable per-position exit policy, not current unrelated strategy settings.
         // Legacy sniper positions without a snapshot use Sniper settings, NEVER Trending.
-        let exitParams: Record<string, any>;
+        let rawExitParams: unknown;
         if (trade.exit_policy_snapshot) {
-          exitParams = trade.exit_policy_snapshot;
+          rawExitParams = trade.exit_policy_snapshot;
         } else if (trade.strategy === 'NEW_TOKEN_SNIPER') {
           if (!sniperRepo) throw new Error('Missing sniper repository for legacy position exit policy');
           const sniperConfig = await sniperRepo.getOrCreateConfig(userId);
-          exitParams = sniperExitPolicy(sniperConfig);
+          rawExitParams = sniperExitPolicy(sniperConfig);
         } else {
           const config = await autopilotRepo.getOrCreateConfig(userId);
-          exitParams = (config.exit_params as Record<string, any>) ?? {};
+          rawExitParams = config.exit_params ?? {};
+        }
+
+        let exitParams: ExitPolicySnapshot;
+        try {
+          exitParams = parseExitPolicy(rawExitParams);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await tradeRepo.updateTradeStatus(trade.id!, {
+            needs_attention: true,
+            last_exit_error: message,
+          });
+          logger.error({ positionId, message }, 'Invalid exit policy; automatic exit paused for this position');
+          if (!trade.needs_attention) {
+            await botApi.sendMessage(
+              userId,
+              `⚠️ <b>POSISI PERLU DIPERIKSA</b>\n\nToken: <b>${escapeHtml(trade.token_symbol)}</b>\nAuto-exit dihentikan karena konfigurasi TP/SL tidak valid.`,
+              { parse_mode: 'HTML' },
+            ).catch(() => undefined);
+          }
+          return;
         }
         
         // Get current price
@@ -114,12 +134,10 @@ export function createMonitorWorker(
 
         // Take Profit & Stop Loss logic
         if (exitParams.enabled === false) return;
-        const tp1Percent = exitParams.tp1_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP1_PERCENT;
-        const tp2Percent = exitParams.tp2_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TP2_PERCENT;
-        const slPercent = exitParams.sl_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_SL_PERCENT;
-        const tp1SellShare = Math.min(100, Math.max(1, Number(
-          exitParams.tp1_sell_share ?? appSettings.MONITOR_PARAMS.DEFAULT_TP1_SELL_SHARE,
-        )));
+        const tp1Percent = exitParams.tp1_percent;
+        const tp2Percent = exitParams.tp2_percent;
+        const slPercent = exitParams.sl_percent;
+        const tp1SellShare = exitParams.tp1_sell_share;
         
         let percentageToClose = 0;
         let reason = '';
@@ -132,11 +150,9 @@ export function createMonitorWorker(
             await tradeRepo.updateTradeStatus(trade.id!, { highest_pnl_percent: highestPnl });
         }
 
-        const trailingStopEnabled = exitParams.trailing_stop_enabled ?? true;
-        const trailingStopPercent = exitParams.trailing_stop_delta_percent
-          ?? exitParams.trailing_stop_percent
-          ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_STOP_PERCENT;
-        const trailingActivationPercent = exitParams.trailing_activation_percent ?? appSettings.MONITOR_PARAMS.DEFAULT_TRAILING_ACTIVATION_PERCENT; // active only when highest > this
+        const trailingStopEnabled = exitParams.trailing_stop_enabled;
+        const trailingStopPercent = exitParams.trailing_stop_delta_percent;
+        const trailingActivationPercent = exitParams.trailing_activation_percent;
 
         if (trade.status === 'OPEN' && pnlPercent >= tp1Percent && pnlPercent < tp2Percent) {
            percentageToClose = tp1SellShare;

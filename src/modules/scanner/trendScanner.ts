@@ -10,8 +10,13 @@ import { liveFeedSubscribers } from './liveFeedState';
 import { escapeHtml } from '../telegram/formatters/messageFormatter';
 import { appSettings } from '../../config/settings.js';
 
+export interface TelegramBotApi {
+  sendMessage: (chatId: number | string, text: string, other?: any) => Promise<any>;
+}
+
 export class TrendScanner {
   private intervalId?: NodeJS.Timeout;
+  private isScanning = false;
 
   constructor(
     private readonly scannerService: ScannerService,
@@ -20,7 +25,7 @@ export class TrendScanner {
     private readonly analyzerService: AnalyzerService,
     private readonly autopilotRepo: AutopilotRepository,
     private readonly userStateService: UserStateService,
-    private readonly botApi: any
+    private readonly botApi: TelegramBotApi
   ) {}
 
   start() {
@@ -40,6 +45,9 @@ export class TrendScanner {
   }
 
   private async fetchOrganicTrendingTokens(): Promise<{ tokenAddress: string; pairAddress: string; symbol: string }[]> {
+    const redis = getRedisConnection();
+    const cacheKey = 'trending_tokens:geckoterminal';
+
     // Primary source: GeckoTerminal — organic trending pools sorted by volume (no paid promotions)
     try {
       const url = 'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=1';
@@ -64,14 +72,32 @@ export class TrendScanner {
         result.push({ tokenAddress, pairAddress: poolAddr, symbol });
       }
       logger.info(`TrendScanner: GeckoTerminal returned ${result.length} organic trending tokens.`);
+      if (result.length > 0) {
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 180);
+      }
       return result;
     } catch (err) {
-      logger.warn({ err }, 'TrendScanner: GeckoTerminal trending failed');
+      logger.warn({ err }, 'TrendScanner: GeckoTerminal trending failed, attempting cache fallback');
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          const fallback = JSON.parse(cached);
+          logger.info(`TrendScanner: Restored ${fallback.length} trending tokens from cache fallback.`);
+          return fallback;
+        }
+      } catch {
+        // ignore cache parse error
+      }
       return [];
     }
   }
 
   private async scanTrending() {
+    if (this.isScanning) {
+      logger.debug('TrendScanner: previous scan cycle still in progress, skipping overlapping cycle');
+      return;
+    }
+    this.isScanning = true;
     try {
       // 1. Get active autopilot users
       const activeConfigs = await this.autopilotRepo.getAllActiveConfigs();
@@ -109,37 +135,43 @@ export class TrendScanner {
       const tokensToScan = newTokens.slice(0, 30);
       logger.info(`TrendScanner: Fetching profiles for ${tokensToScan.length} NEW multi-source trending Solana tokens.`);
 
-      // Ambil profile/pair DexScreener secara concurrent max 3 sekaligus (Chunking manual)
-      const fetchedPairs = [];
-      const chunkSize = 3;
-      for (let i = 0; i < tokensToScan.length; i += chunkSize) {
-        const chunk = tokensToScan.slice(i, i + chunkSize);
-        const chunkPromises = chunk.map(async (t) => {
-          try {
-            return await this.scannerService.scanTokenByAddress(t.tokenAddress);
-          } catch (e) {
-            return null;
+      // Ambil profile/pair DexScreener via batch query hemat kuota
+      const tokenAddresses = tokensToScan.map((t) => t.tokenAddress);
+      const pairsMap = await this.scannerService.scanTokensByAddresses(tokenAddresses);
+      const fetchedPairs = Array.from(pairsMap.values());
+
+
+
+      // Pre-filter: only keep pairs with valid price, minimum liquidity ($1,000), and minimum 24h volume ($500)
+      const minLiquidityUsd = 1000;
+      const minVolume24h = 500;
+      const viablePairs: typeof fetchedPairs = [];
+
+      for (const pair of fetchedPairs) {
+        const price = parseFloat(pair.priceUsd || '0');
+        const liquidity = Number(pair.liquidity?.usd ?? 0);
+        const volume = Number(pair.volume?.h24 ?? 0);
+
+        if (!Number.isFinite(price) || price <= 0 || liquidity < minLiquidityUsd || volume < minVolume24h) {
+          // Cache non-viable tokens in Redis for 15 minutes to save batch API quota on subsequent cycles
+          if (pair.baseToken?.address) {
+            await redis.set(`scanned_token:${pair.baseToken.address}`, '1', 'EX', 15 * 60);
           }
-        });
-        const results = await Promise.all(chunkPromises);
-        fetchedPairs.push(...results.filter((p) => p !== null));
-        
-        // Kasih nafas ke API DexScreener
-        if (i + chunkSize < tokensToScan.length) {
-          await new Promise((res) => setTimeout(res, 500));
+          continue;
         }
+        viablePairs.push(pair);
       }
 
       // Sort by 24h volume (highest first)
-      const sortedPairs = fetchedPairs.sort((a: any, b: any) => {
+      const sortedPairs = viablePairs.sort((a: any, b: any) => {
         const volA = a.volume?.h24 ?? 0;
         const volB = b.volume?.h24 ?? 0;
         return volB - volA;
       });
 
-      // Ambil top 10 pair paling likuid/bervolume tinggi untuk analisis mendalam (RPC calls)
-      const topPairs = sortedPairs.slice(0, 10);
-      logger.info(`TrendScanner: Selected top ${topPairs.length} pairs by volume for deep analysis.`);
+      // Ambil top 5 pair paling likuid/bervolume tinggi untuk analisis mendalam (RPC calls)
+      const topPairs = sortedPairs.slice(0, 5);
+      logger.info(`TrendScanner: Selected ${topPairs.length}/${viablePairs.length} viable pairs by volume for deep analysis.`);
 
       for (const pair of topPairs) {
         try {
@@ -155,13 +187,15 @@ export class TrendScanner {
           });
 
           const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
-          const macroCandles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 15);
+          // Resample 5m candles to 15m macro candles mathematically without extra API calls
+          const macroCandles = resampleCandles(candles, 3);
           const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
           const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
           
           const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes, macroCandles);
           let aiAnalysis = null;
-          if (indicators) {
+          // Panggil AI hanya jika indikator lengkap dan token lolos filter keamanan dasar
+          if (indicators && !security.isHardBlocked && security.score >= 50) {
             aiAnalysis = await this.analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags);
           }
 
@@ -183,6 +217,7 @@ export class TrendScanner {
                 marketCap: pair.marketCap || pair.fdv,
                 currentVolume,
                 indicators,
+                candleCount: candles.length,
                 currentState
               };
 
@@ -252,8 +287,8 @@ export class TrendScanner {
           continue;
         }
 
-        // Jeda minimal antar koin agar RPC tidak di-spam beruntun
-        await new Promise((res) => setTimeout(res, 2000));
+        // Jeda minimal antar koin agar RPC dan GeckoTerminal tidak di-spam beruntun
+        await new Promise((res) => setTimeout(res, 2500));
       } // end loop over pairs
       
       // Notify live feed subscribers that a cycle finished
@@ -266,6 +301,25 @@ export class TrendScanner {
       }
     } catch (err) {
       logger.error({ err }, 'TrendScanner Error');
+    } finally {
+      this.isScanning = false;
     }
   }
+}
+
+function resampleCandles(candles: any[], factor: number = 3): any[] {
+  if (!candles || candles.length < factor) return [];
+  const resampled: any[] = [];
+  for (let i = 0; i <= candles.length - factor; i += factor) {
+    const chunk = candles.slice(i, i + factor);
+    resampled.push({
+      timestamp: chunk[chunk.length - 1].timestamp,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map((c: any) => c.high)),
+      low: Math.min(...chunk.map((c: any) => c.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((sum: number, c: any) => sum + c.volume, 0),
+    });
+  }
+  return resampled;
 }

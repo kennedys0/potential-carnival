@@ -227,6 +227,7 @@ async function main() {
     try {
       await bot.stop();
       trendScanner.stop();
+      sniperScanner.stop();
       copyTradeTracker.stop();
       await monitorWorker.close();
       await reconcileWorker.close();

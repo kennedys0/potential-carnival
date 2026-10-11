@@ -1,7 +1,6 @@
 import { Context, InlineKeyboard } from 'grammy';
 import { AutopilotRepository } from '../../../database/repositories/autopilotRepository';
 import { SniperRepository } from '../../../database/repositories/sniperRepository';
-import { z } from 'zod';
 import { liveFeedSubscribers } from '../../scanner/liveFeedState';
 import { escapeHtml } from '../formatters/messageFormatter';
 
@@ -15,40 +14,39 @@ export async function handleAutopilotMenu(
   const config = await autopilotRepo.getOrCreateConfig(ctx.from.id);
   const sniperConfig = await sniperRepo.getOrCreateConfig(ctx.from.id);
   
-  const trendingStatus = config.is_active ? '🟢 Enabled' : '⏸ Disabled';
-  const sniperStatus = sniperConfig.enabled ? '🟢 Enabled' : '🔴 Disabled';
+  const trendingStatus = config.is_active ? '🟢 AKTIF' : '⏸ JEDA';
+  const sniperStatus = sniperConfig.enabled ? '🟢 AKTIF' : '🔴 NONAKTIF';
 
-  // In a real app we'd fetch actual open positions here for the stats
   const sizing = (config.sizing_params as any) || {};
+  const trendingBuySol = typeof sizing.fixed_sol === 'number' && !Number.isNaN(sizing.fixed_sol) ? sizing.fixed_sol : 0.1;
 
   const text = `
-🤖 <b>AUTOMATION CENTER</b>
+🤖 <b>AUTOMATION & AUTOPILOT CENTER</b>
+───────────────────────────
+📈 <b>1. Trending Scalper (GeckoTerminal)</b>
+• <b>Status:</b> ${trendingStatus}
+• <b>Alokasi per Trade:</b> <code>${trendingBuySol} SOL</code>
+• <b>Strategi:</b> Momentum breakout token trending
 
-<b>Trending Autopilot</b>
-Status: ${trendingStatus}
-Source: GeckoTerminal Trending
-Buy Amount: ${sizing.fixed_sol ?? 0.1} SOL
-
-<b>New Token Sniper</b>
-Status: ${sniperStatus}
-Source: Solana New Pools
-Buy Amount: ${sniperConfig.buy_amount_sol} SOL
-Max Buys/Day: ${sniperConfig.max_buys_per_day}
-
-<i>Pilih strategi di bawah ini untuk mengonfigurasi.</i>
+⚡ <b>2. New Token Sniper (Pools Baru)</b>
+• <b>Status:</b> ${sniperStatus}
+• <b>Alokasi per Trade:</b> <code>${sniperConfig.buy_amount_sol} SOL</code>
+• <b>Batas Harian:</b> <code>${sniperConfig.max_buys_per_day} Buys/Hari</code>
+───────────────────────────
+<i>Tap tombol di bawah untuk toggle aktif atau konfigurasi:</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
-    .text(config.is_active ? '⏸ Trending OFF' : '▶️ Trending ON', 'autopilot_toggle')
-    .text('⚙️ Trending Settings', 'autopilot_settings')
+    .text(config.is_active ? '⏸ Matikan Trending' : '▶️ Nyalakan Trending', 'autopilot_toggle')
+    .text('⚙️ Set Parameter', 'menu_settings')
     .row()
-    .text(sniperConfig.enabled ? '⏸ Sniper OFF' : '▶️ Sniper ON', 'sniper_toggle')
-    .text('⚙️ Sniper Settings', 'sniper_settings')
+    .text(sniperConfig.enabled ? '🔴 Matikan Sniper' : '⚡ Nyalakan Sniper', 'sniper_toggle')
+    .text('⚙️ Set Rules Sniper', 'sniper_settings')
     .row()
-    .text('📜 Log Keputusan', 'autopilot_logs')
-    .text('📊 Statistik', 'autopilot_stats')
+    .text('📜 Log Keputusan AI', 'autopilot_logs')
+    .text('📊 Statistik Kinerja', 'autopilot_stats')
     .row()
-    .text('🏠 Menu Utama', 'menu_main');
+    .text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {
@@ -84,7 +82,7 @@ export async function handleAutopilotToggle(
   }
 
   await ctx.answerCallbackQuery({
-    text: newActive ? '✅ Trending Autopilot ON!' : '⏸ Trending Autopilot OFF.',
+    text: newActive ? '✅ Trending Autopilot AKTIF!' : '⏸ Trending Autopilot DINONAKTIFKAN.',
   });
 
   await handleAutopilotMenu(ctx, autopilotRepo, sniperRepo);
@@ -110,7 +108,7 @@ export async function handleSniperToggle(
   }
 
   await ctx.answerCallbackQuery({
-    text: newActive ? '✅ New Token Sniper ON!' : '🔴 New Token Sniper OFF.',
+    text: newActive ? '⚡ New Token Sniper AKTIF!' : '🔴 New Token Sniper DINONAKTIFKAN.',
   });
 
   await handleAutopilotMenu(ctx, autopilotRepo, sniperRepo);
@@ -123,16 +121,17 @@ export async function handleAutopilotLogs(
   if (!ctx.from) return;
 
   const logs = await autopilotRepo.getRecentDecisionLogs(ctx.from.id, 5);
-  let text = '📜 <b>Log Keputusan Autopilot</b>\n\n';
+  let text = '📜 <b>Log Keputusan Autopilot</b>\n───────────────────────────\n\n';
 
   if (logs.length === 0) {
     text += '<i>Belum ada log keputusan yang tercatat.</i>';
   } else {
     for (const log of logs) {
       const icon = log.action === 'BUY' ? '🟢' : log.action === 'SKIP' ? '⚪' : '🔴';
+      const actionLabel = log.action === 'BUY' ? 'BUY SIGNAL' : log.action;
       const strategyName = log.strategy === 'NEW_TOKEN_SNIPER' ? '⚡ SNIPER' : '📈 TRENDING';
-      text += `${icon} <b>${log.action}</b> [${strategyName}] <code>${escapeHtml(log.token_symbol || log.token_mint.slice(0, 8))}</code>\n`;
-      text += `├ <b>Score:</b> ${log.safety_score}/100 🛡️\n`;
+      text += `${icon} <b>${actionLabel}</b> [${strategyName}] <code>${escapeHtml(log.token_symbol || log.token_mint.slice(0, 8))}</code>\n`;
+      text += `├ <b>Score:</b> <code>${log.safety_score}/100</code> 🛡️\n`;
       
       if (log.safety_flags && log.safety_flags.length > 0) {
         text += `├ <b>Flags:</b> ${log.safety_flags.length > 2 ? log.safety_flags.slice(0, 2).map(escapeHtml).join(', ') + ', dll' : log.safety_flags.map(escapeHtml).join(', ')}\n`;
@@ -143,13 +142,13 @@ export async function handleAutopilotLogs(
   }
 
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
-  text += `\n• <i>Diperbarui pada: ${timestamp}</i>`;
+  text += `───────────────────────────\n• <i>Diperbarui: ${timestamp}</i>`;
 
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh Log', 'autopilot_logs')
-    .text('🤖 Dashboard Autopilot', 'menu_autopilot')
+    .text('🤖 Autopilot Hub', 'menu_autopilot')
     .row()
-    .text('🏠 Menu Utama', 'menu_main');
+    .text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {
@@ -166,27 +165,27 @@ export async function handleAutopilotStats(
   ctx: Context,
   autopilotRepo: AutopilotRepository
 ): Promise<void> {
-  // Simplified for brevity, same as before
   if (!ctx.from) return;
   const stats = await autopilotRepo.getStats(ctx.from.id);
   const pnlSign = stats.dailyRealizedPnlSol >= 0 ? '+' : '';
-  const cbStatus = stats.isCircuitBroken ? '🔴 AKTIF' : '🟢 NORMAL';
+  const cbStatus = stats.isCircuitBroken ? '🔴 TERPICU' : '🟢 NORMAL';
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
   
   const text = `
-📊 <b>Statistik Kinerja</b>
-
-• <b>Total Trade Dieksekusi:</b> ${stats.totalTrades}
-• <b>Realized PnL (hari ini):</b> ${pnlSign}${stats.dailyRealizedPnlSol.toFixed(4)} SOL
-• <b>Circuit Breaker:</b> ${cbStatus}
-• <i>Diperiksa pada: ${timestamp}</i>
+📊 <b>Statistik Kinerja Autopilot</b>
+───────────────────────────
+• <b>Total Trade Dieksekusi:</b> <b>${stats.totalTrades} Trade</b>
+• <b>Realized PnL (Hari Ini):</b> <code>${pnlSign}${stats.dailyRealizedPnlSol.toFixed(4)} SOL</code>
+• <b>Circuit Breaker Status:</b> ${cbStatus}
+───────────────────────────
+🕒 <i>Diperiksa pada: ${timestamp}</i>
 `.trim();
 
   const keyboard = new InlineKeyboard()
     .text('🔄 Refresh', 'autopilot_stats')
-    .text('🤖 Dashboard Autopilot', 'menu_autopilot')
+    .text('🤖 Autopilot Hub', 'menu_autopilot')
     .row()
-    .text('🏠 Menu Utama', 'menu_main');
+    .text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {
     try {

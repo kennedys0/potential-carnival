@@ -13,3 +13,5 @@ test-jup.ts
 test-sim.ts
 test-*.ts
 scratch/
+supabase/.temp/
+user_wallets_rows.sql

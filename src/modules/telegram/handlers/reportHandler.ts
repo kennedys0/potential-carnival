@@ -1,4 +1,4 @@
-import { Context } from 'grammy';
+import { Context, InlineKeyboard } from 'grammy';
 import { TradeRepository } from '../../../database/repositories/tradeRepository';
 
 import { appSettings } from '../../../config/settings';
@@ -37,7 +37,7 @@ export async function handleReportCommand(
       const pnlIdr = currencyService.solToIdr(pnl);
       const idrText = pnlIdr !== null ? ` (≈ ${sign}${currencyService.formatIdr(pnlIdr)})` : '';
       
-      closedBreakdown.push(`└ ${icon} <b>${escapeHtml(symbol)}</b>: ${sign}${pnl.toFixed(4)} SOL${idrText}`);
+      closedBreakdown.push(`• ${icon} <b>${escapeHtml(symbol)}</b>: <code>${sign}${pnl.toFixed(4)} SOL</code>${idrText}`);
     }
 
     // Collect open tokens
@@ -59,24 +59,40 @@ export async function handleReportCommand(
     const totalIdr = currencyService.solToIdr(totalRealizedPnlSol);
     const totalIdrText = totalIdr !== null ? ` (≈ ${pnlSign}${currencyService.formatIdr(totalIdr)})` : '';
 
-    let text = `📈 <b>DAILY REPORT</b>\n📅 <i>${todayDateStr}</i>\n\n`;
-    text += `💰 <b>Realized PnL Hari Ini:</b>\n${pnlEmoji} ${pnlSign}${totalRealizedPnlSol.toFixed(4)} SOL${totalIdrText}\n\n`;
+    let text = `📈 <b>LAPORAN HARIAN (DAILY PERFORMANCE)</b>\n📅 <i>${todayDateStr}</i>\n───────────────────────────\n\n`;
+    text += `💰 <b>Total Realized PnL Hari Ini:</b>\n${pnlEmoji} <code>${pnlSign}${totalRealizedPnlSol.toFixed(4)} SOL</code>${totalIdrText}\n\n`;
     
-    text += `✅ <b>Token Selesai (Closed): ${closedTrades.length} Trades</b>\n`;
+    text += `✅ <b>Posisi Selesai (Closed): ${closedTrades.length} Trade</b>\n`;
     if (closedBreakdown.length > 0) {
       text += `${closedBreakdown.join('\n')}\n\n`;
     } else {
-      text += `└ <i>Tidak ada</i>\n\n`;
+      text += `└ <i>Belum ada trade yang ditutup hari ini.</i>\n\n`;
     }
 
-    text += `⏳ <b>Token Berjalan (Open): ${openTrades.length} Trades</b>\n`;
+    text += `⏳ <b>Posisi Aktif (Open): ${openTrades.length} Trade</b>\n`;
     if (openTokens.size > 0) {
       text += `└ <i>${Array.from(openTokens).join(', ')}</i>\n`;
     } else {
-      text += `└ <i>Tidak ada</i>\n`;
+      text += `└ <i>Tidak ada posisi terbuka saat ini.</i>\n`;
     }
+    text += `───────────────────────────\n🕒 <i>Diperbarui: ${now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>`;
 
-    await ctx.reply(text, { parse_mode: 'HTML' });
+    const keyboard = new InlineKeyboard()
+      .text('📊 Cek Portofolio', 'menu_positions')
+      .text('🔄 Refresh', 'menu_report')
+      .row()
+      .text('🏠 Dashboard Utama', 'menu_main');
+
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) return;
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      }
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    }
   } catch (error: any) {
     await ctx.reply(`⚠️ Gagal mengambil report: ${escapeHtml(error.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });
   }

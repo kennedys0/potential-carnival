@@ -29,7 +29,7 @@ export const AppSettingsSchema = z.object({
   TX_MAX_NETWORK_FEE_LAMPORTS: z.number().int().nonnegative().default(100_000),
   TX_MAX_INCIDENTAL_LAMPORTS: z.number().int().nonnegative().default(10_000_000),
   NETWORK_FEE_FALLBACK_LAMPORTS: z.number().int().positive().default(5_000),
-  LLM_REQUEST_TIMEOUT_MS: z.number().int().positive().default(8_000),
+  LLM_REQUEST_TIMEOUT_MS: z.number().int().positive().default(30_000),
   MARKET_DATA_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(60_000).default(8_000),
   SWAP_PROVIDER_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(60_000).default(10_000),
   RPC_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(120_000).default(15_000),

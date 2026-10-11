@@ -68,4 +68,25 @@ describe('AnalyzerService', () => {
     const result = await service.analyzeWithLlm('SOL', 1.0, indicators, []);
     expect(result).toBeNull();
   });
+
+  it('does not immediately retry when the provider reports it is unavailable', async () => {
+    const mockLlmClient = {
+      analyze: vi.fn().mockResolvedValue(null),
+    };
+    const service = new AnalyzerService(mockLlmClient);
+    const indicators: TechnicalIndicatorsSnapshot = {
+      ema9: 1,
+      ema21: 1,
+      rsi14: 50,
+      atr14: 0.1,
+      vwap: 1,
+      volumeSpikeRatio: 1,
+      calculatedStopLoss: 0.8,
+      calculatedTp1: 1.2,
+      calculatedTp2: 1.5,
+    };
+
+    await expect(service.analyzeWithLlm('SOL', 1.0, indicators, [])).resolves.toBeNull();
+    expect(mockLlmClient.analyze).toHaveBeenCalledTimes(1);
+  });
 });

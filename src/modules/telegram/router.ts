@@ -32,7 +32,13 @@ import {
   handleAutopilotLogs,
   handleAutopilotStats,
 } from './handlers/autopilotHandler';
-import { handleSettingsMenu } from './handlers/settingsHandler';
+import {
+  handleSettingsMenu,
+  handleSettingsSizeMenu,
+  handleSettingsRiskMenu,
+  handleSettingsExitMenu,
+  handleSettingsTrailingMenu,
+} from './handlers/settingsHandler';
 import { handleSniperSettings } from './handlers/sniperHandler';
 import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsHandler';
 import { handleHelpMenu } from './handlers/helpHandler';
@@ -263,6 +269,23 @@ export function registerBotRoutes(
     const text = ctx.message.text.trim();
 
     const redis = getRedisConnection();
+
+    const customSizePrompt = await redis.get(`custom_size_prompt:${ctx.from.id}`);
+    if (customSizePrompt) {
+      const amount = parsePositiveDecimal(text);
+      if (amount === null || amount <= 0) {
+        await ctx.reply('⚠️ Harap masukkan angka yang valid dalam SOL (contoh: 0.15 atau 0.05).');
+      } else {
+        await services.autopilotRepo.updateConfig(ctx.from.id, {
+          sizing_params: { fixed_sol: amount },
+        });
+        await ctx.reply(`✅ <b>Default Trade Size berhasil diatur ke:</b> <code>${amount} SOL</code>`, { parse_mode: 'HTML' });
+        await handleSettingsSizeMenu(ctx, services.autopilotRepo);
+      }
+      await redis.del(`custom_size_prompt:${ctx.from.id}`);
+      return;
+    }
+
     const customBuyMint = await redis.get(`custom_buy_mint:${ctx.from.id}`);
     
     if (customBuyMint) {
@@ -302,6 +325,27 @@ export function registerBotRoutes(
     } else if (data === 'menu_settings' || data === 'autopilot_settings') {
       await ctx.answerCallbackQuery();
       await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_menu_size') {
+      await ctx.answerCallbackQuery();
+      await handleSettingsSizeMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_menu_risk') {
+      await ctx.answerCallbackQuery();
+      await handleSettingsRiskMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_menu_tpsl') {
+      await ctx.answerCallbackQuery();
+      await handleSettingsExitMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_menu_trailing') {
+      await ctx.answerCallbackQuery();
+      await handleSettingsTrailingMenu(ctx, services.autopilotRepo);
+    } else if (data === 'settings_custom_size') {
+      if (!ctx.from) return;
+      const redis = getRedisConnection();
+      await redis.set(`custom_size_prompt:${ctx.from.id}`, '1', 'EX', 300);
+      await ctx.answerCallbackQuery();
+      await ctx.reply('✍️ <b>Input Ukuran Trade Custom</b>\n\nKetik nominal dalam SOL yang ingin dialokasikan per transaksi (contoh: <code>0.15</code> atau <code>0.05</code>):', {
+        parse_mode: 'HTML',
+        reply_markup: { force_reply: true }
+      });
     } else if (data === 'sniper_settings') {
       await ctx.answerCallbackQuery();
       await handleSniperSettings(ctx, services.sniperRepo);
@@ -312,6 +356,9 @@ export function registerBotRoutes(
       const tradeId = data.substring(9);
       await ctx.answerCallbackQuery();
       await handlePositionDetail(ctx, tradeId, services.tradeRepo, services.scannerService);
+    } else if (data === 'menu_report') {
+      await ctx.answerCallbackQuery();
+      await handleReportCommand(ctx, services.tradeRepo);
     } else if (data === 'menu_help') {
       await ctx.answerCallbackQuery();
       await handleHelpMenu(ctx);
@@ -518,6 +565,83 @@ export function registerBotRoutes(
         text: `Mode diubah ke: ${newMode === 'PAPER' ? '🟢 PAPER TRADING (Simulasi)' : '⚡ LIVE ON-CHAIN'}`,
       });
       await handleSettingsMenu(ctx, services.autopilotRepo);
+    } else if (data === 'preset_conservative') {
+      if (!ctx.from) return;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        risk_profile: 'CONSERVATIVE',
+        safety_params: { min_safety_score: 85 },
+        exit_params: { sl_percent: 5, tp1_percent: 15, tp2_percent: 30 },
+      });
+      await ctx.answerCallbackQuery({ text: 'Profil diubah ke: 🛡️ Konservatif' });
+      await handleSettingsRiskMenu(ctx, services.autopilotRepo);
+    } else if (data === 'preset_moderate') {
+      if (!ctx.from) return;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        risk_profile: 'MODERATE',
+        safety_params: { min_safety_score: 75 },
+        exit_params: { sl_percent: 8, tp1_percent: 20, tp2_percent: 35 },
+      });
+      await ctx.answerCallbackQuery({ text: 'Profil diubah ke: ⚖️ Moderat' });
+      await handleSettingsRiskMenu(ctx, services.autopilotRepo);
+    } else if (data === 'preset_aggressive') {
+      if (!ctx.from) return;
+      await services.autopilotRepo.updateConfig(ctx.from.id, {
+        risk_profile: 'AGGRESSIVE',
+        safety_params: { min_safety_score: 65 },
+        exit_params: { sl_percent: 12, tp1_percent: 35, tp2_percent: 60 },
+      });
+      await ctx.answerCallbackQuery({ text: 'Profil diubah ke: ⚡ Agresif' });
+      await handleSettingsRiskMenu(ctx, services.autopilotRepo);
+    } else if (data.startsWith('settings_set_sl:')) {
+      if (!ctx.from) return;
+      const sl = parsePositiveDecimal(data.replace('settings_set_sl:', ''), 100);
+      if (sl !== null) {
+        const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+        await services.autopilotRepo.updateConfig(ctx.from.id, {
+          exit_params: { ...cfg.exit_params, sl_percent: sl },
+        });
+        await ctx.answerCallbackQuery({ text: `Stop Loss diatur ke -${sl}%` });
+        await handleSettingsExitMenu(ctx, services.autopilotRepo);
+      }
+    } else if (data.startsWith('settings_set_tp:')) {
+      if (!ctx.from) return;
+      const tp = parsePositiveDecimal(data.replace('settings_set_tp:', ''), 1000);
+      if (tp !== null) {
+        const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+        await services.autopilotRepo.updateConfig(ctx.from.id, {
+          exit_params: {
+            ...cfg.exit_params,
+            tp1_percent: tp,
+            tp2_percent: Math.max((cfg.exit_params as any)?.tp2_percent ?? 30, tp),
+          },
+        });
+        await ctx.answerCallbackQuery({ text: `Take Profit diatur ke +${tp}%` });
+        await handleSettingsExitMenu(ctx, services.autopilotRepo);
+      }
+    } else if (data.startsWith('settings_set_trail_dist:')) {
+      if (!ctx.from) return;
+      const dist = parsePositiveDecimal(data.replace('settings_set_trail_dist:', ''), 100);
+      if (dist !== null) {
+        const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+        await services.autopilotRepo.updateConfig(ctx.from.id, {
+          exit_params: { ...cfg.exit_params, trailing_stop_delta_percent: dist },
+        });
+        await ctx.answerCallbackQuery({ text: `Jarak Trailing diatur ke ${dist}%` });
+        await handleSettingsTrailingMenu(ctx, services.autopilotRepo);
+      }
+    } else if (data.startsWith('settings_set_trail_act:')) {
+      if (!ctx.from) return;
+      const act = parsePositiveDecimal(data.replace('settings_set_trail_act:', ''), 1000);
+      if (act !== null) {
+        const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
+        await services.autopilotRepo.updateConfig(ctx.from.id, {
+          exit_params: { ...cfg.exit_params, trailing_activation_percent: act },
+        });
+        await ctx.answerCallbackQuery({ text: `Mulai Trailing diatur ke +${act}%` });
+        await handleSettingsTrailingMenu(ctx, services.autopilotRepo);
+      }
+    } else if (data.startsWith('noop_')) {
+      await ctx.answerCallbackQuery();
     } else if (data.startsWith('settings_size_')) {
       if (!ctx.from) return;
       const size = parsePositiveDecimal(data.replace('settings_size_', ''), 1000);
@@ -529,7 +653,7 @@ export function registerBotRoutes(
         sizing_params: { fixed_sol: size },
       });
       await ctx.answerCallbackQuery({ text: `Trade size diubah ke ${size} SOL` });
-      await handleSettingsMenu(ctx, services.autopilotRepo);
+      await handleSettingsSizeMenu(ctx, services.autopilotRepo);
     } else if (data === 'settings_cycle_sl') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
@@ -545,10 +669,14 @@ export function registerBotRoutes(
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
       const currentTp = (cfg.exit_params as any)?.tp1_percent ?? 15;
+      const currentTp2 = (cfg.exit_params as any)?.tp2_percent ?? 30;
       // Cycle: 10 -> 15 -> 20 -> 30 -> 50 -> 100 -> 10
       const nextTp = currentTp === 10 ? 15 : currentTp === 15 ? 20 : currentTp === 20 ? 30 : currentTp === 30 ? 50 : currentTp === 50 ? 100 : 10;
+      const nextTp2 = nextTp < currentTp && currentTp2 === currentTp
+        ? Math.max(30, nextTp)
+        : Math.max(currentTp2, nextTp);
       await services.autopilotRepo.updateConfig(ctx.from.id, {
-        exit_params: { ...cfg.exit_params, tp1_percent: nextTp },
+        exit_params: { ...cfg.exit_params, tp1_percent: nextTp, tp2_percent: nextTp2 },
       });
       await ctx.answerCallbackQuery({ text: `Take Profit diubah ke ${nextTp}%` });
       await handleSettingsMenu(ctx, services.autopilotRepo);
@@ -560,15 +688,17 @@ export function registerBotRoutes(
         exit_params: { ...cfg.exit_params, trailing_stop_enabled: !trailingEnabled },
       });
       await ctx.answerCallbackQuery({ text: `Trailing Stop ${!trailingEnabled ? 'Diaktifkan' : 'Dinonaktifkan'}` });
-      await handleSettingsMenu(ctx, services.autopilotRepo);
+      await handleSettingsTrailingMenu(ctx, services.autopilotRepo);
     } else if (data === 'settings_cycle_trail_dist') {
       if (!ctx.from) return;
       const cfg = await services.autopilotRepo.getOrCreateConfig(ctx.from.id);
-      const currentDist = (cfg.exit_params as any)?.trailing_stop_percent ?? 5;
+      const currentDist = (cfg.exit_params as any)?.trailing_stop_delta_percent
+        ?? (cfg.exit_params as any)?.trailing_stop_percent
+        ?? 5;
       // Cycle: 5 -> 10 -> 15 -> 20 -> 5
       const nextDist = currentDist === 5 ? 10 : currentDist === 10 ? 15 : currentDist === 15 ? 20 : 5;
       await services.autopilotRepo.updateConfig(ctx.from.id, {
-        exit_params: { ...cfg.exit_params, trailing_stop_percent: nextDist },
+        exit_params: { ...cfg.exit_params, trailing_stop_delta_percent: nextDist },
       });
       await ctx.answerCallbackQuery({ text: `Trailing Distance diubah ke ${nextDist}%` });
       await handleSettingsMenu(ctx, services.autopilotRepo);

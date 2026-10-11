@@ -7,7 +7,7 @@ import { RiskManager } from './riskManager';
 import { TraderService } from '../trader/traderService';
 import { SniperRepository } from '../../database/repositories/sniperRepository';
 import { StrategyReservationRepository } from '../../database/repositories/strategyReservationRepository';
-import { sniperExitPolicy, failClosedSniperSafety, type ExitPolicySnapshot } from './strategyRisk';
+import { sniperExitPolicy, failClosedSniperSafety, parseExitPolicy, type ExitPolicySnapshot } from './strategyRisk';
 import { getRedisConnection } from '../../queue/connection';
 import { z } from 'zod';
 import crypto from 'node:crypto';
@@ -246,6 +246,9 @@ export class AutopilotEngine {
     const sniperMax = Number(sniperConfig.max_active_positions ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_MAX_POSITIONS);
     const globalMax = trendingMax + sniperMax;
     const strategy = source === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING';
+    const exitPolicy: ExitPolicySnapshot = source === 'SNIPER'
+      ? parseExitPolicy(sniperExitPolicy(config))
+      : parseExitPolicy({ enabled: true, ...((config.exit_params as any) ?? {}) });
     const reservationId = await this.reservationRepo.reserve({
       userId, tokenMint, strategy, isDryRun, amountSol: orderSol,
       availableBalanceSol: currentState.availableBalanceSol,
@@ -257,10 +260,6 @@ export class AutopilotEngine {
     if (!reservationId) {
       return { executed: false, reason: 'Atomic exposure/daily budget/duplicate check rejected the entry' };
     }
-
-    const exitPolicy: ExitPolicySnapshot | Record<string,unknown> = source === 'SNIPER'
-      ? sniperExitPolicy(config)
-      : { enabled: true, ...((config.exit_params as any) ?? {}) };
 
     try {
       await this.reservationRepo.finish(reservationId, 'IN_FLIGHT');

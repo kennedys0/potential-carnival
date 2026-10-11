@@ -36,16 +36,30 @@ export class AccountingEngine {
     if (trade.sol_spent_lamports && trade.token_amount_raw && BigInt(trade.token_amount_raw) > 0n) {
       const solSpentLamportsBigInt = BigInt(trade.sol_spent_lamports);
       const tokenAmountRawBigInt = BigInt(trade.token_amount_raw);
-      
-      const costLamports = (solSpentLamportsBigInt * actualTokensSpentRaw) / tokenAmountRawBigInt;
+
+      const priorSoldRaw = tokenAmountRawBigInt > tradeBalanceRaw
+        ? tokenAmountRawBigInt - tradeBalanceRaw
+        : 0n;
+      const cumulativeSoldRaw = priorSoldRaw + actualTokensSpentRaw > tokenAmountRawBigInt
+        ? tokenAmountRawBigInt
+        : priorSoldRaw + actualTokensSpentRaw;
+      const costBeforeLamports = (solSpentLamportsBigInt * priorSoldRaw) / tokenAmountRawBigInt;
+      const costAfterLamports = (solSpentLamportsBigInt * cumulativeSoldRaw) / tokenAmountRawBigInt;
+      const costLamports = costAfterLamports - costBeforeLamports;
+      const entryFeeLamports = BigInt(trade.fee_lamports ?? 0);
+      const entryFeeBefore = (entryFeeLamports * priorSoldRaw) / tokenAmountRawBigInt;
+      const entryFeeAfter = (entryFeeLamports * cumulativeSoldRaw) / tokenAmountRawBigInt;
+      const entryFeeShareLamports = entryFeeAfter - entryFeeBefore;
       const costSol = Number(costLamports) / 1e9;
-      const feeSol = Number(feeLamports) / 1e9;
+      const entryFeeShareSol = Number(entryFeeShareLamports) / 1e9;
+      const exitFeeSol = Number(feeLamports) / 1e9;
       
-      const currentRealized = solReceived - costSol - feeSol;
+      const currentRealized = solReceived - costSol - entryFeeShareSol - exitFeeSol;
       realizedPnlSol += currentRealized;
       
-      if (costSol > 0) {
-        pnlPercent = ((solReceived - costSol) / costSol) * 100;
+      const investedSol = costSol + entryFeeShareSol;
+      if (investedSol > 0) {
+        pnlPercent = (currentRealized / investedSol) * 100;
       }
     }
 

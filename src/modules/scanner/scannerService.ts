@@ -16,6 +16,10 @@ export class ScannerService {
     return this.dexScreener.getTokenData(tokenAddress);
   }
 
+  async scanTokensByAddresses(tokenAddresses: string[]): Promise<Map<string, DexScreenerPair>> {
+    return this.dexScreener.getTokensData(tokenAddresses);
+  }
+
   async scanSpecificPool(pairAddress: string): Promise<DexScreenerPair | null> {
     return this.dexScreener.getPairByAddress(pairAddress);
   }
@@ -30,7 +34,8 @@ export class ScannerService {
     timeframe: 'minute' | 'hour' | 'day' = 'minute',
     aggregate: number = 5
   ): Promise<Candle[]> {
-    const cacheKey = `candles:${network}:${poolAddress}:${timeframe}:${aggregate}`;
+    const limit = Math.max(appSettings.ANALYZER_PARAMS.MIN_CANDLES, 50); // Get at least min candles + some buffer
+    const cacheKey = `candles:${network}:${poolAddress}:${timeframe}:${aggregate}:${limit}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) {
       try {
@@ -40,12 +45,12 @@ export class ScannerService {
       }
     }
 
-    const limit = Math.max(appSettings.ANALYZER_PARAMS.MIN_CANDLES, 50); // Get at least min candles + some buffer
     const candles = await this.geckoTerminal.getOHLCV(network, poolAddress, timeframe, aggregate, limit);
     
     if (candles.length > 0) {
-      // Cache with 1 minute TTL to stay relatively fresh but avoid spamming
-      await this.redis.set(cacheKey, JSON.stringify(candles), 'EX', 60); 
+      // Dynamic TTL based on aggregate to conserve GeckoTerminal quota (30 req/min)
+      const ttlSeconds = aggregate >= 15 ? 900 : aggregate >= 5 ? 300 : 60;
+      await this.redis.set(cacheKey, JSON.stringify(candles), 'EX', ttlSeconds); 
     }
 
     return candles;
