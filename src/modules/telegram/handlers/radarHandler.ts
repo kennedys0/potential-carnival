@@ -18,12 +18,14 @@ export async function handleRadarHub(
   const sizing = (autoConfig.sizing_params as any) || {};
   const trendingSizeSol = typeof sizing.fixed_sol === 'number' && !Number.isNaN(sizing.fixed_sol) ? sizing.fixed_sol : 0.1;
 
+  const sniperSizeSol = typeof sniperConfig.buy_amount_sol === 'number' && sniperConfig.buy_amount_sol > 0 ? sniperConfig.buy_amount_sol : 0.05;
+
   const text = formatRadarHub({
     isLiveFeedActive,
     isTrendingActive: !!autoConfig.is_active,
     isSniperActive: !!sniperConfig.enabled,
     trendingSizeSol,
-    sniperSizeSol: sniperConfig.buy_amount_sol || 0.05,
+    sniperSizeSol,
   });
 
   const keyboard = buildRadarHubKeyboard(isLiveFeedActive);

@@ -43,6 +43,8 @@ import { handleSniperSettings } from './handlers/sniperHandler';
 import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsHandler';
 import { handleHelpMenu } from './handlers/helpHandler';
 import { handleReportCommand } from './handlers/reportHandler';
+import { handleClaimRent } from './handlers/rentHandler';
+import { handlePnlCard } from './handlers/pnlCardHandler';
 import { handleCopyTradeCommand, handleCopyTradeMenu } from './handlers/copyTradeHandler';
 import { handleRadarHub } from './handlers/radarHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
@@ -112,7 +114,7 @@ export function registerBotRoutes(
 
   // Command /positions
   bot.command('positions', async (ctx) => {
-    await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
+    await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService, services.walletService);
   });
 
   // Command /help
@@ -122,7 +124,12 @@ export function registerBotRoutes(
 
   // Command /report
   bot.command('report', async (ctx) => {
-    await handleReportCommand(ctx, services.tradeRepo);
+    await handleReportCommand(ctx, services.tradeRepo, services.walletService);
+  });
+
+  // Command /claim_rent
+  bot.command('claim_rent', async (ctx) => {
+    await handleClaimRent(ctx, services.walletService, services.tradeRepo);
   });
 
   // Command /copy (Copy Trading)
@@ -345,14 +352,19 @@ export function registerBotRoutes(
       await handleSniperSettings(ctx, services.sniperRepo);
     } else if (data === 'menu_positions') {
       await ctx.answerCallbackQuery();
-      await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
+      await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService, services.walletService);
     } else if (data.startsWith('view_pos:')) {
       const tradeId = data.substring(9);
       await ctx.answerCallbackQuery();
       await handlePositionDetail(ctx, tradeId, services.tradeRepo, services.scannerService);
     } else if (data === 'menu_report') {
       await ctx.answerCallbackQuery();
-      await handleReportCommand(ctx, services.tradeRepo);
+      await handleReportCommand(ctx, services.tradeRepo, services.walletService);
+    } else if (data === 'claim_rent') {
+      await handleClaimRent(ctx, services.walletService, services.tradeRepo);
+    } else if (data.startsWith('pnl_card:')) {
+      const tradeId = data.substring(9);
+      await handlePnlCard(ctx, tradeId, services.tradeRepo, services.scannerService);
     } else if (data === 'menu_help') {
       await ctx.answerCallbackQuery();
       await handleHelpMenu(ctx);
@@ -814,7 +826,7 @@ export function registerBotRoutes(
                 .text('ðŸ  Menu Utama', 'menu_main'),
             },
           );
-          await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
+          await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService, services.walletService);
           return;
         }
         
@@ -835,12 +847,14 @@ export function registerBotRoutes(
           {
             parse_mode: 'HTML',
             reply_markup: new InlineKeyboard()
+              .text('📸 Share PnL Card', `pnl_card:${trade.id}`)
+              .row()
               .text('📊 Cek Posisi', 'menu_positions')
               .text('🏠 Menu Utama', 'menu_main'),
           }
         );
         // Refresh positions list message
-        await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService);
+        await handlePositionsMenu(ctx, services.tradeRepo, services.scannerService, services.walletService);
       } catch (err: any) {
         await ctx.reply(`❌ <b>Gagal menutup posisi:</b> ${escapeHtml(err.message || 'Error tidak diketahui')}`, { parse_mode: 'HTML' });
       }

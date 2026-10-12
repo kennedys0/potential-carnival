@@ -4,10 +4,12 @@ import { TradeRepository } from '../../../database/repositories/tradeRepository'
 import { appSettings } from '../../../config/settings';
 import { currencyService } from '../../../utils/currencyService';
 import { escapeHtml } from '../formatters/messageFormatter';
+import { WalletService } from '../../wallet/walletService';
 
 export async function handleReportCommand(
   ctx: Context,
-  tradeRepo: TradeRepository
+  tradeRepo: TradeRepository,
+  walletService?: WalletService
 ): Promise<void> {
   if (!ctx.from) return;
   const userId = ctx.from.id;
@@ -21,6 +23,26 @@ export async function handleReportCommand(
 
     // Fetch rates for IDR conversion
     await currencyService.fetchRates();
+
+    // Check claimable rent fee
+    let claimableText = '';
+    let hasClaimable = false;
+    let claimBtnText = '🏷️ Klaim Rent Fee';
+    if (walletService) {
+      try {
+        const activeMints = new Set(openTrades.map((t) => t.token_mint));
+        const rentInfo = await walletService.getClaimableRent(userId, activeMints);
+        if (rentInfo.emptyAccountsCount > 0) {
+          hasClaimable = true;
+          const rentIdr = currencyService.solToIdr(rentInfo.claimableSol);
+          const rentIdrText = rentIdr !== null ? ` (≈ ${currencyService.formatIdr(rentIdr)})` : '';
+          claimableText = `🏷️ <b>Rent Fee Recovery:</b>\n└ <code>${rentInfo.emptyAccountsCount} Akun Kosong</code> (≈ <code>+${rentInfo.claimableSol.toFixed(4)} SOL</code>${rentIdrText})\n\n`;
+          claimBtnText = `🏷️ Klaim Rent (+${rentInfo.claimableSol.toFixed(3)} SOL)`;
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     // Calculate total realized PnL today
     let totalRealizedPnlSol = 0;
@@ -71,13 +93,22 @@ export async function handleReportCommand(
 
     text += `⏳ <b>Posisi Aktif (Open): ${openTrades.length} Trade</b>\n`;
     if (openTokens.size > 0) {
-      text += `└ <i>${Array.from(openTokens).join(', ')}</i>\n`;
+      text += `└ <i>${Array.from(openTokens).join(', ')}</i>\n\n`;
     } else {
-      text += `└ <i>Tidak ada posisi terbuka saat ini.</i>\n`;
+      text += `└ <i>Tidak ada posisi terbuka saat ini.</i>\n\n`;
     }
+
+    if (claimableText) {
+      text += claimableText;
+    }
+
     text += `───────────────────────────\n🕒 <i>Diperbarui: ${now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</i>`;
 
-    const keyboard = new InlineKeyboard()
+    const keyboard = new InlineKeyboard();
+    if (hasClaimable) {
+      keyboard.text(claimBtnText, 'claim_rent').row();
+    }
+    keyboard
       .text('📊 Cek Portofolio', 'menu_positions')
       .text('🔄 Refresh', 'menu_report')
       .row()

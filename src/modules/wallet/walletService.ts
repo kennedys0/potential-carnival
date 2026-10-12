@@ -1,4 +1,17 @@
-import { Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import {
+  Connection,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  SystemProgram,
+  TransactionMessage,
+  TransactionInstruction,
+  VersionedTransaction,
+} from '@solana/web3.js';
+import {
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  createCloseAccountInstruction,
+} from '@solana/spl-token';
 import QRCode from 'qrcode';
 import bs58 from 'bs58';
 import { KeypairService } from './keypairService';
@@ -8,6 +21,30 @@ import { TxSender, TxSendResult } from './txSender';
 import { verifyWithdrawalTransfer } from './withdrawalVerification.js';
 import { SwapTransactionIntent, TransactionValidator } from './transactionValidator.js';
 import { appSettings } from '../../config/settings';
+import { logger } from '../../utils/logger';
+
+export interface ClaimableRentAccount {
+  pubkey: string;
+  mint: string;
+  lamports: number;
+  programId: string;
+}
+
+export interface ClaimableRentInfo {
+  emptyAccountsCount: number;
+  claimableLamports: number;
+  claimableSol: number;
+  accounts: ClaimableRentAccount[];
+}
+
+export interface ClaimRentResult {
+  success: boolean;
+  accountsClosed: number;
+  reclaimedLamports: number;
+  reclaimedSol: number;
+  signatures: string[];
+  message: string;
+}
 
 export class WalletService {
   constructor(
@@ -444,5 +481,177 @@ export class WalletService {
     }
 
     return keypair;
+  }
+
+  async getClaimableRent(userId: number, excludeMints?: Iterable<string>): Promise<ClaimableRentInfo> {
+    const wallet = await this.walletRepo.getWalletByUserId(userId);
+    if (!wallet) {
+      return { emptyAccountsCount: 0, claimableLamports: 0, claimableSol: 0, accounts: [] };
+    }
+
+    const excluded = new Set(excludeMints ? Array.from(excludeMints) : []);
+    const walletPubkey = new PublicKey(wallet.public_key);
+
+    try {
+      const splAccountsPromise = this.connection
+        .getParsedTokenAccountsByOwner(walletPubkey, { programId: TOKEN_PROGRAM_ID })
+        .catch((err) => {
+          logger.warn({ err, userId }, 'Failed to fetch SPL token accounts for rent calculation');
+          return { value: [] };
+        });
+
+      const token2022AccountsPromise = this.connection
+        .getParsedTokenAccountsByOwner(walletPubkey, { programId: TOKEN_2022_PROGRAM_ID })
+        .catch((err) => {
+          logger.warn({ err, userId }, 'Failed to fetch Token-2022 accounts for rent calculation');
+          return { value: [] };
+        });
+
+      const [splAccounts, token2022Accounts] = await Promise.all([splAccountsPromise, token2022AccountsPromise]);
+
+      const emptyAccounts: ClaimableRentAccount[] = [];
+      let totalLamports = 0;
+
+      const processAccounts = (accounts: Array<{ pubkey: PublicKey; account: any }>, programId: PublicKey) => {
+        for (const acc of accounts) {
+          const parsedInfo = acc.account.data?.parsed?.info;
+          if (!parsedInfo) continue;
+          const mint = parsedInfo.mint;
+          if (mint && excluded.has(mint)) continue;
+
+          const tokenAmount = parsedInfo.tokenAmount;
+          if (tokenAmount?.amount === '0') {
+            const lamports = acc.account.lamports ?? 0;
+            if (lamports > 0) {
+              emptyAccounts.push({
+                pubkey: acc.pubkey.toBase58(),
+                mint: mint ?? '',
+                lamports,
+                programId: programId.toBase58(),
+              });
+              totalLamports += lamports;
+            }
+          }
+        }
+      };
+
+      processAccounts(splAccounts.value, TOKEN_PROGRAM_ID);
+      processAccounts(token2022Accounts.value, TOKEN_2022_PROGRAM_ID);
+
+      return {
+        emptyAccountsCount: emptyAccounts.length,
+        claimableLamports: totalLamports,
+        claimableSol: totalLamports / LAMPORTS_PER_SOL,
+        accounts: emptyAccounts,
+      };
+    } catch (err) {
+      logger.warn({ err, userId }, 'Failed to get claimable rent');
+      return { emptyAccountsCount: 0, claimableLamports: 0, claimableSol: 0, accounts: [] };
+    }
+  }
+
+  async claimRent(userId: number, excludeMints?: Iterable<string>): Promise<ClaimRentResult> {
+    const wallet = await this.walletRepo.getWalletByUserId(userId);
+    if (!wallet) {
+      return {
+        success: false,
+        accountsClosed: 0,
+        reclaimedLamports: 0,
+        reclaimedSol: 0,
+        signatures: [],
+        message: 'Wallet belum terdaftar.',
+      };
+    }
+
+    const rentInfo = await this.getClaimableRent(userId, excludeMints);
+    if (rentInfo.emptyAccountsCount === 0) {
+      return {
+        success: false,
+        accountsClosed: 0,
+        reclaimedLamports: 0,
+        reclaimedSol: 0,
+        signatures: [],
+        message: 'Tidak ada token account kosong yang dapat diklaim.',
+      };
+    }
+
+    const walletPubkey = new PublicKey(wallet.public_key);
+    const balance = await this.connection.getBalance(walletPubkey);
+    const MIN_FEE_LAMPORTS = 5000;
+    if (balance < MIN_FEE_LAMPORTS) {
+      return {
+        success: false,
+        accountsClosed: 0,
+        reclaimedLamports: 0,
+        reclaimedSol: 0,
+        signatures: [],
+        message: 'Saldo SOL tidak mencukupi untuk biaya gas transaksi Solana (minimal 0.0001 SOL).',
+      };
+    }
+
+    const keypair = await this.decryptWalletRecord(wallet);
+    const signatures: string[] = [];
+    let totalClosed = 0;
+    let totalReclaimedLamports = 0;
+    const BATCH_SIZE = 15;
+
+    try {
+      for (let i = 0; i < rentInfo.accounts.length; i += BATCH_SIZE) {
+        const batch = rentInfo.accounts.slice(i, i + BATCH_SIZE);
+        const instructions: TransactionInstruction[] = batch.map((acc) =>
+          createCloseAccountInstruction(
+            new PublicKey(acc.pubkey),
+            walletPubkey,
+            walletPubkey,
+            [],
+            new PublicKey(acc.programId)
+          )
+        );
+
+        const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+        const message = new TransactionMessage({
+          payerKey: walletPubkey,
+          recentBlockhash: blockhash,
+          instructions,
+        }).compileToV0Message();
+
+        const transaction = new VersionedTransaction(message);
+        const sendResult = await TxSender.sendAndConfirm(this.connection, transaction, [keypair]);
+
+        if (sendResult.status === 'SUCCESS') {
+          signatures.push(sendResult.signature);
+          totalClosed += batch.length;
+          const batchLamports = batch.reduce((sum, a) => sum + a.lamports, 0);
+          totalReclaimedLamports += batchLamports;
+        } else {
+          logger.warn({ sendResult, userId }, 'Failed to close a batch of empty token accounts');
+          if (signatures.length === 0) {
+            return {
+              success: false,
+              accountsClosed: 0,
+              reclaimedLamports: 0,
+              reclaimedSol: 0,
+              signatures: [],
+              message: `Transaksi klaim gagal: ${sendResult.status}`,
+            };
+          }
+          break;
+        }
+      }
+
+      return {
+        success: totalClosed > 0,
+        accountsClosed: totalClosed,
+        reclaimedLamports: totalReclaimedLamports,
+        reclaimedSol: totalReclaimedLamports / LAMPORTS_PER_SOL,
+        signatures,
+        message:
+          totalClosed > 0
+            ? `Berhasil menutup ${totalClosed} akun token kosong!`
+            : 'Tidak ada akun yang berhasil ditutup.',
+      };
+    } finally {
+      KeypairService.clearKeypair(keypair);
+    }
   }
 }

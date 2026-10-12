@@ -80,4 +80,40 @@ describe('Positions Handler', () => {
     expect(text).toContain('BONK');
     expect(text).toContain('PnL: +N/A');
   });
+
+  it('displays claimable rent fee info and claim button when empty accounts exist', async () => {
+    const mockCtx: any = {
+      from: { id: 123456 },
+      reply: vi.fn().mockResolvedValue(true),
+    };
+
+    const mockTradeRepo: any = {
+      getTradesByStatuses: vi.fn().mockResolvedValue([]),
+    };
+
+    const mockScannerService: any = {
+      scanTokenByAddress: vi.fn().mockResolvedValue(null),
+    };
+
+    const mockWalletService: any = {
+      getClaimableRent: vi.fn().mockResolvedValue({
+        emptyAccountsCount: 3,
+        claimableLamports: 6117840,
+        claimableSol: 0.00611784,
+        accounts: [],
+      }),
+    };
+
+    await handlePositionsMenu(mockCtx, mockTradeRepo, mockScannerService, mockWalletService);
+
+    expect(mockCtx.reply).toHaveBeenCalled();
+    const text = mockCtx.reply.mock.calls[0][0];
+    expect(text).toContain('Rent Fee Siap Diklaim');
+    expect(text).toContain('3 Akun Kosong');
+    expect(text).toContain('0.0061 SOL');
+
+    const replyOptions = mockCtx.reply.mock.calls[0][1];
+    const keyboardText = JSON.stringify(replyOptions.reply_markup);
+    expect(keyboardText).toContain('claim_rent');
+  });
 });
