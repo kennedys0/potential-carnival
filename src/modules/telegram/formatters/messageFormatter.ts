@@ -1,3 +1,4 @@
+import { InlineKeyboard } from 'grammy';
 import { SecurityScoreResult } from '../../security/scoreCalculator';
 import { AiAnalysis } from '../../analyzer/analyzerService';
 import { DexScreenerPair } from '../../scanner/dexScreenerClient';
@@ -109,4 +110,232 @@ ${UI_DIVIDER}
 🕒 <i>Diperbarui: ${timeStr} WIB</i>
 ⚠️ <i>DYOR. Bot ini hanya alat bantu analisa, bukan saran finansial.</i>
 `.trim();
+}
+
+export function formatRadarFriendlyReason(reason: string): string {
+  if (!reason) return 'Kondisi pasar belum memenuhi kriteria';
+  const lower = reason.toLowerCase();
+
+  if (lower.includes('volatile') || lower.includes('low confidence')) {
+    return 'Kondisi teknikal & momentum belum terkonfirmasi';
+  }
+  if (lower.includes('invalid pool creation time')) {
+    return 'Waktu pembuatan pool tidak valid';
+  }
+  if (lower.includes('belum masuk target window') || lower.includes('pool age')) {
+    return 'Umur pool masih di luar rentang target sniping';
+  }
+  if (lower.includes('belum sinkron') || lower.includes('belum valid')) {
+    return 'Data pool belum tersinkronisasi di DexScreener';
+  }
+  if (lower.includes('likuiditas atau harga kosong')) {
+    return 'Data likuiditas atau harga masih kosong';
+  }
+  if (lower.includes('gagal tes anti-rug') || lower.includes('anti-rug')) {
+    return reason; // Keep specific anti-rug failure details
+  }
+  if (lower.includes('rute jual') || lower.includes('sell route')) {
+    return 'Rute jual (sell route) belum tersedia di router DEX';
+  }
+  if (lower.includes('di bawah target')) {
+    return reason;
+  }
+  if (lower.includes('daily max buys') || lower.includes('batas harian')) {
+    return 'Batas kuota transaksi harian telah tercapai';
+  }
+  if (lower.includes('max active positions') || lower.includes('posisi aktif')) {
+    return 'Batas jumlah posisi aktif maksimum telah tercapai';
+  }
+  if (lower.includes('daily budget')) {
+    return 'Batas anggaran modal harian tercapai';
+  }
+  if (lower.includes('cooldown')) {
+    return 'Masa jeda (cooldown) antar order masih aktif';
+  }
+  if (lower.includes('circuit breaker')) {
+    return 'Pengaman darurat (Circuit Breaker) sedang aktif';
+  }
+
+  return reason;
+}
+
+export interface RadarCandidateParams {
+  type: 'TRENDING' | 'SNIPER';
+  symbol: string;
+  name?: string;
+  tokenAddress: string;
+  pairAddress?: string;
+  priceUsd?: number | null;
+  liquidityUsd?: number | null;
+  volume5mUsd?: number | null;
+  poolAgeText?: string | null;
+  securityScore?: number | null;
+  securityLevel?: string | null;
+  riskFlags?: string[];
+  status: 'SKIPPED' | 'EXECUTED' | 'ALERT';
+  reason: string;
+}
+
+export function formatRadarCandidate(params: RadarCandidateParams): string {
+  const isSniper = params.type === 'SNIPER';
+  const header = isSniper ? '⚡ <b>SNIPER RADAR</b>' : '📡 <b>AUTOPILOT RADAR</b>';
+  const displayName = params.name ? `${params.name} ($${params.symbol})` : `$${params.symbol}`;
+
+  let statusBadge = '<b>⚪ DILEWATI (SKIPPED)</b>';
+  if (params.status === 'EXECUTED') {
+    statusBadge = '<b>🟢 EKSEKUSI BUY</b>';
+  } else if (params.status === 'ALERT') {
+    statusBadge = '<b>🟡 RADAR SIGNAL DETECTED</b>';
+  }
+
+  const lines: string[] = [
+    header,
+    UI_DIVIDER,
+    `💎 <b>${escapeHtml(displayName)}</b>`,
+    `<code>${escapeHtml(params.tokenAddress)}</code> <i>(Tap to copy)</i>`,
+  ];
+
+  // Metrics Section
+  const metrics: string[] = [];
+  if (typeof params.priceUsd === 'number' && Number.isFinite(params.priceUsd)) {
+    metrics.push(`• <b>Harga:</b> <code>${formatPrice(params.priceUsd)}</code>`);
+  }
+  if (typeof params.liquidityUsd === 'number' && Number.isFinite(params.liquidityUsd)) {
+    metrics.push(`• <b>Likuiditas:</b> <code>${formatUsd(params.liquidityUsd)}</code>`);
+  }
+  if (params.poolAgeText) {
+    metrics.push(`• <b>Umur Pool:</b> <code>${escapeHtml(params.poolAgeText)}</code>`);
+  }
+  if (typeof params.volume5mUsd === 'number' && Number.isFinite(params.volume5mUsd)) {
+    metrics.push(`• <b>Volume 5m:</b> <code>${formatUsd(params.volume5mUsd)}</code>`);
+  }
+
+  if (metrics.length > 0) {
+    lines.push('', '📊 <b>Metrik On-Chain:</b>', ...metrics);
+  }
+
+  // Security Section
+  if (typeof params.securityScore === 'number' && Number.isFinite(params.securityScore)) {
+    let levelEmoji = '🔴';
+    if (params.securityScore >= 75) levelEmoji = '🟢';
+    else if (params.securityScore >= 50) levelEmoji = '🟡';
+
+    const scoreBar = formatProgressBar(params.securityScore, 100, 8);
+    lines.push(
+      '',
+      `🛡️ <b>Audit Keamanan Anti-Rug:</b>`,
+      `• <b>Skor:</b> ${levelEmoji} <b>${params.securityScore}/100</b> [${escapeHtml(params.securityLevel || 'CHECKED')}]`,
+      `• <b>Rating:</b> <code>${scoreBar}</code>`
+    );
+
+    if (params.riskFlags && params.riskFlags.length > 0) {
+      const shownFlags = params.riskFlags.slice(0, 2).map(escapeHtml).join(', ');
+      const suffix = params.riskFlags.length > 2 ? ', dll' : '';
+      lines.push(`• <b>Flags:</b> ⚠️ <i>${shownFlags}${suffix}</i>`);
+    }
+  }
+
+  // Status & Decision
+  const friendlyReason = formatRadarFriendlyReason(params.reason);
+  lines.push(
+    '',
+    UI_DIVIDER,
+    `📋 <b>Status:</b> ${statusBadge}`,
+    `📝 <b>Analisa:</b> <i>${escapeHtml(friendlyReason)}</i>`
+  );
+
+  return lines.join('\n').trim();
+}
+
+export function buildRadarCandidateKeyboard(
+  tokenAddress: string,
+  pairAddress?: string,
+  executed: boolean = false
+): InlineKeyboard {
+  const chartTarget = pairAddress || tokenAddress;
+  const keyboard = new InlineKeyboard()
+    .text('🔍 Scan Mendalam', `refresh:${tokenAddress}`)
+    .url('📈 DexScreener', `https://dexscreener.com/solana/${chartTarget}`);
+
+  if (executed) {
+    keyboard.row().text('📊 Cek Portofolio', 'menu_positions');
+  }
+
+  return keyboard;
+}
+
+export interface RadarCycleDigestParams {
+  type: 'TRENDING' | 'SNIPER';
+  scannedCount: number;
+  passedSafetyCount?: number;
+  executedCount?: number;
+}
+
+export function formatRadarCycleDigest(params: RadarCycleDigestParams): string {
+  const isSniper = params.type === 'SNIPER';
+  const typeLabel = isSniper ? '⚡ New Token Pools (Sniper)' : '📈 Trending Token Momentum';
+  const timeStr = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' });
+  const execCount = params.executedCount ?? 0;
+  const execNote = execCount > 0 ? ` 🚀 <b>(${execCount} order diproses)</b>` : ' <i>(Kondisi pasar wait-and-see)</i>';
+
+  const lines = [
+    `🔄 <b>RINGKASAN SIKLUS RADAR</b>`,
+    UI_DIVIDER,
+    `⏱ <b>Waktu:</b> <code>${timeStr} WIB</code>`,
+    `📡 <b>Kategori:</b> <b>${typeLabel}</b>`,
+    `🔍 <b>Token Dipindai:</b> <code>${params.scannedCount} Pair</code>`,
+  ];
+
+  if (typeof params.passedSafetyCount === 'number') {
+    lines.push(`🛡️ <b>Lolos Anti-Rug:</b> <code>${params.passedSafetyCount} Pair</code>`);
+  }
+
+  lines.push(
+    `🎯 <b>Eksekusi Buy:</b> <code>${execCount} Order</code>${execNote}`,
+    UI_DIVIDER,
+    `<i>Radar terus aktif memantau pergerakan on-chain di latar belakang...</i>`
+  );
+
+  return lines.join('\n').trim();
+}
+
+export interface RadarHubParams {
+  isLiveFeedActive: boolean;
+  isTrendingActive: boolean;
+  isSniperActive: boolean;
+  trendingSizeSol: number;
+  sniperSizeSol: number;
+}
+
+export function formatRadarHub(params: RadarHubParams): string {
+  const liveFeedTag = params.isLiveFeedActive ? '🟢 AKTIF (Menerima Feed)' : '🔕 NONAKTIF (Hening)';
+  const trendTag = params.isTrendingActive ? '🟢 BERJALAN' : '⏸ JEDA';
+  const sniperTag = params.isSniperActive ? '🟢 BERJALAN' : '🔴 NONAKTIF';
+  const timeStr = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' });
+
+  return `
+📡 <b>RADAR LIVE FEED COMMAND HUB</b>
+${UI_DIVIDER}
+Radar memantau pergerakan pasar Solana secara real-time. Setiap siklus, token dievaluasi dengan filter Anti-Rug, analisis teknikal, dan aturan eksekusi otomatis.
+
+⚙️ <b>Status Monitoring Real-Time:</b>
+• <b>Notifikasi Live Feed:</b> ${liveFeedTag}
+• <b>Autopilot Trending:</b> ${trendTag} <i>(${params.trendingSizeSol} SOL/trade)</i>
+• <b>New Pool Sniper:</b> ${sniperTag} <i>(${params.sniperSizeSol} SOL/trade)</i>
+
+${UI_DIVIDER}
+🕒 <i>Status Terkini: ${timeStr} WIB</i>
+<i>Tekan tombol di bawah untuk toggle notifikasi atau membuka konfigurasi:</i>
+`.trim();
+}
+
+export function buildRadarHubKeyboard(isLiveFeedActive: boolean): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(isLiveFeedActive ? '🔕 Matikan Live Feed' : '🔔 Aktifkan Live Feed', 'toggle_livefeed')
+    .row()
+    .text('🤖 Set Autopilot', 'menu_autopilot')
+    .text('⚡ Set Sniper', 'sniper_settings')
+    .row()
+    .text('🔄 Refresh Status', 'radar_refresh')
+    .text('🏠 Dashboard', 'menu_main');
 }

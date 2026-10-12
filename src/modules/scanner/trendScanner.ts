@@ -7,7 +7,12 @@ import { AutopilotRepository } from '../../database/repositories/autopilotReposi
 import { UserStateService } from '../user/userStateService';
 import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
-import { escapeHtml } from '../telegram/formatters/messageFormatter';
+import { 
+  escapeHtml, 
+  formatRadarCandidate, 
+  formatRadarCycleDigest, 
+  buildRadarCandidateKeyboard 
+} from '../telegram/formatters/messageFormatter';
 import { appSettings } from '../../config/settings.js';
 
 export interface TelegramBotApi {
@@ -173,6 +178,47 @@ export class TrendScanner {
       const topPairs = sortedPairs.slice(0, 5);
       logger.info(`TrendScanner: Selected ${topPairs.length}/${viablePairs.length} viable pairs by volume for deep analysis.`);
 
+      let cyclePassedSafetyCount = 0;
+      let cycleExecutedCount = 0;
+
+      // ── Max-positions gate: skip heavy token processing if every user is already full ──
+      const redis2 = getRedisConnection(); // redis is already declared later; use alias here
+      const configsWithCapacity = await Promise.all(
+        activeConfigs.map(async (cfg) => {
+          const state = await this.userStateService.getAutopilotState(cfg.user_id);
+          const maxPos = Number((cfg.sizing_params as any)?.max_concurrent_positions ?? 3);
+          return { cfg, state, maxPos, hasCap: state.trendingPositionsCount < maxPos };
+        })
+      );
+
+      const usersWithCapacity = configsWithCapacity.filter((x) => x.hasCap);
+
+      // Notify capped users (once per 5 min) and skip the whole scan if none have room
+      for (const { cfg, state, maxPos } of configsWithCapacity.filter((x) => !x.hasCap)) {
+        if (liveFeedSubscribers.has(cfg.user_id)) {
+          const capKey = `trending:cap_notified:${cfg.user_id}`;
+          if (!(await redis2.get(capKey))) {
+            await redis2.set(capKey, '1', 'EX', 5 * 60);
+            try {
+              await this.botApi.sendMessage(
+                cfg.user_id,
+                `⏸ <b>Trending Scanning Dijeda</b>\n\nPosisi aktif sudah mencapai batas maksimal (<b>${state.trendingPositionsCount}/${maxPos}</b>).\n\nScanning akan dilanjutkan kembali setelah salah satu posisi ditutup.`,
+                { parse_mode: 'HTML' }
+              );
+            } catch (_) {}
+          }
+        }
+        logger.debug(`TrendScanner: user ${cfg.user_id} at max trending positions (${state.trendingPositionsCount}/${maxPos}), skipping cycle`);
+      }
+
+      if (usersWithCapacity.length === 0) {
+        logger.info('TrendScanner: all active users at max positions — skipping scan cycle');
+        return;
+      }
+
+      // Rebuild activeConfigs to only include users with room for a new position
+      const cappedActiveConfigs = usersWithCapacity.map((x) => x.cfg);
+
       for (const pair of topPairs) {
         try {
           const tokenAddress = pair.baseToken.address;
@@ -185,6 +231,10 @@ export class TrendScanner {
             liquidityUsd: pair.liquidity?.usd || null,
             marketCapUsd: pair.marketCap || pair.fdv || null,
           });
+
+          if (!security.isHardBlocked && security.score >= 50) {
+            cyclePassedSafetyCount++;
+          }
 
           const candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 5);
           // Resample 5m candles to 15m macro candles mathematically without extra API calls
@@ -200,10 +250,16 @@ export class TrendScanner {
           }
 
           // 4. Evaluate for all active users
-          for (const config of activeConfigs) {
+          for (const config of cappedActiveConfigs) {
             try {
               const currentState = await this.userStateService.getAutopilotState(config.user_id);
-              
+              const maxPos = Number((config.sizing_params as any)?.max_concurrent_positions ?? 3);
+              // Per-user capacity re-check (state may have changed after another token was bought)
+              if (currentState.trendingPositionsCount >= maxPos) {
+                logger.debug(`TrendScanner: user ${config.user_id} reached max trending positions (${currentState.trendingPositionsCount}/${maxPos}) mid-cycle, skipping`);
+                continue;
+              }
+
               // Circuit Breaker Check
               if (await this.userStateService.checkCircuitBreaker(config.user_id, currentState)) {
                 logger.debug(`Autopilot circuit broken for user ${config.user_id}, skipping.`);
@@ -238,21 +294,31 @@ export class TrendScanner {
               );
 
               if (result.executed) {
+                cycleExecutedCount++;
                 logger.info(`Autopilot executed trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
                 
                 // Notify user
                 try {
-                  await this.botApi.sendMessage(config.user_id, 
-                    `🚨 <b>AUTOPILOT EXECUTION</b> 🚨\n\n` +
-                    `Sistem mendeteksi setup yang valid dan baru saja mengeksekusi <b>BUY</b>!\n\n` +
-                    `🎯 <b>Target:</b> <code>${escapeHtml(pair.baseToken.symbol)}</code>\n` +
-                    `📄 <b>CA:</b> <code>${tokenAddress}</code>\n` +
-                    `🛡️ <b>Safety:</b> ${security.score}/100\n` +
-                    (security.riskFlags.length > 0 ? `⚠️ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).map(escapeHtml).join(', ') + ', dll' : security.riskFlags.map(escapeHtml).join(', ')}\n` : '') +
-                    `📝 <b>Analisa:</b> <i>${escapeHtml(result.reason)}</i>\n\n` +
-                    `👉 Cek /positions untuk memantau performa.`,
-                    { parse_mode: 'HTML' }
-                  );
+                  const alertText = formatRadarCandidate({
+                    type: 'TRENDING',
+                    symbol: pair.baseToken.symbol,
+                    name: pair.baseToken.name,
+                    tokenAddress,
+                    pairAddress: pair.pairAddress,
+                    priceUsd,
+                    liquidityUsd: pair.liquidity?.usd,
+                    volume5mUsd: currentVolume,
+                    securityScore: security.score,
+                    securityLevel: security.level,
+                    riskFlags: security.riskFlags,
+                    status: 'EXECUTED',
+                    reason: result.reason,
+                  });
+                  const keyboard = buildRadarCandidateKeyboard(tokenAddress, pair.pairAddress, true);
+                  await this.botApi.sendMessage(config.user_id, alertText, { 
+                    parse_mode: 'HTML',
+                    reply_markup: keyboard,
+                  });
                 } catch (e) {
                   logger.error({ err: e }, 'Gagal mengirim notifikasi Autopilot ke user');
                 }
@@ -260,19 +326,26 @@ export class TrendScanner {
                 logger.debug(`Autopilot skipped trade for user ${config.user_id} on ${pair.baseToken.symbol}: ${result.reason}`);
                 if (liveFeedSubscribers.has(config.user_id)) {
                   try {
-                    await this.botApi.sendMessage(config.user_id, 
-                      `📡 <b>AUTOPILOT RADAR</b>\n` +
-                      `├ <b>Token:</b> <code>${escapeHtml(pair.baseToken.symbol)}</code>\n` +
-                      `├ <b>CA:</b> <code>${tokenAddress}</code>\n` +
-                      `├ <b>Safety:</b> ${security.score}/100 🛡️\n` +
-                      (security.riskFlags.length > 0 ? `├ <b>Flags:</b> ${security.riskFlags.length > 2 ? security.riskFlags.slice(0, 2).map(escapeHtml).join(', ') + ', dll' : security.riskFlags.map(escapeHtml).join(', ')}\n` : '') +
-                      `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                      `└ <b>Reason:</b> <i>${escapeHtml(result.reason)}</i>`,
-                      { 
-                        parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${tokenAddress}` }]] }
-                      }
-                    );
+                    const alertText = formatRadarCandidate({
+                      type: 'TRENDING',
+                      symbol: pair.baseToken.symbol,
+                      name: pair.baseToken.name,
+                      tokenAddress,
+                      pairAddress: pair.pairAddress,
+                      priceUsd,
+                      liquidityUsd: pair.liquidity?.usd,
+                      volume5mUsd: currentVolume,
+                      securityScore: security.score,
+                      securityLevel: security.level,
+                      riskFlags: security.riskFlags,
+                      status: 'SKIPPED',
+                      reason: result.reason,
+                    });
+                    const keyboard = buildRadarCandidateKeyboard(tokenAddress, pair.pairAddress, false);
+                    await this.botApi.sendMessage(config.user_id, alertText, { 
+                      parse_mode: 'HTML',
+                      reply_markup: keyboard,
+                    });
                   } catch (e) {
                     // ignore live feed errors
                   }
@@ -292,9 +365,15 @@ export class TrendScanner {
       } // end loop over pairs
       
       // Notify live feed subscribers that a cycle finished
+      const digestText = formatRadarCycleDigest({
+        type: 'TRENDING',
+        scannedCount: topPairs.length,
+        passedSafetyCount: cyclePassedSafetyCount,
+        executedCount: cycleExecutedCount,
+      });
       for (const userId of liveFeedSubscribers) {
         try {
-          await this.botApi.sendMessage(userId, `🔄 <b>RADAR CYCLE COMPLETE</b>\n└ Memindai <b>${topPairs.length}</b> token teratas. Standby untuk siklus berikutnya...`, { parse_mode: 'HTML' });
+          await this.botApi.sendMessage(userId, digestText, { parse_mode: 'HTML' });
         } catch (e) {
           // ignore
         }

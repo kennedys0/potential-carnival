@@ -9,6 +9,11 @@ import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
 import { evaluatePoolAge, failClosedSniperSafety } from '../autopilot/strategyRisk';
 import { matchDiscoveredPool } from './sniperPoolSelection';
+import { 
+  formatRadarCandidate, 
+  formatRadarCycleDigest, 
+  buildRadarCandidateKeyboard 
+} from '../telegram/formatters/messageFormatter';
 
 const htmlEscape = (s: unknown): string => String(s).replace(/[&<>"']/g, char => (
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string,string>)[char]
@@ -54,24 +59,37 @@ export class SniperScanner {
       const pools = (await this.scannerService.fetchNewPairs()).slice(0, 3);
       const now = Date.now();
 
+      let cyclePassedSafetyCount = 0;
+      let cycleExecutedCount = 0;
+
       const notifyGlobalLiveFeed = async (candidate: any, reason: string) => {
         const notifKey = `sniper:notified_global:${candidate.pairAddress}`;
         if (await redis.get(notifKey)) return;
         await redis.set(notifKey, '1', 'EX', 15 * 60);
 
+        const ageText = candidate.poolCreatedAtMs
+          ? `${Math.max(1, Math.round((Date.now() - candidate.poolCreatedAtMs) / 1000))} detik`
+          : null;
+
+        const alertText = formatRadarCandidate({
+          type: 'SNIPER',
+          symbol: candidate.symbol,
+          tokenAddress: candidate.tokenAddress,
+          pairAddress: candidate.pairAddress,
+          poolAgeText: ageText,
+          status: 'SKIPPED',
+          reason,
+        });
+        const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, false);
+
         for (const userId of liveFeedSubscribers) {
           try {
             const cfg = await this.sniperRepo.getOrCreateConfig(userId);
             if (cfg.enabled) {
-              await this.botApi.sendMessage(userId,
-                `⚡ <b>SNIPER RADAR</b>\n` +
-                `├ <b>Token:</b> <code>${htmlEscape(candidate.symbol)}</code>\n` +
-                `├ <b>CA:</b> <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
-                `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                `└ <b>Reason:</b> <i>${htmlEscape(reason)}</i>`, { 
-                  parse_mode: 'HTML',
-                  reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${candidate.tokenAddress}` }]] }
-                });
+              await this.botApi.sendMessage(userId, alertText, { 
+                parse_mode: 'HTML',
+                reply_markup: keyboard
+              });
             }
           } catch (e) {}
         }
@@ -120,6 +138,7 @@ export class SniperScanner {
           await notifyGlobalLiveFeed(candidate, `Gagal tes Anti-Rug: ${security.hardBlockReasons.join(', ')}`);
           continue;
         }
+        cyclePassedSafetyCount++;
         const candles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 1);
         const macroCandles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 5);
         const volumes = candles.slice(0, -1).map(c => c.volume);
@@ -127,23 +146,70 @@ export class SniperScanner {
         const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, volumes, macroCandles);
         const ai = null; // Disabled AI for faster sniping
 
+        // Check if all eligible users are already at max positions; if so, skip this pool entirely
+        const configsWithCapacity: typeof eligibleConfigs = [];
         for (const config of eligibleConfigs) {
+          const state = await this.userStateService.getAutopilotState(config.user_id);
+          const latest = await this.sniperRepo.getOrCreateConfig(config.user_id);
+          const maxPos = latest.max_active_positions ?? 3;
+          if (state.sniperPositionsCount >= maxPos) {
+            // Notify live-feed subscribers once per cycle (debounced 5 min)
+            if (liveFeedSubscribers.has(config.user_id)) {
+              const capKey = `sniper:cap_notified:${config.user_id}`;
+              if (!(await redis.get(capKey))) {
+                await redis.set(capKey, '1', 'EX', 5 * 60);
+                try {
+                  await this.botApi.sendMessage(
+                    config.user_id,
+                    `⏸ <b>Sniper Scanning Dijeda</b>\n\nPosisi aktif sudah mencapai batas maksimal (<b>${state.sniperPositionsCount}/${maxPos}</b>).\n\nScanning akan dilanjutkan kembali setelah salah satu posisi ditutup.`,
+                    { parse_mode: 'HTML' }
+                  );
+                } catch (_) {}
+              }
+            }
+            logger.debug(`SniperScanner: user ${config.user_id} at max positions (${state.sniperPositionsCount}/${maxPos}), skipping candidate ${candidate.pairAddress}`);
+            continue;
+          }
+          configsWithCapacity.push(config);
+        }
+
+        if (configsWithCapacity.length === 0) {
+          logger.debug(`SniperScanner: all users at max positions for candidate ${candidate.pairAddress}, skipping pool entirely`);
+          continue;
+        }
+
+        for (const config of configsWithCapacity) {
           const notifyUserLiveFeed = async (reason: string) => {
             if (liveFeedSubscribers.has(config.user_id)) {
               const notifKey = `sniper:notified_user:${config.user_id}:${candidate.pairAddress}`;
               if (await redis.get(notifKey)) return;
               await redis.set(notifKey, '1', 'EX', 15 * 60);
 
+              const ageText = candidate.poolCreatedAtMs
+                ? `${Math.max(1, Math.round((Date.now() - candidate.poolCreatedAtMs) / 1000))} detik`
+                : null;
+
+              const alertText = formatRadarCandidate({
+                type: 'SNIPER',
+                symbol: candidate.symbol,
+                tokenAddress: candidate.tokenAddress,
+                pairAddress: candidate.pairAddress,
+                priceUsd,
+                liquidityUsd,
+                poolAgeText: ageText,
+                securityScore: security?.score,
+                securityLevel: security?.level,
+                riskFlags: security?.riskFlags,
+                status: 'SKIPPED',
+                reason,
+              });
+              const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, false);
+
               try {
-                await this.botApi.sendMessage(config.user_id,
-                  `⚡ <b>SNIPER RADAR</b>\n` +
-                  `├ <b>Token:</b> <code>${htmlEscape(candidate.symbol)}</code>\n` +
-                  `├ <b>CA:</b> <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
-                  `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                  `└ <b>Reason:</b> <i>${htmlEscape(reason)}</i>`, { 
-                    parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${candidate.tokenAddress}` }]] }
-                  });
+                await this.botApi.sendMessage(config.user_id, alertText, { 
+                  parse_mode: 'HTML',
+                  reply_markup: keyboard,
+                });
               } catch (e) {}
             }
           };
@@ -171,6 +237,12 @@ export class SniperScanner {
             }
 
             const state = await this.userStateService.getAutopilotState(config.user_id);
+            // Re-check max positions after acquiring the state inside the user loop
+            const maxPos = latest.max_active_positions ?? 3;
+            if (state.sniperPositionsCount >= maxPos) {
+              logger.debug(`SniperScanner: user ${config.user_id} reached max sniper positions (${state.sniperPositionsCount}/${maxPos}) inside evaluation, skipping`);
+              continue;
+            }
             if (await this.userStateService.checkCircuitBreaker(config.user_id, state)) continue;
             const result = await this.autopilotEngine.processCandidate(
               config.user_id, candidate.tokenAddress, candidate.symbol, priceUsd,
@@ -180,19 +252,35 @@ export class SniperScanner {
                 isSniper: true }, 'SNIPER'
             );
             if (result.executed) {
+              cycleExecutedCount++;
               // Accepted/submitted orders must never be automatically replayed due to RPC timeout.
               await redis.set(doneKey, '1', 'EX', 86_400);
               if (latest.notifications_enabled) {
                 try {
-                  await this.botApi.sendMessage(config.user_id,
-                    `⚡ <b>New Pool Sniper</b>\nToken: <code>${htmlEscape(candidate.symbol)}</code>\n` +
-                    `Mint: <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
-                    `Chart: <a href="https://dexscreener.com/solana/${candidate.tokenAddress}">DexScreener</a>\n` +
-                    `Pool: <code>${htmlEscape(candidate.pairAddress)}</code>\n` +
-                    `Status: <b>${htmlEscape(result.status ?? 'SUBMITTED')}</b>\n` +
-                    `Order: ${htmlEscape(result.reason)}\n\n` +
-                    `On-chain status can remain pending; check /positions for reconciliation.`,
-                    { parse_mode: 'HTML' });
+                  const ageText = candidate.poolCreatedAtMs
+                    ? `${Math.max(1, Math.round((Date.now() - candidate.poolCreatedAtMs) / 1000))} detik`
+                    : null;
+
+                  const alertText = formatRadarCandidate({
+                    type: 'SNIPER',
+                    symbol: candidate.symbol,
+                    tokenAddress: candidate.tokenAddress,
+                    pairAddress: candidate.pairAddress,
+                    priceUsd,
+                    liquidityUsd,
+                    poolAgeText: ageText,
+                    securityScore: security?.score,
+                    securityLevel: security?.level,
+                    riskFlags: security?.riskFlags,
+                    status: 'EXECUTED',
+                    reason: result.reason,
+                  });
+                  const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, true);
+
+                  await this.botApi.sendMessage(config.user_id, alertText, { 
+                    parse_mode: 'HTML',
+                    reply_markup: keyboard,
+                  });
                 } catch (error) {
                   logger.warn({ error }, 'Sniper notification could not be delivered');
                 }
@@ -202,15 +290,30 @@ export class SniperScanner {
               if (!(await redis.get(notifKey))) {
                 await redis.set(notifKey, '1', 'EX', 15 * 60);
                 try {
-                  await this.botApi.sendMessage(config.user_id,
-                    `⚡ <b>SNIPER RADAR</b>\n` +
-                    `├ <b>Token:</b> <code>${htmlEscape(candidate.symbol)}</code>\n` +
-                    `├ <b>CA:</b> <code>${htmlEscape(candidate.tokenAddress)}</code>\n` +
-                    `├ <b>Status:</b> ⚪ SKIPPED\n` +
-                    `└ <b>Reason:</b> <i>${htmlEscape(result.reason)}</i>`, { 
-                      parse_mode: 'HTML',
-                      reply_markup: { inline_keyboard: [[{ text: '🔍 Scan Token', callback_data: `refresh:${candidate.tokenAddress}` }]] }
-                    });
+                  const ageText = candidate.poolCreatedAtMs
+                    ? `${Math.max(1, Math.round((Date.now() - candidate.poolCreatedAtMs) / 1000))} detik`
+                    : null;
+
+                  const alertText = formatRadarCandidate({
+                    type: 'SNIPER',
+                    symbol: candidate.symbol,
+                    tokenAddress: candidate.tokenAddress,
+                    pairAddress: candidate.pairAddress,
+                    priceUsd,
+                    liquidityUsd,
+                    poolAgeText: ageText,
+                    securityScore: security?.score,
+                    securityLevel: security?.level,
+                    riskFlags: security?.riskFlags,
+                    status: 'SKIPPED',
+                    reason: result.reason,
+                  });
+                  const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, false);
+
+                  await this.botApi.sendMessage(config.user_id, alertText, { 
+                    parse_mode: 'HTML',
+                    reply_markup: keyboard,
+                  });
                 } catch { /* Best effort notification. */ }
               }
             }
@@ -222,12 +325,18 @@ export class SniperScanner {
       }
 
       // Notify live feed subscribers that a cycle finished
+      const digestText = formatRadarCycleDigest({
+        type: 'SNIPER',
+        scannedCount: pools.length,
+        passedSafetyCount: cyclePassedSafetyCount,
+        executedCount: cycleExecutedCount,
+      });
       for (const userId of liveFeedSubscribers) {
         try {
           // Check if sniper is enabled for this user to avoid spamming if they only want trending
           const cfg = await this.sniperRepo.getOrCreateConfig(userId);
           if (cfg.enabled) {
-            await this.botApi.sendMessage(userId, `🔄 <b>SNIPER CYCLE COMPLETE</b>\n└ Memindai <b>${pools.length}</b> token baru. Standby untuk siklus berikutnya...`, { parse_mode: 'HTML' });
+            await this.botApi.sendMessage(userId, digestText, { parse_mode: 'HTML' });
           }
         } catch (e) {}
       }

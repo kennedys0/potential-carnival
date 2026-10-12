@@ -44,6 +44,7 @@ import { handlePositionsMenu, handlePositionDetail } from './handlers/positionsH
 import { handleHelpMenu } from './handlers/helpHandler';
 import { handleReportCommand } from './handlers/reportHandler';
 import { handleCopyTradeCommand, handleCopyTradeMenu } from './handlers/copyTradeHandler';
+import { handleRadarHub } from './handlers/radarHandler';
 import { createMainMenuKeyboard } from './formatters/keyboardBuilder';
 import { escapeHtml } from './formatters/messageFormatter';
 import type { SecureMessageDeleteJobPayload } from '../../queue/queues';
@@ -248,17 +249,10 @@ export function registerBotRoutes(
     );
   });
 
-  // Command /livefeed
-  bot.command('livefeed', async (ctx) => {
+  // Command /livefeed & /radar
+  bot.command(['livefeed', 'radar'], async (ctx) => {
     if (!ctx.from) return;
-    
-    if (liveFeedSubscribers.has(ctx.from.id)) {
-      liveFeedSubscribers.delete(ctx.from.id);
-      await ctx.reply('🔕 <b>Live Feed Dimatikan</b>\n\nAnda tidak akan menerima notifikasi saat Autopilot mem-bypass token.', { parse_mode: 'HTML' });
-    } else {
-      liveFeedSubscribers.add(ctx.from.id);
-      await ctx.reply('🔔 <b>Live Feed Diaktifkan!</b>\n\nSistem akan mengirimkan laporan setiap kali Autopilot selesai memindai token-token trending di latar belakang (Setiap ~2 menit). \n\n<i>Ketik /livefeed lagi untuk mematikan.</i>', { parse_mode: 'HTML' });
-    }
+    await handleRadarHub(ctx, services.autopilotRepo, services.sniperRepo);
   });
 
   bot.on('message:text', async (ctx, next) => {
@@ -732,11 +726,16 @@ export function registerBotRoutes(
       if (!ctx.from) return;
       if (liveFeedSubscribers.has(ctx.from.id)) {
         liveFeedSubscribers.delete(ctx.from.id);
-        await ctx.answerCallbackQuery({ text: '🔕 Live Feed Dimatikan', show_alert: true });
+        await ctx.answerCallbackQuery({ text: '🔕 Live Feed Dimatikan' });
       } else {
         liveFeedSubscribers.add(ctx.from.id);
-        await ctx.answerCallbackQuery({ text: '🔔 Live Feed Diaktifkan', show_alert: true });
+        await ctx.answerCallbackQuery({ text: '🔔 Live Feed Diaktifkan' });
       }
+      await handleRadarHub(ctx, services.autopilotRepo, services.sniperRepo);
+    } else if (data === 'menu_radar' || data === 'radar_refresh') {
+      if (!ctx.from) return;
+      await ctx.answerCallbackQuery();
+      await handleRadarHub(ctx, services.autopilotRepo, services.sniperRepo);
     }
 
     else if (data.startsWith('refresh:')) {

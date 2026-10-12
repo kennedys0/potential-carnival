@@ -18,7 +18,7 @@ export async function handleHelpMenu(ctx: Context): Promise<void> {
 • <code>/wallet</code> - Cek saldo, QR deposit & withdraw
 • <code>/settings</code> - Atur ukuran trade, SL/TP, trailing stop
 • <code>/report</code> - Laporan harian profit/loss
-• <code>/livefeed</code> - Notifikasi real-time scan radar
+• <code>/radar</code> atau <code>/livefeed</code> - Radar Command Hub & live feed
 
 ───────────────────────────
 🛡️ <b>Proteksi Keamanan:</b>

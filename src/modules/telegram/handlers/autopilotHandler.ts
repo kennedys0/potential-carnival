@@ -46,6 +46,7 @@ export async function handleAutopilotMenu(
     .text('📜 Log Keputusan AI', 'autopilot_logs')
     .text('📊 Statistik Kinerja', 'autopilot_stats')
     .row()
+    .text('📡 Radar Hub Live Feed', 'menu_radar')
     .text('🏠 Dashboard Utama', 'menu_main');
 
   if (ctx.callbackQuery) {

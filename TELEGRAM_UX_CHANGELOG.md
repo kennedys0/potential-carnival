@@ -35,3 +35,17 @@
 - **Panduan Terpadu (`helpHandler.ts`) & Laporan Harian (`reportHandler.ts`)**:
   - 3 langkah cepat memulai trading untuk pengguna baru, daftar perintah cepat, dan penjelasan fitur anti-rug.
   - Laporan harian kini mendukung navigasi callback dari Dashboard maupun perintah `/report`.
+
+### 4. Pembaruan Komprehensif UI Radar & Live Feed (`messageFormatter.ts`, `trendScanner.ts`, `sniperScanner.ts`, `radarHandler.ts`)
+- **Radar Candidate Alert Card**:
+  - Mengganti pohon teks biasa (`├`, `└`) menjadi card terstruktur rapi dengan divider `───────────────────────────`.
+  - Dilengkapi identitas token lengkap (Nama, Symbol, CA tap-to-copy, link DexScreener).
+  - Menyajikan metrik on-chain langsung: Harga, Likuiditas, Umur Pool (Sniper) atau Volume 5m (Trending).
+  - Skor Anti-Rug visual dengan mini rating bar (`▰▰▰▰▰▰▱▱ 75/100`) dan badge status audit.
+  - Penjelasan alasan skip/eksekusi ramah pengguna berbahasa Indonesia (`formatRadarFriendlyReason`).
+  - Tombol aksi cepat: `[🔍 Scan Mendalam]`, `[📈 DexScreener]`, dan `[📊 Cek Portofolio]` jika order dieksekusi.
+- **Smart Cycle Digest**:
+  - Notifikasi berkala polos satu baris diganti dengan ringkasan mini digest elegan: menampilkan total token dipindai, lolos filter anti-rug, dan jumlah eksekusi buy.
+- **Radar Command Center Hub (`/livefeed` & `/radar`)**:
+  - Menampilkan dashboard status monitoring real-time untuk Live Feed Telegram, Trending Scalper, dan New Pool Sniper.
+  - Tombol kontrol cepat toggle ON/OFF live feed, shortcut setting autopilot/sniper, dan tombol refresh status.
