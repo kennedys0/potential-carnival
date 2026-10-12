@@ -193,3 +193,10 @@ test('transaction integrity migration binds reservations to one exact trade', ()
   assert.match(sql, /REVOKE ALL ON TABLE public\.copy_trade_deliveries FROM PUBLIC, anon, authenticated/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.claim_copy_trade_delivery\(\) TO service_role/);
 });
+
+test('atomic_reconcile_exit guards v_attempt access behind nested IF', () => {
+  const sql = load('20261012011700_fix_exit_reconcile_v_attempt.sql');
+  assert.doesNotMatch(sql, /p_exit_attempt_id IS NOT NULL\s+AND\s+v_attempt\.status/i);
+  assert.match(sql, /IF p_exit_attempt_id IS NOT NULL THEN\s+IF v_attempt\.status = 'SUCCESS'/);
+});
+

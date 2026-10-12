@@ -366,8 +366,11 @@ BEGIN
         END IF;
     END IF;
 
-    IF p_exit_attempt_id IS NOT NULL AND v_attempt.status = 'SUCCESS' THEN
-        RETURN 'INVALID_STATE';
+    -- Guard: Only check v_attempt.status if an exit attempt was provided
+    IF p_exit_attempt_id IS NOT NULL THEN
+        IF v_attempt.status = 'SUCCESS' THEN
+            RETURN 'INVALID_STATE';
+        END IF;
     END IF;
     IF v_trade.remaining_raw < p_token_delta_raw THEN
         RETURN 'INSUFFICIENT_INVENTORY';
