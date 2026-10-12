@@ -83,16 +83,21 @@ export async function handlePositionsMenu(
       const pnlIdr = currencyService.solToIdr(pnlSol);
       const pnlIdrFormatted = pnlIdr !== null ? currencyService.formatIdr(pnlIdr) : 'N/A';
 
+      const dexUrl = `https://dexscreener.com/solana/${trade.token_mint}`;
+      const shortCa = `${trade.token_mint.slice(0, 6)}...${trade.token_mint.slice(-4)}`;
+
       if (isPending) {
-        text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ⏳ <b>${trade.status}</b>\n`;
+        text += `${i + 1}. ${mode} <a href="${dexUrl}"><b>${escapeHtml(trade.token_symbol)}</b></a> | ⏳ <b>${trade.status}</b>\n`;
         text += `   ├ Status: <code>Membeli...</code> | Harap tunggu konfirmasi\n`;
-        text += `   └ Modal: <code>${trade.sol_amount} SOL</code>\n\n`;
+        text += `   ├ Modal: <code>${trade.sol_amount} SOL</code>\n`;
+        text += `   └ CA: <code>${trade.token_mint}</code>\n\n`;
         keyboard.text(`⏳ ${trade.token_symbol}`, `view_pos:${trade.id}`);
       } else {
-        text += `${i + 1}. ${mode} <b>${escapeHtml(trade.token_symbol)}</b> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
+        text += `${i + 1}. ${mode} <a href="${dexUrl}"><b>${escapeHtml(trade.token_symbol)}</b></a> | ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>\n`;
         text += `   ├ Ukuran: <code>${trade.sol_amount} SOL</code>\n`;
-        text += `   └ PnL: ${pnlSol >= 0 ? '+' : ''}${pnlIdrFormatted}\n\n`;
-        
+        text += `   ├ PnL: ${pnlSol >= 0 ? '+' : ''}${pnlIdrFormatted}\n`;
+        text += `   └ CA: <code>${trade.token_mint}</code>\n\n`;
+
         const btnPnlTag = `${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(1)}%`;
         keyboard.text(`${pnlIcon} ${trade.token_symbol} (${btnPnlTag})`, `view_pos:${trade.id}`);
       }
@@ -169,20 +174,24 @@ export async function handlePositionDetail(
   const pnlIcon = pnlPercent > 0 ? '🟢' : pnlPercent < 0 ? '🔴' : '➖';
   const timestamp = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' }) + ' WIB';
 
+  const dexUrl = `https://dexscreener.com/solana/${trade.token_mint}`;
+
   const text = isPending ? `
-📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
-<code>${escapeHtml(trade.token_mint)}</code> <i>(Tap to copy)</i>
+📈 <b>Detail Posisi: <a href="${dexUrl}">${escapeHtml(trade.token_symbol)}</a></b>
 ───────────────────────────
 • <b>Mode:</b> ${modeBadge}
 • <b>Status:</b> ⏳ <code>${trade.status}</code>
 • <b>Alokasi:</b> <code>${trade.sol_amount} SOL</code>
 
+🔗 <b>Contract Address:</b>
+<code>${trade.token_mint}</code>
+<a href="${dexUrl}">📊 Lihat di DexScreener</a>
+
 <i>Order Anda sedang diproses dan menunggu konfirmasi jaringan Solana. Silakan refresh dalam beberapa detik.</i>
 ───────────────────────────
 🕒 <i>Diperbarui: ${timestamp}</i>
 `.trim() : `
-📈 <b>Detail Posisi: ${escapeHtml(trade.token_symbol)}</b>
-<code>${escapeHtml(trade.token_mint)}</code> <i>(Tap to copy)</i>
+📈 <b>Detail Posisi: <a href="${dexUrl}">${escapeHtml(trade.token_symbol)}</a></b>
 ───────────────────────────
 • <b>Mode:</b> ${modeBadge}
 • <b>Status:</b> <code>${trade.status}</code>
@@ -193,6 +202,10 @@ export async function handlePositionDetail(
 • <b>Sekarang:</b> <code>$${currentPriceUsd.toFixed(6)}</code>
 • <b>PnL:</b> ${pnlIcon} <b>${pnlPercent > 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</b>
 • <b>Value:</b> <code>${pnlSol > 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL</code> (≈ ${pnlIdr !== null && pnlIdr >= 0 ? '+' : ''}${currencyService.formatIdr(pnlIdr)})
+
+🔗 <b>Contract Address:</b>
+<code>${trade.token_mint}</code>
+<a href="${dexUrl}">📊 Lihat di DexScreener</a>
 ───────────────────────────
 🕒 <i>Diperbarui: ${timestamp}</i>
 `.trim();
