@@ -57,6 +57,7 @@ export async function handleScanCommand(
       securityService.evaluateToken(tokenMint, {
         liquidityUsd: pair.liquidity?.usd || null,
         marketCapUsd: pair.marketCap || pair.fdv || null,
+        pairAddress: pair.pairAddress,
       }),
       scannerService.getCandles('solana', pair.pairAddress, 'minute', 5),
       scannerService.getCandles('solana', pair.pairAddress, 'minute', 15),

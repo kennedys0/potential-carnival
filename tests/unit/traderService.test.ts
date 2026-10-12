@@ -58,7 +58,7 @@ describe('TraderService', () => {
   });
 
   it('calculates dynamic slippage capped at maxSlippageBps', () => {
-    const service = new TraderService({} as any);
+    const service = new TraderService({} as any, {} as any);
     const slippage = service.calculateDynamicSlippage(100, 1.5, 300); // 100 + 1.5*120 = 280 <= 300
     expect(slippage).toBe(280);
 
@@ -136,6 +136,30 @@ describe('TraderService', () => {
     expect(result.is_dry_run).toBe(true);
     expect(result.token_mint).toBe('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
     expect(mockTradeRepo.createTrade).toHaveBeenCalled();
+  });
+
+  it('converts solAmount to lamports without floating-point truncation (e.g. 2.01 SOL)', async () => {
+    const mockTradeRepo: any = {
+      createTrade: vi.fn().mockImplementation((trade) => Promise.resolve({ id: 'trade-uuid', ...trade })),
+    };
+    const service = new TraderService(mockTradeRepo, {} as any, {} as any);
+
+    await service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 2.01,
+      currentPriceUsd: 1.0,
+      isDryRun: true,
+      source: 'MANUAL',
+    });
+
+    expect(mockTradeRepo.createTrade).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sol_amount: 2.01,
+        sol_spent_lamports: 2_010_000_000,
+      }),
+    );
   });
 
   it('rejects autopilot execution without an active durable reservation', async () => {
@@ -253,6 +277,217 @@ describe('TraderService', () => {
     expect(result.is_dry_run).toBe(false);
     expect(result.idempotency_key).toMatch(/^[0-9a-f]{64}$/);
     expect(result.sol_spent_lamports).toBeDefined();
+  });
+
+  it('converts solAmount to lamports exactly for live swap execution (e.g. 2.01 SOL)', async () => {
+    const mockTradeRepo: any = {
+      createTrade: vi.fn().mockImplementation((trade) => Promise.resolve({ id: 'trade-uuid', ...trade })),
+      updateTradeStatus: vi.fn().mockResolvedValue(true),
+      atomicReconcileEntry: vi.fn().mockResolvedValue(true),
+    };
+    const mockWalletService: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '1111' }),
+      getBalance: vi.fn().mockResolvedValue({ sol: 3.0 }),
+      getConnection: vi.fn().mockReturnValue({
+        getTokenSupply: vi.fn().mockResolvedValue({ value: { decimals: 6 } }),
+      }),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'mock-tx-sig-123' }),
+      getParsedTransaction: vi.fn().mockResolvedValue({
+        meta: {
+          fee: 5000,
+          preBalances: [3_000_000_000],
+          postBalances: [990_000_000],
+          preTokenBalances: [],
+          postTokenBalances: [{ mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'] } }
+      }),
+    };
+    const mockJupiterClient: any = {
+      buildSwap: mockBuildSwap(),
+    };
+
+    const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
+
+    await service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 2.01,
+      currentPriceUsd: 1.0,
+      isDryRun: false,
+      source: 'MANUAL',
+    });
+
+    expect(mockJupiterClient.buildSwap).toHaveBeenCalledWith(
+      'So11111111111111111111111111111111111111112',
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      2_010_000_000n,
+      expect.any(Number),
+      '1111',
+    );
+  });
+
+  it('converts solReceived to lamports without 1-lamport floor loss on exit', async () => {
+    const mockTradeRepo: any = {
+      getPendingExitAttempts: vi.fn().mockResolvedValue([]),
+      atomicReconcileExit: vi.fn().mockResolvedValue(true),
+    };
+    const service = new TraderService(mockTradeRepo, {} as any, {} as any);
+
+    const trade: any = {
+      id: 'trade-paper-1',
+      status: 'OPEN',
+      is_dry_run: true,
+      sol_amount: 2.01,
+      token_amount_raw: '1000000',
+      remaining_raw: '1000000',
+      entry_price_usd: 1.0,
+    };
+
+    await service.closePosition(trade, 1.0, 100);
+
+    expect(mockTradeRepo.atomicReconcileExit).toHaveBeenCalledWith(
+      'trade-paper-1',
+      undefined,
+      expect.objectContaining({
+        sol_delta_lamports: 2_010_000_000,
+      }),
+    );
+  });
+
+  it('generates distinct idempotency keys for two orders within the same minute and does not collide', async () => {
+    const recordedKeys = new Set<string>();
+    const mockTradeRepo: any = {
+      createTrade: vi.fn().mockImplementation(async (trade: any) => {
+        if (recordedKeys.has(trade.idempotency_key)) {
+          throw new Error(`duplicate key value violates unique constraint "trades_idempotency_key_key"`);
+        }
+        recordedKeys.add(trade.idempotency_key);
+        return { id: `trade-${recordedKeys.size}`, ...trade };
+      }),
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockWalletService: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '11111111111111111111111111111111' }),
+      getBalance: vi.fn().mockResolvedValue({ sol: 10.0 }),
+      getConnection: vi.fn().mockReturnValue({
+        getTokenSupply: vi.fn().mockResolvedValue({ value: { decimals: 6 } }),
+      }),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'mock-tx-sig-123' }),
+      getParsedTransaction: vi.fn().mockResolvedValue({
+        meta: { 
+          fee: 5000, 
+          preBalances: [2_000_000_000], 
+          postBalances: [1_500_000_000],
+          preTokenBalances: [],
+          postTokenBalances: [{ mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'] } }
+      }),
+    };
+    const mockJupiterClient: any = {
+      buildSwap: mockBuildSwap(),
+    };
+
+    const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
+
+    const orderReq = {
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 0.5,
+      currentPriceUsd: 1.0,
+      isDryRun: false,
+      source: 'MANUAL' as const,
+    };
+
+    const order1 = await service.executeOrder(orderReq);
+    const order2 = await service.executeOrder(orderReq);
+
+    expect(order1.idempotency_key).toBeDefined();
+    expect(order2.idempotency_key).toBeDefined();
+    expect(order1.idempotency_key).not.toBe(order2.idempotency_key);
+    expect(recordedKeys.size).toBe(2);
+  });
+
+  it('uses caller-provided idempotencyKey and rejects duplicates with the same key', async () => {
+    const recordedKeys = new Set<string>();
+    const mockTradeRepo: any = {
+      createTrade: vi.fn().mockImplementation(async (trade: any) => {
+        if (recordedKeys.has(trade.idempotency_key)) {
+          throw new Error(`duplicate key value violates unique constraint "trades_idempotency_key_key"`);
+        }
+        recordedKeys.add(trade.idempotency_key);
+        return { id: `trade-${recordedKeys.size}`, ...trade };
+      }),
+      updateTradeStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockWalletService: any = {
+      getOrCreateWallet: vi.fn().mockResolvedValue({ publicKey: '11111111111111111111111111111111' }),
+      getBalance: vi.fn().mockResolvedValue({ sol: 10.0 }),
+      getConnection: vi.fn().mockReturnValue({
+        getTokenSupply: vi.fn().mockResolvedValue({ value: { decimals: 6 } }),
+      }),
+      signAndSendVersionedTransaction: vi.fn().mockResolvedValue({ status: 'SUCCESS', signature: 'mock-tx-sig-123' }),
+      getParsedTransaction: vi.fn().mockResolvedValue({
+        meta: { 
+          fee: 5000, 
+          preBalances: [2_000_000_000], 
+          postBalances: [1_500_000_000],
+          preTokenBalances: [],
+          postTokenBalances: [{ mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', owner: '1111', uiTokenAmount: { amount: '1000000', decimals: 6 } }]
+        },
+        transaction: { message: { accountKeys: [{ pubkey: { toBase58: () => '1111' } }, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'] } }
+      }),
+    };
+    const mockJupiterClient: any = {
+      buildSwap: mockBuildSwap(),
+    };
+
+    const service = new TraderService(mockTradeRepo, mockWalletService, mockJupiterClient);
+
+    const customKey1 = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const order1 = await service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 0.5,
+      currentPriceUsd: 1.0,
+      isDryRun: false,
+      source: 'MANUAL',
+      idempotencyKey: customKey1,
+    });
+
+    expect(order1.idempotency_key).toBe(customKey1);
+
+    // Retrying with the same idempotencyKey should be rejected by unique constraint
+    await expect(service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 0.5,
+      currentPriceUsd: 1.0,
+      isDryRun: false,
+      source: 'MANUAL',
+      idempotencyKey: customKey1,
+    })).rejects.toThrow(/Failed to create PENDING trade \(idempotency\/duplicate\?\)/);
+
+    // A different idempotencyKey should succeed
+    const customKey2 = 'user-intent-order-999';
+    const order2 = await service.executeOrder({
+      userId: 111,
+      tokenMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      tokenSymbol: 'USDC',
+      solAmount: 0.5,
+      currentPriceUsd: 1.0,
+      isDryRun: false,
+      source: 'MANUAL',
+      idempotencyKey: customKey2,
+    });
+
+    expect(order2.idempotency_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(order2.idempotency_key).not.toBe(customKey1);
   });
 
   it('attaches an independent economic floor to a Pump buy before signing', async () => {

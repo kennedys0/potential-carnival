@@ -230,6 +230,7 @@ export class TrendScanner {
           const security = await this.securityService.evaluateToken(tokenAddress, {
             liquidityUsd: pair.liquidity?.usd || null,
             marketCapUsd: pair.marketCap || pair.fdv || null,
+            pairAddress: pair.pairAddress,
           });
 
           if (!security.isHardBlocked && security.score >= 50) {

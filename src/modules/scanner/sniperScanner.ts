@@ -132,7 +132,9 @@ export class SniperScanner {
 
         // Security check uses THIS pool's liquidity, never the liquidity of an older pair.
         const security = await this.securityService.evaluateToken(candidate.tokenAddress, {
-          liquidityUsd, marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
+          liquidityUsd,
+          marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
+          pairAddress: candidate.pairAddress || pair.pairAddress,
         });
         if (security.isHardBlocked) {
           await notifyGlobalLiveFeed(candidate, `Gagal tes Anti-Rug: ${security.hardBlockReasons.join(', ')}`);

@@ -8,6 +8,8 @@ const pair = { chainId: 'solana', pairAddress: 'ExactPair', baseToken: { address
 
 test('0.01 SOL converts exactly to 10000000 lamports', () => assert.equal(solToLamports('0.01'), 10_000_000n));
 test('0.03 SOL daily budget converts to exact integer', () => assert.equal(solToLamports('0.03'), 30_000_000n));
+test('2.01 SOL converts exactly to 2010000000 lamports without floor loss', () => assert.equal(solToLamports(2.01), 2_010_000_000n));
+test('2.03 SOL converts exactly to 2030000000 lamports without floor loss', () => assert.equal(solToLamports(2.03), 2_030_000_000n));
 test('reject SOL with sub-lamport precision', () => assert.throws(() => solToLamports('0.0000000001')));
 test('pool selection accepts discovered pool identity', () => assert.equal(matchDiscoveredPool(pool, pair), pair));
 test('pool selection rejects a larger unrelated pool', () => assert.equal(matchDiscoveredPool(pool, {...pair, pairAddress: 'OldLargerPair'}), null));

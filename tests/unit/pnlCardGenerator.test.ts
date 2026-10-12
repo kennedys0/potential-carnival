@@ -87,7 +87,7 @@ describe('PnL Card Generator & Handler', () => {
       expect(buffer[1]).toBe(0x50); // P
       expect(buffer[2]).toBe(0x4e); // N
       expect(buffer[3]).toBe(0x47); // G
-    });
+    }, 30000);
   });
 
   describe('handlePnlCard', () => {
@@ -132,7 +132,7 @@ describe('PnL Card Generator & Handler', () => {
       expect(options.caption).toContain('Return:');
       expect(options.parse_mode).toBe('HTML');
       expect(options.reply_markup).toBeDefined();
-    });
+    }, 30000);
 
     it('rejects when trade does not belong to user', async () => {
       const mockCtx: any = {

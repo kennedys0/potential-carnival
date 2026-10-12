@@ -363,6 +363,7 @@ export class CopyTradeTracker {
       const security = await this.securityService.evaluateToken(delivery.token_mint, {
         liquidityUsd: pair.liquidity?.usd ?? null,
         marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
+        pairAddress: pair.pairAddress,
       });
       const trade = await this.executeFollower(
         follower,

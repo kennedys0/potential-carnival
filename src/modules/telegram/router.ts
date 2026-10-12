@@ -877,10 +877,17 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
     const security = await services.securityService.evaluateToken(mint, {
       liquidityUsd: pair.liquidity?.usd ?? null,
       marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
+      pairAddress: pair.pairAddress,
     });
     if (security.isHardBlocked) {
       throw new Error(`Pemeriksaan keamanan gagal: ${security.hardBlockReasons.join('; ')}`);
     }
+
+    const idempotencyKey = ctx.callbackQuery?.id
+      ? `tg_cb_${ctx.callbackQuery.id}`
+      : ctx.message?.message_id
+        ? `tg_msg_${ctx.from.id}_${ctx.message.message_id}`
+        : undefined;
 
     const trade = await services.traderService.executeOrder({
       userId: ctx.from.id,
@@ -890,6 +897,7 @@ async function executeManualBuy(ctx: any, mint: string, amount: number, services
       currentPriceUsd: priceUsd,
       isDryRun,
       source: 'MANUAL',
+      idempotencyKey,
     });
 
     await currencyService.fetchRates();

@@ -25,6 +25,9 @@ export class SecurityFilterService {
       liquidityUsd: number | null;
       marketCapUsd: number | null;
       lpBurned?: boolean;
+      pairAddress?: string | null;
+      poolAddress?: string | null;
+      excludedHolders?: string[];
     }
   ): Promise<SecurityScoreResult> {
     const sellSimulationPromise = this.honeypotSimulator.simulateSell(mintAddress);
@@ -39,7 +42,10 @@ export class SecurityFilterService {
       );
     }
 
-    const holderResultPromise = this.holderAnalyzer.analyzeHolders(mintAddress, authority.totalSupplyRaw);
+    const holderResultPromise = this.holderAnalyzer.analyzeHolders(mintAddress, authority.totalSupplyRaw, {
+      pairAddress: marketData.pairAddress || marketData.poolAddress,
+      excludedAddresses: marketData.excludedHolders,
+    });
 
     const [dangerousExtensions, holderResult, sellSimulation] = await Promise.all([
       dangerousExtensionsPromise,

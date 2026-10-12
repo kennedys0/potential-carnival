@@ -1,5 +1,6 @@
 import { TradeRepository, TradeRecord } from '../../database/repositories/tradeRepository';
 import { StrategyReservationRepository } from '../../database/repositories/strategyReservationRepository.js';
+import { solToLamports } from '../autopilot/strategyRisk.js';
 import { appSettings } from '../../config/settings';
 import { getEnv } from '../../config/env';
 import { getRedisConnection } from '../../queue/connection';
@@ -25,6 +26,7 @@ export interface OrderRequest {
   strategyReservationId?: string;
   copySourceSignature?: string;
   copyTargetWallet?: string;
+  idempotencyKey?: string;
 }
 
 import { WalletService } from '../wallet/walletService';
@@ -180,7 +182,7 @@ export class TraderService {
       
       const tokenDecimals = 6; // Standard simulation decimals
       const tokenAmountRaw = Math.floor(tokenAmount * (10 ** tokenDecimals)).toString();
-      const solSpentLamports = Math.floor(req.solAmount * 1e9);
+      const solSpentLamports = Number(solToLamports(req.solAmount));
 
       return this.tradeRepo.createTrade({
         user_id: req.userId,
@@ -223,7 +225,7 @@ export class TraderService {
       throw new Error(`Saldo SOL tidak cukup. Balance: ${balance.sol.toFixed(4)}, Req: ${req.solAmount} + 0.005 (safety fee)`);
     }
 
-    const amountLamports = Math.floor(req.solAmount * 1_000_000_000);
+    const amountLamports = solToLamports(req.solAmount);
     const slippageLimit = Math.min(req.slippageBps ?? appSettings.MAX_SLIPPAGE_BPS, appSettings.MAX_SLIPPAGE_BPS);
     if (!Number.isInteger(slippageLimit) || slippageLimit < 1) throw new Error('Invalid slippage limit');
     const slippageBps = Math.min(appSettings.DEFAULT_SLIPPAGE_BPS, slippageLimit);
@@ -243,7 +245,7 @@ export class TraderService {
         'confirmed',
       );
       const economicFloorRaw = minimumOutputRawForMarketFloor({
-        inputAmountRaw: BigInt(amountLamports),
+        inputAmountRaw: amountLamports,
         inputDecimals: 9,
         inputPriceUsd: referenceUsdPerSol,
         outputDecimals: tokenSupply.value.decimals,
@@ -255,7 +257,7 @@ export class TraderService {
           publicKey: wallet.publicKey,
           action: 'buy',
           mint: req.tokenMint,
-          amount: this.formatRawAmount(BigInt(amountLamports), 9),
+          amount: this.formatRawAmount(amountLamports, 9),
           denominatedInSol: true,
           slippage: slippageLimit / 100,
           priorityFee: 0,
@@ -268,7 +270,7 @@ export class TraderService {
           walletPublicKey: wallet.publicKey,
           inputMint: this.WSOL_MINT,
           outputMint: req.tokenMint,
-          inputAmountRaw: BigInt(amountLamports),
+          inputAmountRaw: amountLamports,
           minimumEconomicOutputAmountRaw: economicFloorRaw,
         };
       } catch (err: any) {
@@ -282,7 +284,7 @@ export class TraderService {
       const initialBuild = await this.jupiterClient.buildSwap(
         this.WSOL_MINT,
         req.tokenMint,
-        BigInt(amountLamports),
+        amountLamports,
         slippageBps,
         wallet.publicKey,
       );
@@ -299,7 +301,7 @@ export class TraderService {
         : await this.jupiterClient.buildSwap(
           this.WSOL_MINT,
           req.tokenMint,
-          BigInt(amountLamports),
+          amountLamports,
           dynamicSlippageBps,
           wallet.publicKey,
         );
@@ -325,7 +327,15 @@ export class TraderService {
     }
     const blockhash = transaction.message.recentBlockhash;
 
-    const idempotencyKey = crypto.createHash('sha256').update(`buy_${req.userId}_${req.tokenMint}_${Math.floor(Date.now() / 60000)}`).digest('hex');
+    const rawIdempotencyKey = req.idempotencyKey
+      || (req.strategyReservationId ? `buy_res_${req.strategyReservationId}` : undefined)
+      || (req.copySourceSignature ? `buy_sig_${req.copySourceSignature}` : undefined)
+      || (req.ownerToken ? `buy_lock_${req.ownerToken}` : undefined)
+      || `buy_${req.userId}_${req.tokenMint}_${Date.now()}_${crypto.randomUUID()}`;
+
+    const idempotencyKey = /^[0-9a-f]{64}$/i.test(rawIdempotencyKey)
+      ? rawIdempotencyKey.toLowerCase()
+      : crypto.createHash('sha256').update(rawIdempotencyKey).digest('hex');
 
     await this.refreshStrategyReservation(req);
 
@@ -504,7 +514,7 @@ export class TraderService {
       }
       // Paper Trading close logic
       const tradeBalanceRaw = BigInt(trade.remaining_raw ?? trade.token_amount_raw ?? 0);
-      const amountToCloseRaw = (tradeBalanceRaw * BigInt(Math.floor(percentageToClose * 100))) / 10000n;
+      const amountToCloseRaw = (tradeBalanceRaw * BigInt(Math.round(percentageToClose * 100))) / 10000n;
       
       const priceMultiplier = trade.entry_price_usd > 0 ? (accountingPriceUsd / trade.entry_price_usd) : 1;
       const initialSolSpent = trade.sol_amount ?? 0;
@@ -519,7 +529,7 @@ export class TraderService {
       }
       
       const solReceived = solCostBasisForThisExit * priceMultiplier;
-      const solReceivedLamports = Math.floor(solReceived * 1e9);
+      const solReceivedLamports = Math.max(0, Math.round(solReceived * 1e9));
 
       await this.tradeRepo.atomicReconcileExit(trade.id, undefined, {
         tx_signature: `PAPER_${Date.now()}`,
@@ -548,7 +558,7 @@ export class TraderService {
        throw new Error('Trade has no remaining raw tokens to close.');
     }
 
-    const percentBps = BigInt(Math.floor(percentageToClose * 100)); // 100% = 10000 bps
+    const percentBps = BigInt(Math.round(percentageToClose * 100)); // 100% = 10000 bps
     const calculatedAmount = (tradeBalanceRaw * percentBps) / 10000n;
     const amountLamportsBigInt = calculatedAmount < totalTokenBalance.raw ? calculatedAmount : totalTokenBalance.raw;
 

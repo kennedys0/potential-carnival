@@ -220,7 +220,7 @@ export class WalletService {
       const { blockhash, lastValidBlockHeight } = await withdrawalConnection.getLatestBlockhash('confirmed');
 
       // Calculate fee
-      const tempAmount = finalAmountSol === 'MAX' ? 1000 : Math.floor(finalAmountSol * LAMPORTS_PER_SOL);
+      const tempAmount = finalAmountSol === 'MAX' ? 1000 : Math.round(finalAmountSol * LAMPORTS_PER_SOL);
       const tempInstructions = [
         SystemProgram.transfer({
           fromPubkey: sourcePubkey,
@@ -251,7 +251,7 @@ export class WalletService {
       if (finalAmountSol === 'MAX') {
         transferLamports = safeMaxLamports;
       } else {
-        transferLamports = Math.floor(finalAmountSol * LAMPORTS_PER_SOL);
+        transferLamports = Math.round(finalAmountSol * LAMPORTS_PER_SOL);
         if (transferLamports > safeMaxLamports) {
            throw new Error(`Jumlah terlalu besar. Maksimum yang diizinkan (safe limit): ${(safeMaxLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
         }
