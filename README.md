@@ -74,6 +74,17 @@ Bot Telegram *institutional-grade* untuk trading, scalping, dan eksekusi otomati
 
 ## 🏛️ Arsitektur Sistem & Data Flow
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/runtime-architecture-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/runtime-architecture-light.png">
+  <img alt="Solana Scalping Bot - Runtime Architecture Diagram" src="docs/assets/runtime-architecture-dark.png" width="100%">
+</picture>
+
+> 💡 **Diagram Interaktif**: Buka berkas [`.archify/architecture-runtime-architecture-20261013-082000/runtime-architecture.html`](.archify/architecture-runtime-architecture-20261013-082000/runtime-architecture.html) langsung di browser Anda untuk menjelajahi diagram interaktif beresolusi tinggi dengan fitur *zoom*, *pan*, *guided views*, inspeksi baris kode sumber, dan opsi ekspor.
+
+<details>
+<summary><b>Lihat Diagram Tekstual (Mermaid Flowchart)</b></summary>
+
 ```mermaid
 flowchart TB
     subgraph Data Layer
@@ -123,6 +134,8 @@ flowchart TB
     TG <--> DB
     TG <--> Redis
 ```
+
+</details>
 
 ---
 

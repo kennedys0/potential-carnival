@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "2a9b4454-828d-4aea-abb2-262659abe22f",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\coding\\potential-carnival\\.archify\\architecture-runtime-architecture-20261013-082000\\candidate.json",
+  "output": "D:\\coding\\potential-carnival\\.archify\\architecture-runtime-architecture-20261013-082000\\runtime-architecture.html",
+  "specification": {
+    "sha256": "ea0ebd10ef4ddaed9fe814b677fae4ddcf82c456af34024811ecf30d2ee48600",
+    "bytes": 12462
+  },
+  "artifact": {
+    "sha256": "ccaacdceb81e7389537c23e9a464e4c4b66a2fc8f33ea5366aed85e0d9a9484a",
+    "bytes": 790893
+  }
+}

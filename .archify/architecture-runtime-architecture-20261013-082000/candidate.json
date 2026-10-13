@@ -1,0 +1,480 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Solana Scalping Bot - Interactive Runtime Architecture",
+    "subtitle": "Event-driven trading engine with Autopilot, AI analysis, and custodial risk containment",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "output": ".archify/architecture-runtime-architecture-20261013-082000/runtime-architecture.html",
+    "repository": {
+      "url": "https://github.com/kennedys0/potential-carnival.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "4bedd64bfa70fc6eda49d7c542e43ec5997b0f2d"
+    },
+    "views": [
+      {
+        "id": "view-discovery",
+        "label": "Market Ingestion & Discovery",
+        "focus": ["dex_apis", "trend_scanner", "copy_tracker", "security_filter"],
+        "note": "Continuous pool discovery, honeypot filtering, and on-chain whale activity tracking."
+      },
+      {
+        "id": "view-execution",
+        "label": "AI Evaluation & Autopilot",
+        "focus": ["ai_analyzer", "llm_provider", "autopilot_engine", "trader_service", "wallet_service", "jupiter_agg"],
+        "note": "Technical indicator synthesis, DeepSeek LLM evaluation, and Jupiter swap execution."
+      },
+      {
+        "id": "view-lifecycle",
+        "label": "Position Lifecycle & Monitoring",
+        "focus": ["trader_service", "redis_queue", "monitor_worker", "telegram_bot", "supabase_db"],
+        "note": "BullMQ real-time position monitoring, dynamic take-profit/trailing stops, and alerts."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "dex_apis",
+      "type": "external",
+      "label": "DexScreener & Gecko",
+      "sublabel": "Market Pools & Volume",
+      "pos": [40, 70],
+      "size": [150, 64],
+      "icon": "external"
+    },
+    {
+      "id": "llm_provider",
+      "type": "cloud",
+      "label": "LLM API Provider",
+      "sublabel": "DeepSeek-v4 / OpenAI",
+      "pos": [560, 70],
+      "size": [150, 64],
+      "icon": "cloud"
+    },
+    {
+      "id": "user_client",
+      "type": "external",
+      "label": "Telegram Trader",
+      "sublabel": "User / Mobile Client",
+      "pos": [1080, 70],
+      "size": [150, 64],
+      "icon": "person"
+    },
+    {
+      "id": "trend_scanner",
+      "type": "backend",
+      "label": "Trend & Sniper",
+      "sublabel": "Pool Discovery & Radar",
+      "pos": [40, 230],
+      "size": [150, 64],
+      "tag": "60s/120s Polling",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "src/modules/scanner/trendScanner.ts",
+          "line": 22,
+          "end_line": 50,
+          "label": "TrendScanner"
+        },
+        {
+          "path": "src/modules/scanner/sniperScanner.ts",
+          "line": 23,
+          "end_line": 50,
+          "label": "SniperScanner"
+        }
+      ]
+    },
+    {
+      "id": "security_filter",
+      "type": "security",
+      "label": "Security Filter",
+      "sublabel": "Honeypot & Mint Checks",
+      "pos": [300, 230],
+      "size": [150, 64],
+      "tag": "Token-2022 & Freeze",
+      "icon": "security",
+      "sources": [
+        {
+          "path": "src/modules/security/securityFilterService.ts",
+          "line": 8,
+          "end_line": 54,
+          "label": "SecurityFilterService"
+        }
+      ]
+    },
+    {
+      "id": "ai_analyzer",
+      "type": "backend",
+      "label": "AI Analyzer",
+      "sublabel": "Technicals & LLM Verdict",
+      "pos": [560, 230],
+      "size": [150, 64],
+      "tag": "EMA/RSI + AI Verdict",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "src/modules/analyzer/analyzerService.ts",
+          "line": 42,
+          "end_line": 130,
+          "label": "AnalyzerService"
+        }
+      ]
+    },
+    {
+      "id": "autopilot_engine",
+      "type": "backend",
+      "label": "Autopilot Engine",
+      "sublabel": "Risk & Circuit Breaker",
+      "pos": [820, 230],
+      "size": [150, 64],
+      "tag": "Rule Evaluator",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "src/modules/autopilot/autopilotEngine.ts",
+          "line": 46,
+          "end_line": 95,
+          "label": "AutopilotEngine"
+        }
+      ]
+    },
+    {
+      "id": "telegram_bot",
+      "type": "frontend",
+      "label": "GrammY Bot Router",
+      "sublabel": "Commands & Alerts",
+      "pos": [1080, 230],
+      "size": [150, 64],
+      "tag": "Polling & Webhook",
+      "icon": "frontend",
+      "sources": [
+        {
+          "path": "src/modules/telegram/router.ts",
+          "line": 86,
+          "end_line": 120,
+          "label": "registerBotRoutes"
+        },
+        {
+          "path": "src/modules/telegram/bot.ts",
+          "line": 5,
+          "end_line": 35,
+          "label": "createTelegramBot"
+        }
+      ]
+    },
+    {
+      "id": "copy_tracker",
+      "type": "backend",
+      "label": "Copy Trade Tracker",
+      "sublabel": "Whale Mirroring Service",
+      "pos": [40, 390],
+      "size": [150, 64],
+      "tag": "WebSocket Listener",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "src/modules/copytrade/copyTradeTracker.ts",
+          "line": 175,
+          "end_line": 215,
+          "label": "CopyTradeTracker"
+        }
+      ]
+    },
+    {
+      "id": "solana_cluster",
+      "type": "cloud",
+      "label": "Solana RPC & WSS",
+      "sublabel": "Cluster & Fallback Fetch",
+      "pos": [300, 390],
+      "size": [150, 64],
+      "tag": "Confirmed State",
+      "icon": "cloud",
+      "sources": [
+        {
+          "path": "src/utils/rpcFallback.ts",
+          "line": 14,
+          "end_line": 34,
+          "label": "createFallbackFetch"
+        }
+      ]
+    },
+    {
+      "id": "jupiter_agg",
+      "type": "external",
+      "label": "Jupiter DEX API",
+      "sublabel": "v6 Quotes & Swap Route",
+      "pos": [560, 390],
+      "size": [150, 64],
+      "tag": "Direct Aggregator",
+      "icon": "external",
+      "sources": [
+        {
+          "path": "src/modules/trader/jupiterClient.ts",
+          "line": 74,
+          "end_line": 105,
+          "label": "JupiterClient"
+        }
+      ]
+    },
+    {
+      "id": "trader_service",
+      "type": "backend",
+      "label": "Trader Service",
+      "sublabel": "Execution & Slippage",
+      "pos": [820, 390],
+      "size": [150, 64],
+      "tag": "Paper & Live Guard",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "src/modules/trader/traderService.ts",
+          "line": 154,
+          "end_line": 220,
+          "label": "TraderService"
+        }
+      ]
+    },
+    {
+      "id": "wallet_service",
+      "type": "security",
+      "label": "Custodial Vault",
+      "sublabel": "Identity-Bound Keys",
+      "pos": [1080, 390],
+      "size": [150, 64],
+      "tag": "AES-256-GCM",
+      "icon": "security",
+      "sources": [
+        {
+          "path": "src/modules/wallet/walletService.ts",
+          "line": 49,
+          "end_line": 95,
+          "label": "WalletService"
+        }
+      ]
+    },
+    {
+      "id": "monitor_worker",
+      "type": "backend",
+      "label": "Position Monitor",
+      "sublabel": "Dynamic TP/SL & Trailing",
+      "pos": [560, 550],
+      "size": [150, 64],
+      "tag": "60s BullMQ Worker",
+      "icon": "clock",
+      "sources": [
+        {
+          "path": "src/queue/workers/monitorWorker.ts",
+          "line": 17,
+          "end_line": 70,
+          "label": "createMonitorWorker"
+        }
+      ]
+    },
+    {
+      "id": "redis_queue",
+      "type": "messagebus",
+      "label": "Redis & BullMQ",
+      "sublabel": "Job Queues & Rate Limit",
+      "pos": [820, 550],
+      "size": [150, 64],
+      "tag": "6 Active Queues",
+      "icon": "messagebus",
+      "sources": [
+        {
+          "path": "src/queue/queues.ts",
+          "line": 4,
+          "end_line": 59,
+          "label": "createQueues"
+        }
+      ]
+    },
+    {
+      "id": "supabase_db",
+      "type": "database",
+      "label": "Supabase Postgres",
+      "sublabel": "Trades, Wallets & Config",
+      "pos": [1080, 550],
+      "size": [150, 64],
+      "tag": "Service Role RLS",
+      "icon": "database",
+      "sources": [
+        {
+          "path": "src/database/client.ts",
+          "line": 6,
+          "end_line": 14,
+          "label": "getSupabaseClient"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Discovery & Pre-Trade Audit",
+      "wraps": ["trend_scanner", "security_filter"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Custodial Key & Execution Vault",
+      "wraps": ["trader_service", "wallet_service"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c-dex-trend",
+      "from": "dex_apis",
+      "to": "trend_scanner",
+      "label": "Market Pools"
+    },
+    {
+      "id": "c-trend-sec",
+      "from": "trend_scanner",
+      "to": "security_filter",
+      "label": "Candidate Mint"
+    },
+    {
+      "id": "c-sec-ai",
+      "from": "security_filter",
+      "to": "ai_analyzer",
+      "label": "Passed Audit",
+      "variant": "security"
+    },
+    {
+      "id": "c-ai-llm",
+      "from": "ai_analyzer",
+      "to": "llm_provider",
+      "label": "Analysis Prompt",
+      "variant": "dashed"
+    },
+    {
+      "id": "c-ai-auto",
+      "from": "ai_analyzer",
+      "to": "autopilot_engine",
+      "label": "AI Verdict & Score",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-user-bot",
+      "from": "user_client",
+      "to": "telegram_bot",
+      "label": "Commands & UI",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-bot-auto",
+      "from": "telegram_bot",
+      "to": "autopilot_engine",
+      "label": "Config Toggles"
+    },
+    {
+      "id": "c-bot-wallet",
+      "from": "telegram_bot",
+      "to": "wallet_service",
+      "label": "Manage Keys",
+      "variant": "security"
+    },
+    {
+      "id": "c-auto-trader",
+      "from": "autopilot_engine",
+      "to": "trader_service",
+      "label": "Allocated Order",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-trader-wallet",
+      "from": "trader_service",
+      "to": "wallet_service",
+      "label": "Sign Tx",
+      "variant": "security"
+    },
+    {
+      "id": "c-trader-jup",
+      "from": "trader_service",
+      "to": "jupiter_agg",
+      "label": "Swap Route"
+    },
+    {
+      "id": "c-jup-solana",
+      "from": "jupiter_agg",
+      "to": "solana_cluster",
+      "label": "Broadcast Swap",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-trader-db",
+      "from": "trader_service",
+      "to": "supabase_db",
+      "label": "Persist Trade"
+    },
+    {
+      "id": "c-trader-redis",
+      "from": "trader_service",
+      "to": "redis_queue",
+      "label": "Enqueue Monitor",
+      "variant": "dashed"
+    },
+    {
+      "id": "c-solana-copy",
+      "from": "solana_cluster",
+      "to": "copy_tracker",
+      "label": "Whale Logs"
+    },
+    {
+      "id": "c-sec-solana",
+      "from": "security_filter",
+      "to": "solana_cluster",
+      "label": "Mint State",
+      "variant": "security"
+    },
+    {
+      "id": "c-redis-monitor",
+      "from": "redis_queue",
+      "to": "monitor_worker",
+      "label": "Deliver Job"
+    },
+    {
+      "id": "c-monitor-jup",
+      "from": "monitor_worker",
+      "to": "jupiter_agg",
+      "label": "Quote PnL"
+    },
+    {
+      "id": "c-monitor-trader",
+      "from": "monitor_worker",
+      "to": "trader_service",
+      "label": "Trigger TP / SL",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Market Discovery",
+      "items": [
+        "DexScreener & GeckoTerminal continuous trending pool scanning",
+        "New pool discovery with liquidity age and Raydium/PumpFun filters",
+        "On-chain Solana WebSocket listener mirroring whitelisted whale targets"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "AI & Autopilot Execution",
+      "items": [
+        "Multi-timeframe technical indicator calculation (EMA, RSI, ATR, VWAP)",
+        "DeepSeek LLM prompt evaluation outputting strict JSON verdicts",
+        "Dynamic slippage calculation with Jupiter Aggregator v6 routing and priority tip"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Security & Risk Vault",
+      "items": [
+        "Pre-trade honeypot simulation, freeze/mint authority and Token-2022 checks",
+        "Identity-bound AES-256-GCM custodial wallet key encryption",
+        "BullMQ position monitor enforcing TP1/TP2, trailing stop, and circuit breakers"
+      ]
+    }
+  ]
+}
