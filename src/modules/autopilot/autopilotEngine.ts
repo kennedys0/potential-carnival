@@ -12,6 +12,7 @@ import { getRedisConnection } from '../../queue/connection';
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import { appSettings } from '../../config/settings';
+import { logger } from '../../utils/logger';
 
 const SafetyParamsSchema = z.object({
   min_safety_score: z.number().default(75),
@@ -91,9 +92,9 @@ export class AutopilotEngine {
       return { executed: false, reason: 'Already holding this token' };
     }
 
-    // Database Lock to prevent double buy
+    // Database Lock diperpanjang ke 60 detik agar aman saat RPC Solana padat
     const ownerToken = crypto.randomUUID();
-    const acquired = await this.traderService['tradeRepo'].acquireBuyLock(userId, tokenMint, ownerToken, 30);
+    const acquired = await this.traderService['tradeRepo'].acquireBuyLock(userId, tokenMint, ownerToken, 60);
     if (!acquired) {
       return { executed: false, reason: 'Lock acquired by another process' };
     }
@@ -162,7 +163,6 @@ export class AutopilotEngine {
     };
 
     if (source === 'SNIPER') {
-      // Sniper config parsing
       safetyParams = {
         minSafetyScore: config.minimum_safety_score ?? appSettings.SNIPER_PARAMS.MIN_SAFETY_SCORE,
         allowedLevels: appSettings.SNIPER_PARAMS.ALLOWED_LEVELS,
@@ -194,10 +194,11 @@ export class AutopilotEngine {
     // 3. Risk Management & Position Sizing
     const sizingConf = SizingParamsSchema.parse(config.sizing_params || {});
     let orderSol = 0;
-    
+    const maxSpendableSol = Math.max(0, currentState.availableBalanceSol - sizingConf.min_reserve_sol);
+
     if (source === 'SNIPER') {
-       orderSol = config.buy_amount_sol ?? 0.01;
-       sizingConf.max_concurrent_positions = config.max_active_positions ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_MAX_POSITIONS;
+      orderSol = config.buy_amount_sol ?? 0.01;
+      sizingConf.max_concurrent_positions = config.max_active_positions ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_MAX_POSITIONS;
     } else {
       if (sizingConf.mode === 'FIXED_SOL') {
         orderSol = sizingConf.fixed_sol ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_FIXED_SOL;
@@ -206,7 +207,8 @@ export class AutopilotEngine {
       } else if (sizingConf.mode === 'RISK_BASED') {
         if (ai && ai.stop_loss_usd > 0 && currentPriceUsd > ai.stop_loss_usd) {
           const slDistance = (currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd;
-          orderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_RISK_PERCENT)) / 100) / slDistance;
+          const rawRiskOrderSol = ((currentState.availableBalanceSol * (sizingConf.risk_percent ?? appSettings.AUTOPILOT_PARAMS.DEFAULT_RISK_PERCENT)) / 100) / slDistance;
+          orderSol = maxSpendableSol > 0 ? Math.min(rawRiskOrderSol, maxSpendableSol) : rawRiskOrderSol;
         } else {
           return { executed: false, reason: 'Risk based sizing failed: invalid SL' };
         }
@@ -214,6 +216,10 @@ export class AutopilotEngine {
       if (sizingConf.max_size_per_trade && orderSol > sizingConf.max_size_per_trade) {
         orderSol = sizingConf.max_size_per_trade;
       }
+    }
+
+    if (!Number.isFinite(orderSol) || orderSol <= 0) {
+      return { executed: false, reason: `Invalid calculated order size: ${orderSol} SOL` };
     }
 
     // Strategy limits are separate; global wallet exposure remains shared.
@@ -235,7 +241,6 @@ export class AutopilotEngine {
     }
 
     // 4. Atomically reserve shared capital and positions for BOTH strategies.
-    // A missing 029 migration or failed RPC MUST reject the entry, never bypass limits.
     if (!this.reservationRepo) {
       return { executed: false, reason: 'Strategy reservation service unavailable' };
     }
@@ -246,9 +251,31 @@ export class AutopilotEngine {
     const sniperMax = Number(sniperConfig.max_active_positions ?? appSettings.STRATEGY_RESERVATION_PARAMS.DEFAULT_SNIPER_MAX_POSITIONS);
     const globalMax = trendingMax + sniperMax;
     const strategy = source === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING';
+
+    // Gunakan SL/TP dinamis dari AI jika tersedia (agar analisis AI benar-benar dipakai saat exit!)
+    const dynamicExitOverrides: Record<string, any> = {};
+    if (ai && ai.verdict === 'BUY' && currentPriceUsd > 0) {
+      if (ai.stop_loss_usd > 0 && ai.stop_loss_usd < currentPriceUsd) {
+        const aiSlPct = Math.round(((currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd) * 100);
+        if (aiSlPct >= 2 && aiSlPct <= 50) {
+          dynamicExitOverrides.stop_loss_pct = aiSlPct;
+        }
+      }
+      if (ai.take_profit_levels && ai.take_profit_levels.length > 0) {
+        const maxTpUsd = Math.max(...ai.take_profit_levels.map((tp) => tp.price_usd));
+        if (maxTpUsd > currentPriceUsd) {
+          const aiTpPct = Math.round(((maxTpUsd - currentPriceUsd) / currentPriceUsd) * 100);
+          if (aiTpPct >= 5 && aiTpPct <= 500) {
+            dynamicExitOverrides.take_profit_pct = aiTpPct;
+          }
+        }
+      }
+    }
+
     const exitPolicy: ExitPolicySnapshot = source === 'SNIPER'
       ? parseExitPolicy(sniperExitPolicy(config))
-      : parseExitPolicy({ enabled: true, ...((config.exit_params as any) ?? {}) });
+      : parseExitPolicy({ enabled: true, ...dynamicExitOverrides, ...((config.exit_params as any) ?? {}) });
+
     const reservationId = await this.reservationRepo.reserve({
       userId, tokenMint, strategy, isDryRun, amountSol: orderSol,
       availableBalanceSol: currentState.availableBalanceSol,
@@ -271,7 +298,6 @@ export class AutopilotEngine {
         strategyReservationId: reservationId,
       });
       const completed = trade.status === 'OPEN';
-      // An ambiguous broadcast is NOT a completed BUY; hold reservation for reconciliation.
       if (completed) await this.reservationRepo.finish(reservationId, 'COMPLETED');
       return {
         executed: true,
@@ -281,8 +307,6 @@ export class AutopilotEngine {
           : `${strategy} BUY submitted; awaiting transaction reconciliation`,
       };
     } catch (error) {
-      // SQL only permits release when no active BUY exists. A crash after broadcast
-      // conservatively retains the reservation rather than risking a second BUY.
       const released = await this.reservationRepo.releaseIfUnbroadcast(reservationId);
       if (!released) {
         throw new Error(`BUY outcome ambiguous; reservation ${reservationId} retained. Original error: ${String(error)}`);
@@ -304,27 +328,30 @@ export class AutopilotEngine {
     rawSnapshot: any,
     strategy: 'TRENDING' | 'SNIPER' = 'TRENDING'
   ) {
-    const fullSnapshot = {
-      ...rawSnapshot,
-      security,
-      ai,
-    };
-    
-    await this.autopilotRepo.saveDecisionLog({
-      user_id: userId,
-      token_mint: tokenMint,
-      token_symbol: tokenSymbol,
-      action,
-      safety_score: security.score,
-      safety_flags: security.riskFlags,
-      ai_verdict: ai?.verdict,
-      ai_confidence: ai?.confidence,
-      rules_passed: rulesPassed,
-      rules_failed: rulesFailed,
-      reason_summary: reason,
-      raw_snapshot: fullSnapshot,
-      strategy: strategy === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING',
-    });
+    try {
+      const fullSnapshot = {
+        ...rawSnapshot,
+        security,
+        ai,
+      };
+
+      await this.autopilotRepo.saveDecisionLog({
+        user_id: userId,
+        token_mint: tokenMint,
+        token_symbol: tokenSymbol,
+        action,
+        safety_score: security.score,
+        safety_flags: security.riskFlags,
+        ai_verdict: ai?.verdict,
+        ai_confidence: ai?.confidence,
+        rules_passed: rulesPassed,
+        rules_failed: rulesFailed,
+        reason_summary: reason,
+        raw_snapshot: fullSnapshot,
+        strategy: strategy === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING',
+      });
+    } catch (err: any) {
+      logger.warn({ err: err.message, userId, tokenMint }, 'Failed to save autopilot decision log (non-fatal)');
+    }
   }
 }
-
