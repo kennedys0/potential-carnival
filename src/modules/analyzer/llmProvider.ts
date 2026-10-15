@@ -20,16 +20,41 @@ export interface AnalyzeInput {
   systemPrompt?: string;
 }
 
+/**
+ * Mencegah JavaScript mengubah angka mikro (misal 0.000000045) menjadi "4.5e-8"
+ * yang sering membuat LLM salah baca jumlah nol (halusinasi desimal).
+ */
+function formatUsd(val: number): string {
+  if (!Number.isFinite(val)) return '0';
+  if (val === 0) return '0';
+  if (Math.abs(val) < 0.000001) return val.toFixed(10).replace(/\.?0+$/, '');
+  if (Math.abs(val) < 0.01) return val.toFixed(8).replace(/\.?0+$/, '');
+  if (Math.abs(val) < 1) return val.toFixed(6).replace(/\.?0+$/, '');
+  return val.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function pctDiff(current: number, reference: number): string {
+  if (!Number.isFinite(current) || !Number.isFinite(reference) || reference <= 0) return '0.00%';
+  const diff = ((current - reference) / reference) * 100;
+  return `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}%`;
+}
+
 export class OpenAiCompatibleProvider {
   private unavailableUntil = 0;
   private consecutiveFailures = 0;
 
   constructor(private readonly config: OpenAiConfig) {}
 
-  private recordFailure(): number {
+  private recordFailure(forceImmediateCooldown = false): number {
     this.consecutiveFailures++;
+    // Jangan langsung matikan provider jika baru gagal/timeout 1x karena lonjakan trafik sesaat,
+    // kecuali error HTTP 401/403/429/5xx (forceImmediateCooldown = true).
+    if (!forceImmediateCooldown && this.consecutiveFailures < 2) {
+      return 0;
+    }
+    const exponent = Math.max(0, this.consecutiveFailures - 1);
     const cooldownMs = Math.min(
-      BASE_PROVIDER_FAILURE_COOLDOWN_MS * Math.pow(2, this.consecutiveFailures - 1),
+      BASE_PROVIDER_FAILURE_COOLDOWN_MS * Math.pow(2, exponent),
       MAX_PROVIDER_FAILURE_COOLDOWN_MS
     );
     this.unavailableUntil = Date.now() + cooldownMs;
@@ -41,54 +66,49 @@ export class OpenAiCompatibleProvider {
       return null;
     }
 
-    const hasMacro = input.indicators.macroEma9 !== undefined && input.indicators.macroEma21 !== undefined;
+    const { currentPrice, indicators, securityFlags } = input;
+    const hasMacro = indicators.macroEma9 !== undefined && indicators.macroEma21 !== undefined;
+    const macroTrendStatus = hasMacro
+      ? indicators.macroEma9! >= indicators.macroEma21!
+        ? 'BULLISH (EMA9 >= EMA21)'
+        : 'BEARISH (EMA9 < EMA21)'
+      : 'N/A';
+
     const macroLine = hasMacro
-      ? `\n- Trend Makro (15m): EMA 9 = $${input.indicators.macroEma9}, EMA 21 = $${input.indicators.macroEma21}, RSI 14 = ${input.indicators.macroRsi14 ?? 'N/A'}`
+      ? `\n- Trend Makro (15m): ${macroTrendStatus} | EMA9: $${formatUsd(indicators.macroEma9!)} | EMA21: $${formatUsd(indicators.macroEma21!)} | RSI14: ${indicators.macroRsi14?.toFixed(2) ?? 'N/A'}`
       : '';
 
-    const prompt = `
-Kamu adalah Quantitative Scalper Solana. Berikan analisa teknikal scalping berbasis data berikut:
-- Token: ${input.tokenSymbol}
-- Harga saat ini: $${input.currentPrice}
-- EMA 9: $${input.indicators.ema9}
-- EMA 21: $${input.indicators.ema21}
-- RSI 14: ${input.indicators.rsi14}
-- ATR 14: $${input.indicators.atr14}
-- Volume Spike Ratio: ${input.indicators.volumeSpikeRatio}x
-- Stop Loss batas bawah: $${input.indicators.calculatedStopLoss}
-- Take Profit 1: $${input.indicators.calculatedTp1}
-- Take Profit 2: $${input.indicators.calculatedTp2}
-- Risk flags dari security filter: ${input.securityFlags.join(', ') || 'None'}${macroLine}
+    const shortTrendStatus =
+      indicators.ema9 >= indicators.ema21 ? 'BULLISH (EMA9 >= EMA21)' : 'BEARISH (EMA9 < EMA21)';
 
-ATURAN WAJIB:
-1. Hanya gunakan data di atas. Dilarang mengarang fakta atau angka.
-2. JIKA VERDICT = BUY, Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk ($${input.currentPrice}), dan Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
-3. [MULTI-TIMEFRAME]: Jika trend jangka pendek (5m) terlihat naik tapi trend makro (15m) turun (EMA9 < EMA21), BERHATI-HATILAH terhadap fakeout/dead cat bounce.
-4. [ANTI-TRAP]: Jika ada 'Risk flags' yang menyebutkan Top 10 Holder memiliki supply sangat besar (>50%) atau LP bermasalah, VERDICT WAJIB AVOID!
-5. Keluarkan HANYA JSON valid sesuai struktur berikut:
-{
-  "verdict": "BUY" | "WAIT" | "AVOID",
-  "confidence": 0-100,
-  "setup_type": "BREAKOUT" | "PULLBACK" | "MOMENTUM" | "REVERSAL" | "NONE",
-  "entry_zone": { "min_usd": number, "max_usd": number },
-  "take_profit_levels": [
-    { "level": 1, "price_usd": number, "percentage": number },
-    { "level": 2, "price_usd": number, "percentage": number }
-  ],
-  "stop_loss_usd": number,
-  "risk_reward_ratio": number,
-  "key_reasons": ["alasan 1", "alasan 2"],
-  "red_flags": ["flag 1"],
-  "invalidation_condition": "kondisi pembatalan setup",
-  "estimated_holding_time": "durasi estimasi hold"
-}
+    // Sajikan data matang beserta jarak persentasenya agar AI tidak perlu mengira-ngira hitungan di kepala
+    const prompt = `
+Data Kuantitatif Token Solana:
+- Token: ${input.tokenSymbol}
+- Harga Saat Ini (Entry): $${formatUsd(currentPrice)}
+- Trend Jangka Pendek (5m): ${shortTrendStatus}
+- EMA 9: $${formatUsd(indicators.ema9)} (Jarak harga ke EMA9: ${pctDiff(currentPrice, indicators.ema9)})
+- EMA 21: $${formatUsd(indicators.ema21)} (Jarak harga ke EMA21: ${pctDiff(currentPrice, indicators.ema21)})
+- VWAP: $${formatUsd(indicators.vwap)} (Posisi harga vs VWAP: ${pctDiff(currentPrice, indicators.vwap)})
+- RSI 14: ${indicators.rsi14.toFixed(2)}
+- ATR 14: $${formatUsd(indicators.atr14)}
+- Volume Spike Ratio: ${indicators.volumeSpikeRatio.toFixed(2)}x${macroLine}
+- Referensi Stop Loss (ATR): $${formatUsd(indicators.calculatedStopLoss)}
+- Referensi Take Profit 1: $${formatUsd(indicators.calculatedTp1)}
+- Referensi Take Profit 2: $${formatUsd(indicators.calculatedTp2)}
+- Security Risk Flags: ${securityFlags.length > 0 ? securityFlags.join(', ') : 'None'}
+
+Berikan analisis objek JSON sesuai skema yang diminta pada instruksi sistem.
 `.trim();
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs ?? appSettings.LLM_REQUEST_TIMEOUT_MS);
+      timeoutId = setTimeout(
+        () => controller.abort(),
+        this.config.timeoutMs ?? appSettings.LLM_REQUEST_TIMEOUT_MS
+      );
 
       const res = await fetch(url, {
         method: 'POST',
@@ -101,44 +121,49 @@ ATURAN WAJIB:
           messages: [
             {
               role: 'system',
-              content: input.systemPrompt || 'You are a disciplined quantitative scalper. Respond strictly in valid JSON matching the requested schema. Do not include markdown formatting or explanation.',
+              content:
+                input.systemPrompt ||
+                'You are a disciplined quantitative scalper. Respond strictly in valid JSON matching the requested schema. Do not include markdown formatting or explanation.',
             },
             {
               role: 'user',
               content: prompt,
             },
           ],
-          temperature: 0.2,
+          temperature: 0.1,
+          max_tokens: 500,
         }),
         signal: controller.signal,
       });
 
       if (!res.ok) {
-        const cooldownMs = this.recordFailure();
-        // Never log an upstream response body. Proxy error pages can contain
-        // visitor IPs, request details, or provider diagnostics with secrets.
+        const cooldownMs = this.recordFailure(true);
         try {
           await res.body?.cancel();
         } catch {
-          // The response is already unusable; cancellation is best effort.
+          // Best effort
         }
-        logger.error({
-          status: res.status,
-          statusText: res.statusText,
-          contentType: res.headers.get('content-type'),
-          providerHost: new URL(url).host,
-          cooldownMs,
-        }, 'OpenAI-compatible API request failed; provider temporarily disabled');
+        logger.error(
+          {
+            status: res.status,
+            statusText: res.statusText,
+            contentType: res.headers.get('content-type'),
+            providerHost: safeProviderHost(url),
+            cooldownMs,
+          },
+          'OpenAI-compatible API request failed; provider temporarily disabled'
+        );
         return null;
       }
 
       const data: any = await res.json();
-      let content = data.choices?.[0]?.message?.content;
-      if (!content) return null;
+      const content = data.choices?.[0]?.message?.content;
+      if (!content || typeof content !== 'string') return null;
 
-      // Extract JSON cleanly: handle markdown code blocks or surrounding text
-      let cleaned = content.trim();
-      const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      // Bersihkan blok <think>...</think> jika memakai model reasoning (misal DeepSeek)
+      let cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+      const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
       if (codeBlockMatch) {
         cleaned = codeBlockMatch[1].trim();
       } else {
@@ -156,19 +181,31 @@ ATURAN WAJIB:
         this.consecutiveFailures = 0;
         return analysis;
       } catch (parseErr: any) {
-        logger.warn({
-          token: input.tokenSymbol,
-          error: parseErr.message,
-        }, 'AI output validation failed for single token; skipping token without provider cooldown');
-        return null;
+        logger.warn(
+          {
+            token: input.tokenSymbol,
+            error: parseErr.message,
+          },
+          'AI output validation failed for single token; throwing for retry'
+        );
+        // Lempar error agar loop retry di AnalyzerService bisa mencoba ulang (jika masih ada kuota attempt)
+        throw new Error(`Invalid AI JSON output: ${parseErr.message}`);
       }
     } catch (err: any) {
-      const cooldownMs = this.recordFailure();
-      logger.warn({
-        errorType: err instanceof Error ? err.name : 'UnknownError',
-        providerHost: safeProviderHost(this.config.baseUrl),
-        cooldownMs,
-      }, 'Failed to reach AI provider; provider temporarily disabled');
+      // Jika error berasal dari JSON parse/schema validation, teruskan ke AnalyzerService tanpa menghukum status provider
+      if (err instanceof Error && err.message.startsWith('Invalid AI JSON output:')) {
+        throw err;
+      }
+
+      const cooldownMs = this.recordFailure(false);
+      logger.warn(
+        {
+          errorType: err instanceof Error ? err.name : 'UnknownError',
+          providerHost: safeProviderHost(this.config.baseUrl),
+          cooldownMs,
+        },
+        'Failed to reach AI provider'
+      );
       return null;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
