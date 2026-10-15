@@ -5,7 +5,6 @@ import { calculateRSI } from './indicators/rsi';
 import { calculateATR, Candle } from './indicators/atr';
 import { calculateVolumeSpikeRatio } from './indicators/volumeSpike';
 import { appSettings } from '../../config/settings';
-
 import { calculateVWAP } from './indicators/vwap';
 
 export const AiAnalysisSchema = z.object({
@@ -13,7 +12,9 @@ export const AiAnalysisSchema = z.object({
   confidence: z.number().min(0).max(100),
   setup_type: z.enum(['BREAKOUT', 'PULLBACK', 'MOMENTUM', 'REVERSAL', 'NONE']),
   entry_zone: z.object({ min_usd: z.number(), max_usd: z.number() }),
-  take_profit_levels: z.array(z.object({ level: z.number(), price_usd: z.number(), percentage: z.number() })),
+  take_profit_levels: z.array(
+    z.object({ level: z.number(), price_usd: z.number(), percentage: z.number() })
+  ),
   stop_loss_usd: z.number(),
   risk_reward_ratio: z.number(),
   key_reasons: z.array(z.string()),
@@ -42,6 +43,23 @@ export interface TechnicalIndicatorsSnapshot {
 export class AnalyzerService {
   constructor(private readonly llmClient?: any) {}
 
+  private isValidCandle(candle: Candle): boolean {
+    return (
+      Number.isFinite(candle.timestamp) &&
+      Number.isFinite(candle.open) &&
+      Number.isFinite(candle.high) &&
+      Number.isFinite(candle.low) &&
+      Number.isFinite(candle.close) &&
+      Number.isFinite(candle.volume) &&
+      candle.timestamp > 0 &&
+      candle.open > 0 &&
+      candle.high > 0 &&
+      candle.low > 0 &&
+      candle.close > 0 &&
+      candle.high >= candle.low
+    );
+  }
+
   calculateIndicators(
     candles: Candle[],
     currentPrice: number,
@@ -54,12 +72,7 @@ export class AnalyzerService {
       return null;
     }
 
-    const isValidCandle = (candle: Candle) =>
-      Number.isFinite(candle.timestamp) && Number.isFinite(candle.open) && Number.isFinite(candle.high)
-      && Number.isFinite(candle.low) && Number.isFinite(candle.close) && Number.isFinite(candle.volume)
-      && candle.timestamp > 0 && candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0
-      && candle.high >= candle.low;
-    if (!candles.every(isValidCandle)) {
+    if (!candles.every((c) => this.isValidCandle(c))) {
       logger.warn('Analyzer rejected malformed candle data');
       return null;
     }
@@ -89,14 +102,24 @@ export class AnalyzerService {
     const atr14 = calculateATR(candles, 14);
     const vwap = calculateVWAP(candles);
     const volumeSpikeRatio = calculateVolumeSpikeRatio(currentVolume, pastVolumes);
+
     if (![ema9, ema21, rsi14, atr14, vwap, volumeSpikeRatio].every(Number.isFinite)) {
       logger.warn('Analyzer rejected non-finite indicator output');
       return null;
     }
 
-    // ATR-based dynamic risk bounds
-    const calculatedStopLoss = Math.max(currentPrice - appSettings.RISK_MULTIPLIER_STOP_LOSS * atr14, currentPrice * appSettings.MAX_LOSS_PERCENTAGE);
-    const riskDelta = currentPrice - calculatedStopLoss;
+    // Catatan: Pastikan MAX_LOSS_PERCENTAGE di settings.ts bernilai misal 0.90 (batas bawah 90% harga)
+    // Jika MAX_LOSS_PERCENTAGE bernilai 0.10 (maks rugi 10%), gunakan (1 - appSettings.MAX_LOSS_PERCENTAGE)
+    const lossFloorFactor =
+      appSettings.MAX_LOSS_PERCENTAGE < 0.5
+        ? 1 - appSettings.MAX_LOSS_PERCENTAGE
+        : appSettings.MAX_LOSS_PERCENTAGE;
+
+    const calculatedStopLoss = Math.max(
+      currentPrice - appSettings.RISK_MULTIPLIER_STOP_LOSS * atr14,
+      currentPrice * lossFloorFactor
+    );
+    const riskDelta = Math.max(currentPrice - calculatedStopLoss, currentPrice * 0.005); // cegah riskDelta <= 0
     const calculatedTp1 = currentPrice + appSettings.RISK_MULTIPLIER_TP1 * riskDelta;
     const calculatedTp2 = currentPrice + appSettings.RISK_MULTIPLIER_TP2 * riskDelta;
 
@@ -112,11 +135,16 @@ export class AnalyzerService {
       calculatedTp2,
     };
 
-    if (macroCandles && macroCandles.length >= 21) {
-      const macroCloses = macroCandles.map(c => c.close);
-      result.macroEma9 = calculateEMA(macroCloses, 9);
-      result.macroEma21 = calculateEMA(macroCloses, 21);
-      result.macroRsi14 = calculateRSI(macroCloses, 14);
+    if (macroCandles && macroCandles.length >= 21 && macroCandles.every((c) => this.isValidCandle(c))) {
+      const macroCloses = macroCandles.map((c) => c.close);
+      const mEma9 = calculateEMA(macroCloses, 9);
+      const mEma21 = calculateEMA(macroCloses, 21);
+      const mRsi14 = calculateRSI(macroCloses, 14);
+      if ([mEma9, mEma21, mRsi14].every(Number.isFinite)) {
+        result.macroEma9 = mEma9;
+        result.macroEma21 = mEma21;
+        result.macroRsi14 = mRsi14;
+      }
     }
 
     return result;
@@ -133,33 +161,18 @@ export class AnalyzerService {
       return null;
     }
 
-    const systemPrompt = `Anda adalah AI Scalper Profesional untuk Solana. Tugas Anda menganalisis data indikator dan mengembalikan keputusan BUY/WAIT/AVOID dalam format JSON.
+    const systemPrompt = `Anda adalah AI Scalper Profesional untuk Solana. Analisis indikator teknikal & security flags berikut, lalu kembalikan keputusan BUY/WAIT/AVOID dalam format JSON murni.
 ATURAN MUTLAK:
-1. JIKA VERDICT = BUY, Stop Loss (stop_loss_usd) WAJIB lebih kecil (<) dari harga masuk (currentPrice), dan Take Profit (take_profit_levels) WAJIB lebih besar (>) dari harga masuk.
-2. key_reasons WAJIB ditulis dalam bahasa Indonesia, maksimal 5-7 kata per alasan agar singkat, padat, dan mudah dimengerti.
-3. [MULTI-TIMEFRAME]: Jika trend jangka pendek (EMA 5m) terlihat naik tapi trend makro (EMA 15m/1h) turun, BERHATI-HATILAH terhadap fakeout/dead cat bounce.
-4. [ANTI-TRAP]: Jika ada 'flags' yang menyebutkan bahwa Top 10 Holder memiliki supply sangat besar (>50%), VERDICT WAJIB AVOID kecuali ada alasan fundamental kuat. Paus ini bisa rugpull seketika!
-5. Keluarkan HANYA JSON valid sesuai struktur berikut:
-{
-  "verdict": "BUY" | "WAIT" | "AVOID",
-  "confidence": 0-100,
-  "setup_type": "BREAKOUT" | "PULLBACK" | "MOMENTUM" | "REVERSAL" | "NONE",
-  "entry_zone": { "min_usd": number, "max_usd": number },
-  "take_profit_levels": [
-    { "level": 1, "price_usd": number, "percentage": number },
-    { "level": 2, "price_usd": number, "percentage": number }
-  ],
-  "stop_loss_usd": number,
-  "risk_reward_ratio": number,
-  "key_reasons": ["alasan 1", "alasan 2"],
-  "red_flags": ["flag 1"],
-  "invalidation_condition": "kondisi pembatalan setup",
-  "estimated_holding_time": "durasi estimasi hold"
-}
-Jangan sertakan teks apapun selain JSON yang valid.`;
+1. JIKA VERDICT = BUY:
+   - Gunakan referensi stop_loss_usd di sekitar calculatedStopLoss (${indicators.calculatedStopLoss}) yang pasti < currentPrice (${currentPrice}).
+   - Gunakan referensi take_profit_levels di sekitar calculatedTp1 (${indicators.calculatedTp1}) dan calculatedTp2 (${indicators.calculatedTp2}) yang pasti > currentPrice (${currentPrice}).
+2. key_reasons WAJIB bahasa Indonesia, maksimal 5-7 kata per poin.
+3. [MULTI-TIMEFRAME]: Jika EMA pendek (ema9 > ema21) naik tapi tren makro (macroEma9 < macroEma21) turun, waspadai fakeout/dead cat bounce (pilih WAIT/AVOID kecuali volumeSpikeRatio sangat kuat).
+4. [ANTI-TRAP]: Jika securityFlags mencatat Top 10 Holder > 50%, VERDICT WAJIB AVOID.
+5. Keluarkan HANYA JSON valid sesuai skema tanpa markdown block.`;
 
     let attempts = 0;
-    const maxAttempts = 2; // 1 initial + 1 retry
+    const maxAttempts = 2;
 
     while (attempts < maxAttempts) {
       attempts++;
@@ -171,35 +184,46 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
           securityFlags,
           systemPrompt,
         });
-        // Provider failures already have bounded, sanitized diagnostics and
-        // a cooldown. Retrying a null result immediately only duplicates a
-        // request against the same unavailable endpoint.
         if (!result) return null;
         const analysis: AiAnalysis = result;
 
-        // Validasi LLM output: SL < entry < TP
         if (analysis.verdict === 'BUY') {
-          if (analysis.stop_loss_usd >= currentPrice) {
+          if (!analysis.take_profit_levels || analysis.take_profit_levels.length === 0) {
+            throw new Error('Inconsistent LLM output: take_profit_levels is empty');
+          }
+
+          if (analysis.stop_loss_usd >= currentPrice || analysis.stop_loss_usd <= 0) {
             throw new Error('Inconsistent LLM output: SL >= Entry');
           }
+
           const minTp = analysis.take_profit_levels.reduce((min, tp) => Math.min(min, tp.price_usd), Infinity);
-          if (minTp <= currentPrice) {
+          const maxTp = analysis.take_profit_levels.reduce((max, tp) => Math.max(max, tp.price_usd), -Infinity);
+
+          if (!Number.isFinite(minTp) || minTp <= currentPrice) {
             throw new Error('Inconsistent LLM output: TP <= Entry');
           }
 
-          // Probabilistic Calibration & Hallucination Check
           const calculatedRisk = currentPrice - analysis.stop_loss_usd;
-          const calculatedReward = minTp - currentPrice;
-          const actualRR = calculatedReward / calculatedRisk;
+          const minActualRR = (minTp - currentPrice) / calculatedRisk;
+          const maxActualRR = (maxTp - currentPrice) / calculatedRisk;
 
-          if (Math.abs(analysis.risk_reward_ratio - actualRR) > 1.0) {
-            logger.warn({ claimedRR: analysis.risk_reward_ratio, actualRR }, 'AI Hallucination detected in R:R math. Calibrating...');
+          // Cek apakah R:R yang diklaim AI masuk akal terhadap rentang TP1..TP2
+          const isRrConsistent =
+            Number.isFinite(analysis.risk_reward_ratio) &&
+            analysis.risk_reward_ratio >= minActualRR - 1.0 &&
+            analysis.risk_reward_ratio <= maxActualRR + 1.0;
+
+          if (!isRrConsistent) {
+            logger.warn(
+              { claimedRR: analysis.risk_reward_ratio, actualRR: minActualRR, maxActualRR },
+              'AI Hallucination detected in R:R math. Calibrating...'
+            );
             analysis.confidence = Math.max(0, analysis.confidence - 20);
-            analysis.risk_reward_ratio = actualRR;
+            analysis.risk_reward_ratio = minActualRR;
           }
 
           if (analysis.confidence > 90) {
-            analysis.confidence = 90; // Cap overconfidence
+            analysis.confidence = 90;
           }
         }
 
@@ -212,7 +236,7 @@ Jangan sertakan teks apapun selain JSON yang valid.`;
         const delayMs = process.env.NODE_ENV === 'test' ? 10 : 1000;
         await new Promise((res) => setTimeout(res, delayMs));
       }
-    } // end while
+    }
 
     return null;
   }
