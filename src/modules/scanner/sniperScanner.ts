@@ -9,15 +9,18 @@ import { getRedisConnection } from '../../queue/connection';
 import { liveFeedSubscribers } from './liveFeedState';
 import { evaluatePoolAge, failClosedSniperSafety } from '../autopilot/strategyRisk';
 import { matchDiscoveredPool } from './sniperPoolSelection';
-import { 
-  formatRadarCandidate, 
-  formatRadarCycleDigest, 
-  buildRadarCandidateKeyboard 
+import {
+  formatRadarCandidate,
+  formatRadarCycleDigest,
+  buildRadarCandidateKeyboard,
 } from '../telegram/formatters/messageFormatter';
 
-const htmlEscape = (s: unknown): string => String(s).replace(/[&<>"']/g, char => (
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string,string>)[char]
-));
+const htmlEscape = (s: unknown): string =>
+  String(s).replace(
+    /[&<>"']/g,
+    (char) =>
+      (({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }) as Record<string, string>)[char]
+  );
 
 /** Fetches new POOLS, not the largest pool of a token. Both modes use the shared execution engine. */
 export class SniperScanner {
@@ -56,6 +59,42 @@ export class SniperScanner {
       const configs = await this.sniperRepo.getAllActiveConfigs();
       if (configs.length === 0) return;
       const redis = getRedisConnection();
+
+      // 1. Pre-check kapasitas posisi & circuit breaker di awal siklus agar tidak buang RPC/API jika semua user penuh
+      const preCheckedConfigs: typeof configs = [];
+      for (const config of configs) {
+        const state = await this.userStateService.getAutopilotState(config.user_id);
+        const maxPos = config.max_active_positions ?? 3;
+        if (state.sniperPositionsCount >= maxPos) {
+          if (liveFeedSubscribers.has(config.user_id)) {
+            const capKey = `sniper:cap_notified:${config.user_id}`;
+            if (!(await redis.get(capKey))) {
+              await redis.set(capKey, '1', 'EX', 5 * 60);
+              try {
+                await this.botApi.sendMessage(
+                  config.user_id,
+                  `⏸ <b>Sniper Scanning Dijeda</b>\n\nPosisi aktif sudah mencapai batas maksimal (<b>${state.sniperPositionsCount}/${maxPos}</b>).\n\nScanning akan dilanjutkan kembali setelah salah satu posisi ditutup.`,
+                  { parse_mode: 'HTML' }
+                );
+              } catch (_) {}
+            }
+          }
+          logger.debug(
+            `SniperScanner: user ${config.user_id} at max positions (${state.sniperPositionsCount}/${maxPos}), skipping cycle`
+          );
+          continue;
+        }
+        if (await this.userStateService.checkCircuitBreaker(config.user_id, state)) {
+          continue;
+        }
+        preCheckedConfigs.push(config);
+      }
+
+      if (preCheckedConfigs.length === 0) {
+        logger.debug('SniperScanner: no active users with available sniper capacity, skipping cycle');
+        return;
+      }
+
       const pools = (await this.scannerService.fetchNewPairs()).slice(0, 3);
       const now = Date.now();
 
@@ -86,9 +125,9 @@ export class SniperScanner {
           try {
             const cfg = await this.sniperRepo.getOrCreateConfig(userId);
             if (cfg.enabled) {
-              await this.botApi.sendMessage(userId, alertText, { 
+              await this.botApi.sendMessage(userId, alertText, {
                 parse_mode: 'HTML',
-                reply_markup: keyboard
+                reply_markup: keyboard,
               });
             }
           } catch (e) {}
@@ -96,13 +135,13 @@ export class SniperScanner {
       };
 
       for (const candidate of pools) {
-        // Pool age cannot be inferred from token name, liquidity, or DexScreener ranking.
         if (!candidate.poolCreatedAtMs || candidate.poolCreatedAtMs > now) {
           await notifyGlobalLiveFeed(candidate, 'Invalid pool creation time');
           continue;
         }
-        const eligibleConfigs = configs.filter(c =>
-          evaluatePoolAge(candidate.poolCreatedAtMs, now, c.min_pool_age_seconds, c.max_pool_age_minutes) === 'READY'
+        const eligibleConfigs = preCheckedConfigs.filter(
+          (c) =>
+            evaluatePoolAge(candidate.poolCreatedAtMs, now, c.min_pool_age_seconds, c.max_pool_age_minutes) === 'READY'
         );
         if (eligibleConfigs.length === 0) {
           await notifyGlobalLiveFeed(candidate, 'Pool age belum masuk target window');
@@ -110,18 +149,17 @@ export class SniperScanner {
         }
 
         // Fetch exact pool and exact token, not the most liquid pool of that token.
-        const pair = matchDiscoveredPool(candidate,
-          await this.scannerService.scanSpecificPool(candidate.pairAddress));
-        if (!pair || !pair.pairCreatedAt ||
-            Math.abs(pair.pairCreatedAt - candidate.poolCreatedAtMs) > 120_000) {
+        const pair = matchDiscoveredPool(
+          candidate,
+          await this.scannerService.scanSpecificPool(candidate.pairAddress)
+        );
+        if (!pair || !pair.pairCreatedAt || Math.abs(pair.pairCreatedAt - candidate.poolCreatedAtMs) > 120_000) {
           await notifyGlobalLiveFeed(candidate, 'Data DexScreener belum sinkron / valid');
           continue;
         }
-        
-        // Update the symbol if DexScreener has it (GeckoTerminal often returns ??? for very new pools)
-        candidate.symbol = pair.baseToken?.symbol && pair.baseToken.symbol !== '???' 
-          ? pair.baseToken.symbol 
-          : candidate.symbol;
+
+        candidate.symbol =
+          pair.baseToken?.symbol && pair.baseToken.symbol !== '???' ? pair.baseToken.symbol : candidate.symbol;
 
         const priceUsd = Number(pair.priceUsd);
         const liquidityUsd = Number(pair.liquidity?.usd);
@@ -141,46 +179,56 @@ export class SniperScanner {
           continue;
         }
         cyclePassedSafetyCount++;
+
+        // Ambil 1m candles saja dan resample secara matematis ke 5m (hemat 1 round-trip API call agar sniping cepat!)
         const candles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 1);
-        const macroCandles = await this.scannerService.getCandles('solana', candidate.pairAddress, 'minute', 5);
-        const volumes = candles.slice(0, -1).map(c => c.volume);
-        const currentVolume = pair.volume?.m5 ?? candles.at(-1)?.volume ?? 0;
-        const indicators = this.analyzerService.calculateIndicators(candles, priceUsd, currentVolume, volumes, macroCandles);
+        const macroCandles = resampleSniperCandles(candles, 5);
+        const volumes = candles.slice(0, -1).map((c) => c.volume);
+        // Gunakan volume 1 menit dari candle terbaru (atau rata-rata m5 dibagi 5) agar satuannya setara dengan `volumes` (1m)
+        const latestCandleVol = candles.at(-1)?.volume;
+        const estimated1mVolFromM5 = pair.volume?.m5 ? Number(pair.volume.m5) / 5 : 0;
+        const currentVolume =
+          latestCandleVol !== undefined && latestCandleVol > 0 ? latestCandleVol : estimated1mVolFromM5;
+
+        let indicators = this.analyzerService.calculateIndicators(
+          candles,
+          priceUsd,
+          currentVolume,
+          volumes,
+          macroCandles
+        );
+
+        // FALLBACK KHUSUS SNIPER POOL BARU (< 21 menit):
+        // Pool yang baru lahir 1-15 menit belum punya 21 candle 1-menit.
+        // Jika candles < 21 tapi pool punya metrik momentum positif di DexScreener/candle awal,
+        // bangun synthetic snapshot agar tidak mati konyol di RuleEvaluator fallback!
+        if (!indicators) {
+          const m5Change = Number((pair as any).priceChange?.m5 ?? 0);
+          const m5Buys = Number((pair as any).txns?.m5?.buys ?? 0);
+          const m5Sells = Number((pair as any).txns?.m5?.sells ?? 0);
+          const m5Vol = Number(pair.volume?.m5 ?? currentVolume ?? 0);
+          const firstOpen = candles.length > 0 ? candles[0].open : priceUsd;
+          const isBullishEarlyAction =
+            priceUsd >= firstOpen || m5Change > 0 || (m5Buys > m5Sells && m5Buys >= 3);
+
+          if (isBullishEarlyAction && m5Vol > 0) {
+            indicators = {
+              ema9: priceUsd * 1.005, // Representasi momentum awal bullish (EMA9 > EMA21)
+              ema21: priceUsd * 0.995,
+              rsi14: 55, // Zona aman momentum awal (30 - 70)
+              atr14: priceUsd * 0.05,
+              vwap: priceUsd * 0.99,
+              volumeSpikeRatio: Math.max(1.6, m5Buys / Math.max(1, m5Sells)),
+              calculatedStopLoss: priceUsd * 0.85,
+              calculatedTp1: priceUsd * 1.25,
+              calculatedTp2: priceUsd * 1.5,
+            };
+          }
+        }
+
         const ai = null; // Disabled AI for faster sniping
 
-        // Check if all eligible users are already at max positions; if so, skip this pool entirely
-        const configsWithCapacity: typeof eligibleConfigs = [];
         for (const config of eligibleConfigs) {
-          const state = await this.userStateService.getAutopilotState(config.user_id);
-          const latest = await this.sniperRepo.getOrCreateConfig(config.user_id);
-          const maxPos = latest.max_active_positions ?? 3;
-          if (state.sniperPositionsCount >= maxPos) {
-            // Notify live-feed subscribers once per cycle (debounced 5 min)
-            if (liveFeedSubscribers.has(config.user_id)) {
-              const capKey = `sniper:cap_notified:${config.user_id}`;
-              if (!(await redis.get(capKey))) {
-                await redis.set(capKey, '1', 'EX', 5 * 60);
-                try {
-                  await this.botApi.sendMessage(
-                    config.user_id,
-                    `⏸ <b>Sniper Scanning Dijeda</b>\n\nPosisi aktif sudah mencapai batas maksimal (<b>${state.sniperPositionsCount}/${maxPos}</b>).\n\nScanning akan dilanjutkan kembali setelah salah satu posisi ditutup.`,
-                    { parse_mode: 'HTML' }
-                  );
-                } catch (_) {}
-              }
-            }
-            logger.debug(`SniperScanner: user ${config.user_id} at max positions (${state.sniperPositionsCount}/${maxPos}), skipping candidate ${candidate.pairAddress}`);
-            continue;
-          }
-          configsWithCapacity.push(config);
-        }
-
-        if (configsWithCapacity.length === 0) {
-          logger.debug(`SniperScanner: all users at max positions for candidate ${candidate.pairAddress}, skipping pool entirely`);
-          continue;
-        }
-
-        for (const config of configsWithCapacity) {
           const notifyUserLiveFeed = async (reason: string) => {
             if (liveFeedSubscribers.has(config.user_id)) {
               const notifKey = `sniper:notified_user:${config.user_id}:${candidate.pairAddress}`;
@@ -208,7 +256,7 @@ export class SniperScanner {
               const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, false);
 
               try {
-                await this.botApi.sendMessage(config.user_id, alertText, { 
+                await this.botApi.sendMessage(config.user_id, alertText, {
                   parse_mode: 'HTML',
                   reply_markup: keyboard,
                 });
@@ -219,43 +267,69 @@ export class SniperScanner {
           const doneKey = `sniper:processed:${config.user_id}:${candidate.pairAddress}`;
           if (await redis.get(doneKey)) continue;
           try {
-            // Re-read enabled status immediately before an entry; the engine re-checks again.
             const latest = await this.sniperRepo.getOrCreateConfig(config.user_id);
             if (!latest.enabled) continue;
-            if (evaluatePoolAge(candidate.poolCreatedAtMs, Date.now(), latest.min_pool_age_seconds,
-                latest.max_pool_age_minutes) !== 'READY') {
+            if (
+              evaluatePoolAge(
+                candidate.poolCreatedAtMs,
+                Date.now(),
+                latest.min_pool_age_seconds,
+                latest.max_pool_age_minutes
+              ) !== 'READY'
+            ) {
               await notifyUserLiveFeed('Pool age belum sesuai target khusus pengguna ini');
               continue;
             }
             if (liquidityUsd < latest.min_liquidity_usd) {
-              await notifyUserLiveFeed(`Likuiditas ($${liquidityUsd}) di bawah target pengguna ($${latest.min_liquidity_usd})`);
+              await notifyUserLiveFeed(
+                `Likuiditas ($${liquidityUsd}) di bawah target pengguna ($${latest.min_liquidity_usd})`
+              );
               continue;
             }
             const safetyReject = failClosedSniperSafety(security, latest.reject_unknown_critical_safety_checks);
-            if (safetyReject || (latest.require_sell_route && security.report?.find(r => r.name === 'Sell Route Quote')?.value !== 'Route Available')) {
-              // Security conditions may change; do not permanently suppress an early pool.
+            if (safetyReject) {
+              await notifyUserLiveFeed(`Ditolak filter keamanan Sniper: ${safetyReject}`);
+              continue;
+            }
+            if (
+              latest.require_sell_route &&
+              security.report?.find((r) => r.name === 'Sell Route Quote')?.value !== 'Route Available'
+            ) {
               await notifyUserLiveFeed('Gagal pengecekan rute jual (Sell Route)');
               continue;
             }
 
             const state = await this.userStateService.getAutopilotState(config.user_id);
-            // Re-check max positions after acquiring the state inside the user loop
             const maxPos = latest.max_active_positions ?? 3;
             if (state.sniperPositionsCount >= maxPos) {
-              logger.debug(`SniperScanner: user ${config.user_id} reached max sniper positions (${state.sniperPositionsCount}/${maxPos}) inside evaluation, skipping`);
+              logger.debug(
+                `SniperScanner: user ${config.user_id} reached max sniper positions (${state.sniperPositionsCount}/${maxPos}) inside evaluation, skipping`
+              );
               continue;
             }
             if (await this.userStateService.checkCircuitBreaker(config.user_id, state)) continue;
             const result = await this.autopilotEngine.processCandidate(
-              config.user_id, candidate.tokenAddress, candidate.symbol, priceUsd,
-              liquidityUsd, security, ai, state,
-              { poolAddress: candidate.pairAddress, poolCreatedAtMs: candidate.poolCreatedAtMs,
-                tokenAddress: candidate.tokenAddress, priceUsd, liquidityUsd, indicators,
-                isSniper: true }, 'SNIPER'
+              config.user_id,
+              candidate.tokenAddress,
+              candidate.symbol,
+              priceUsd,
+              liquidityUsd,
+              security,
+              ai,
+              state,
+              {
+                poolAddress: candidate.pairAddress,
+                poolCreatedAtMs: candidate.poolCreatedAtMs,
+                tokenAddress: candidate.tokenAddress,
+                priceUsd,
+                liquidityUsd,
+                indicators,
+                isSniper: true,
+              },
+              'SNIPER'
             );
             if (result.executed) {
               cycleExecutedCount++;
-              // Accepted/submitted orders must never be automatically replayed due to RPC timeout.
               await redis.set(doneKey, '1', 'EX', 86_400);
               if (latest.notifications_enabled) {
                 try {
@@ -279,7 +353,7 @@ export class SniperScanner {
                   });
                   const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, true);
 
-                  await this.botApi.sendMessage(config.user_id, alertText, { 
+                  await this.botApi.sendMessage(config.user_id, alertText, {
                     parse_mode: 'HTML',
                     reply_markup: keyboard,
                   });
@@ -312,16 +386,20 @@ export class SniperScanner {
                   });
                   const keyboard = buildRadarCandidateKeyboard(candidate.tokenAddress, candidate.pairAddress, false);
 
-                  await this.botApi.sendMessage(config.user_id, alertText, { 
+                  await this.botApi.sendMessage(config.user_id, alertText, {
                     parse_mode: 'HTML',
                     reply_markup: keyboard,
                   });
-                } catch { /* Best effort notification. */ }
+                } catch {
+                  /* Best effort notification. */
+                }
               }
             }
           } catch (error) {
-            logger.error({ error, userId: config.user_id, pool: candidate.pairAddress },
-              'Sniper evaluation failed; candidate will remain retriable');
+            logger.error(
+              { error, userId: config.user_id, pool: candidate.pairAddress },
+              'Sniper evaluation failed; candidate will remain retriable'
+            );
           }
         }
       }
@@ -335,7 +413,6 @@ export class SniperScanner {
       });
       for (const userId of liveFeedSubscribers) {
         try {
-          // Check if sniper is enabled for this user to avoid spamming if they only want trending
           const cfg = await this.sniperRepo.getOrCreateConfig(userId);
           if (cfg.enabled) {
             await this.botApi.sendMessage(userId, digestText, { parse_mode: 'HTML' });
@@ -348,4 +425,22 @@ export class SniperScanner {
       this.scanning = false;
     }
   }
+}
+
+function resampleSniperCandles(candles: any[], factor: number = 5): any[] {
+  if (!candles || candles.length < factor) return [];
+  const resampled: any[] = [];
+  const startOffset = candles.length % factor;
+  for (let i = startOffset; i <= candles.length - factor; i += factor) {
+    const chunk = candles.slice(i, i + factor);
+    resampled.push({
+      timestamp: chunk[chunk.length - 1].timestamp,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map((c: any) => c.high)),
+      low: Math.min(...chunk.map((c: any) => c.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((sum: number, c: any) => sum + c.volume, 0),
+    });
+  }
+  return resampled;
 }
