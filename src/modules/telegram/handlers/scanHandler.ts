@@ -69,7 +69,7 @@ export async function handleScanCommand(
     const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map(c => c.volume);
     const currentVolume = pair.volume?.m5 || (candles.length > 0 ? candles[candles.length - 1].volume : 0);
 
-    const indicators = analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes, macroCandles);
+    const indicators = analyzerService.calculateIndicators(candles, priceUsd, currentVolume, pastVolumes, macroCandles, 10 * 60 * 1000);
     
     // let aiAnalysis = null;
     // We defer AI analysis to the background to speed up UI

@@ -15,6 +15,7 @@ import {
   buildRadarCandidateKeyboard,
 } from '../telegram/formatters/messageFormatter';
 import { appSettings } from '../../config/settings.js';
+import { getEnv } from '../../config/env';
 import { DexScreenerClient } from './dexScreenerClient';
 
 interface PairProcessContext {
@@ -381,6 +382,16 @@ export class TrendScanner {
         // Batas drift ADAPTIF: setengah jarak SL AI (min 1%, maks 5%). SL minimum 2% berarti
         // drift fix 5% bisa membuat entry sudah 2.5x melewati stop — sekarang dibatasi.
         const { freshPrice } = await freshPricePromise;
+        const freshPriceOk = Number.isFinite(freshPrice) && freshPrice > 0;
+        // P0 (review GPT): fresh-price FAIL-CLOSED saat LIVE — harga basi + API mati = SKIP.
+        // Saat PAPER tetap fail-open (pakai harga analisa) agar paper flow tidak macet.
+        if (!freshPriceOk && getEnv().LIVE_TRADING_ENABLED) {
+          logger.warn(
+            { token: pair.baseToken.symbol },
+            'TrendScanner: skip — harga fresh tidak tersedia saat LIVE (fail-closed)'
+          );
+          return;
+        }
         let maxDriftPct = appSettings.SCANNER_PARAMS.EXECUTION_MAX_PRICE_DRIFT_PCT;
         if (
           aiAnalysis?.verdict === 'BUY' &&

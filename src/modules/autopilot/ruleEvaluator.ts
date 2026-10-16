@@ -199,22 +199,23 @@ export class RuleEvaluator {
             }
           } else {
             let fallbackPassed = true;
-            if (indicators.ema9 <= indicators.ema21) {
+            // Guard NaN eksplisit: tanpa ini, NaN <= NaN = false membuat gate lolos vakum.
+            if (!Number.isFinite(indicators.ema9) || !Number.isFinite(indicators.ema21) || indicators.ema9 <= indicators.ema21) {
               rulesFailed.push(
-                `Fallback: EMA9 (${indicators.ema9.toFixed(4)}) <= EMA21 (${indicators.ema21.toFixed(4)})`,
+                `Fallback: EMA9 (${indicators.ema9}) <= EMA21 (${indicators.ema21}) atau tidak valid`,
               );
               fallbackPassed = false;
             } else {
               rulesPassed.push('Fallback: EMA9 > EMA21 (Bullish trend)');
             }
-            if (indicators.rsi14 >= 70 || indicators.rsi14 <= 30) {
-              rulesFailed.push(`Fallback: RSI14 (${indicators.rsi14.toFixed(2)}) out of safe zone (30-70)`);
+            if (!Number.isFinite(indicators.rsi14) || indicators.rsi14 >= 70 || indicators.rsi14 <= 30) {
+              rulesFailed.push(`Fallback: RSI14 (${indicators.rsi14}) out of safe zone (30-70) atau tidak valid`);
               fallbackPassed = false;
             } else {
               rulesPassed.push('Fallback: RSI14 is safe');
             }
-            if (indicators.volumeSpikeRatio < 1.5) {
-              rulesFailed.push(`Fallback: Volume Spike (${indicators.volumeSpikeRatio.toFixed(1)}x) < 1.5x`);
+            if (!Number.isFinite(indicators.volumeSpikeRatio) || indicators.volumeSpikeRatio < 1.5) {
+              rulesFailed.push(`Fallback: Volume Spike (${indicators.volumeSpikeRatio}) < 1.5x atau tidak valid`);
               fallbackPassed = false;
             } else {
               rulesPassed.push('Fallback: Volume Spike >= 1.5x');
@@ -243,10 +244,26 @@ export class RuleEvaluator {
         rulesPassed.push(`AI confidence ${ai.confidence}% >= ${aiParams.minConfidence}%`);
       }
 
-      if (ai.risk_reward_ratio < aiParams.minRiskReward) {
-        rulesFailed.push(`AI R:R ${ai.risk_reward_ratio} below minimum ${aiParams.minRiskReward}`);
+      // P0 (review GPT): R:R OTORITATIF dihitung deterministik dari level SL/TP AI.
+      // Angka klaim LLM (risk_reward_ratio) TIDAK dipakai untuk keputusan — hanya untuk log.
+      // Contoh serangan yang dicegah: RR aktual 0.8 diklaim 1.5 dan lolos karena toleransi ±1.0.
+      const tpPrices = (ai.take_profit_levels ?? [])
+        .map((tp) => tp.price_usd)
+        .filter((p) => Number.isFinite(p) && p > currentPriceUsd);
+      const nearestTp = tpPrices.length > 0 ? Math.min(...tpPrices) : NaN;
+      const riskDistance = currentPriceUsd - ai.stop_loss_usd;
+      const authoritativeRR =
+        Number.isFinite(nearestTp) && riskDistance > 0
+          ? (nearestTp - currentPriceUsd) / riskDistance
+          : NaN;
+      if (!Number.isFinite(authoritativeRR)) {
+        rulesFailed.push('Cannot compute deterministic R:R from AI SL/TP levels');
+      } else if (authoritativeRR < aiParams.minRiskReward) {
+        rulesFailed.push(
+          `Deterministic R:R ${authoritativeRR.toFixed(2)} below minimum ${aiParams.minRiskReward} (LLM claimed ${ai.risk_reward_ratio})`
+        );
       } else {
-        rulesPassed.push(`AI R:R ${ai.risk_reward_ratio} >= ${aiParams.minRiskReward}`);
+        rulesPassed.push(`Deterministic R:R ${authoritativeRR.toFixed(2)} >= ${aiParams.minRiskReward}`);
       }
 
       const setupType = String(ai.setup_type ?? '')

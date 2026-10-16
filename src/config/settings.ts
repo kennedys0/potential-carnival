@@ -29,7 +29,7 @@ export const AppSettingsSchema = z.object({
   TX_MAX_NETWORK_FEE_LAMPORTS: z.number().int().nonnegative().default(100_000),
   TX_MAX_INCIDENTAL_LAMPORTS: z.number().int().nonnegative().default(10_000_000),
   NETWORK_FEE_FALLBACK_LAMPORTS: z.number().int().positive().default(5_000),
-  LLM_REQUEST_TIMEOUT_MS: z.number().int().positive().default(30_000),
+  LLM_REQUEST_TIMEOUT_MS: z.number().int().positive().default(10_000),
   MARKET_DATA_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(60_000).default(8_000),
   SWAP_PROVIDER_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(60_000).default(10_000),
   RPC_FETCH_TIMEOUT_MS: z.number().int().min(1_000).max(120_000).default(15_000),
@@ -73,11 +73,11 @@ export const AppSettingsSchema = z.object({
     MIN_SAFETY_SCORE: z.number().default(50),
     ALLOWED_LEVELS: z.array(z.string()).default(['SAFE', 'CAUTION']),
     MIN_LIQUIDITY_USD: z.number().default(1000), // Lower liquidity for new pairs
-    REQUIRE_AI: z.boolean().default(false), // Disable AI requirement for new pairs
+    // REQUIRE_AI dihapus (2026-10-16): sniper = FAST SNIPER tanpa AI by design.
   }).default({}),
   ANALYZER_PARAMS: z.object({
     MIN_CANDLES: z.number().int().min(21).default(21),
-    MAX_STALE_CANDLE_AGE_MS: z.number().default(1800000), // 30 minutes
+    MAX_STALE_CANDLE_AGE_MS: z.number().default(180000), // 3 minutes (1m scalping; /scan 5m override ke 10 mnt)
   }).default({}),
   SCANNER_PARAMS: z.object({
     // Berapa pair diproses paralel per siklus (bunuh antrian sekuensial yang bikin sinyal basi)

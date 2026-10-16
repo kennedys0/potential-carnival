@@ -90,3 +90,68 @@ describe('AnalyzerService', () => {
     expect(mockLlmClient.analyze).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('AI verdict cache regime fingerprint (P1)', () => {
+  const waitVerdict = {
+    verdict: 'WAIT',
+    confidence: 60,
+    setup_type: 'NONE',
+    entry_zone: { min_usd: 1, max_usd: 1 },
+    take_profit_levels: [],
+    stop_loss_usd: 0.9,
+    risk_reward_ratio: 0,
+    key_reasons: [],
+    red_flags: [],
+    invalidation_condition: 'none',
+    estimated_holding_time: '1h',
+  };
+
+  const baseIndicators: TechnicalIndicatorsSnapshot = {
+    ema9: 1.1,
+    ema21: 1.0,
+    rsi14: 55,
+    atr14: 0.1,
+    vwap: 1.0,
+    volumeSpikeRatio: 2,
+    calculatedStopLoss: 0.9,
+    calculatedTp1: 1.2,
+    calculatedTp2: 1.5,
+  };
+  const marketCtx: any = { buysM5: 8, sellsM5: 2 };
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('serves cached verdict when regime is unchanged (HIT)', async () => {
+    const mockLlmClient = { analyze: vi.fn().mockResolvedValue({ ...waitVerdict }) };
+    const service = new AnalyzerService(mockLlmClient);
+
+    const r1 = await service.getAiAnalysisWithCache('mintX', 'TKN', 1.0, baseIndicators, [], marketCtx);
+    expect(r1?.verdict).toBe('WAIT');
+    expect(mockLlmClient.analyze).toHaveBeenCalledTimes(1); // miss -> blocking
+
+    // Ubah mock: bila HIT, vonis lama (WAIT) yang dikembalikan, bukan BUY baru
+    mockLlmClient.analyze.mockResolvedValue({ ...waitVerdict, verdict: 'BUY' });
+    const r2 = await service.getAiAnalysisWithCache('mintX', 'TKN', 1.0, baseIndicators, [], marketCtx);
+    expect(r2?.verdict).toBe('WAIT'); // HIT: rejim sama -> cache dipakai
+  });
+
+  it('forces fresh AI call when regime changes (MISS on regime flip)', async () => {
+    const mockLlmClient = { analyze: vi.fn().mockResolvedValue({ ...waitVerdict }) };
+    const service = new AnalyzerService(mockLlmClient);
+
+    await service.getAiAnalysisWithCache('mintY', 'TKN', 1.0, baseIndicators, [], marketCtx);
+    expect(mockLlmClient.analyze).toHaveBeenCalledTimes(1);
+
+    // Rejim berbalik (tren turun): key fingerprint berubah -> MISS -> blocking call
+    const flipped = { ...baseIndicators, ema9: 0.9 };
+    await service.getAiAnalysisWithCache('mintY', 'TKN', 1.0, flipped, [], marketCtx);
+    // MISS bersifat blocking (di-await), jadi hitungan naik deterministik segera setelah await
+    expect(mockLlmClient.analyze).toHaveBeenCalledTimes(2);
+
+    // Tekanan beli runtuh juga mengubah fingerprint
+    const noPressure = { ...baseIndicators };
+    await service.getAiAnalysisWithCache('mintY', 'TKN', 1.0, noPressure, [], { buysM5: 1, sellsM5: 9 });
+    expect(mockLlmClient.analyze).toHaveBeenCalledTimes(3);
+    await sleep(50); // biarkan background refresh (dari HIT manapun) selesai tanpa mengganggu hitungan
+  });
+});

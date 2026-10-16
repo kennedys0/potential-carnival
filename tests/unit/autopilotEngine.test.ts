@@ -135,7 +135,7 @@ describe('AutopilotEngine', () => {
     const result = await engine.processCandidate(
       1, 'MINT', 'TKN', 1, 100000, 
       { score: 100, level: 'SAFE', riskFlags: [] } as any, 
-      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2 } as any, 
+      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2, take_profit_levels: [{ level: 1, price_usd: 1.2, percentage: 50 }] } as any, 
       currentState
     );
 
@@ -157,7 +157,7 @@ describe('AutopilotEngine', () => {
     const result = await engine.processCandidate(
       1, 'MINT', 'TKN', 1, 100000, 
       { score: 100, level: 'SAFE', riskFlags: [] } as any, 
-      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2 } as any, 
+      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2, take_profit_levels: [{ level: 1, price_usd: 1.2, percentage: 50 }] } as any, 
       currentState
     );
 
@@ -198,7 +198,7 @@ describe('AutopilotEngine', () => {
           deployerHoldingPercent: null,
         },
       },
-      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2 } as any,
+      { verdict: 'BUY', confidence: 90, setup_type: 'BREAKOUT', stop_loss_usd: 0.9, risk_reward_ratio: 2, take_profit_levels: [{ level: 1, price_usd: 1.2, percentage: 50 }] } as any,
       {
         openPositionsCount: 0,
         availableBalanceSol: 10,

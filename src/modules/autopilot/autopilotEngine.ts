@@ -171,7 +171,11 @@ export class AutopilotEngine {
         maxDeployerPercent: undefined,
         requireLpBurnOrLock: false,
       };
-      aiParams.requireAi = appSettings.SNIPER_PARAMS.REQUIRE_AI;
+      // Sniper = FAST SNIPER by design: tanpa AI (scanner selalu kirim ai=null),
+      // keputusan lewat gate teknikal/early-momentum eksplisit di RuleEvaluator.
+      // (Dulu ada SNIPER_PARAMS.REQUIRE_AI — dihapus karena menyesatkan:
+      //  true = sniper mati total tanpa pesan jelas.)
+      aiParams.requireAi = false;
     }
 
     if (source === 'SNIPER') {

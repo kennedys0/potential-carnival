@@ -69,6 +69,37 @@ export class AnalyzerService {
    */
   private readonly aiVerdictCache = new Map<string, { analysis: AiAnalysis; fetchedAt: number }>();
   private readonly aiInflight = new Map<string, Promise<AiAnalysis | null>>();
+  // Batas ukuran cache: Map tidak punya TTL-eviction bawaan, jadi hapus entri terlama bila penuh.
+  private static readonly AI_CACHE_MAX_ENTRIES = 500;
+
+  private setAiCache(key: string, analysis: AiAnalysis): void {
+    if (this.aiVerdictCache.size >= AnalyzerService.AI_CACHE_MAX_ENTRIES) {
+      const oldest = this.aiVerdictCache.keys().next();
+      if (!oldest.done) this.aiVerdictCache.delete(oldest.value);
+    }
+    this.aiVerdictCache.set(key, { analysis, fetchedAt: Date.now() });
+  }
+
+  // P1 (review GPT): fingerprint rejim pasar untuk cache key.
+  // Vonis AI hanya dipakai ulang bila REJIM SAMA (arah tren, bucket RSI, bucket volume,
+  // tekanan buy/sell). Rejim berubah -> key berubah -> cache miss -> AI dipanggil fresh.
+  // Ini menyelesaikan dilema "TTL 5 menit terlalu lama vs cache tidak pernah hit":
+  // TTL boleh panjang karena key-nya sendiri yang invalidasi saat pasar berubah.
+  private buildRegimeFingerprint(
+    indicators: TechnicalIndicatorsSnapshot,
+    marketContext?: MarketContext
+  ): string {
+    const trendDir = indicators.ema9 > indicators.ema21 ? 'up' : 'dn';
+    const rsiBucket = Number.isFinite(indicators.rsi14) ? Math.round(indicators.rsi14 / 10) : 'na';
+    const volBucket = Number.isFinite(indicators.volumeSpikeRatio)
+      ? Math.round(indicators.volumeSpikeRatio * 2)
+      : 'na';
+    const buys = Number(marketContext?.buysM5);
+    const sells = Number(marketContext?.sellsM5);
+    const pressure =
+      Number.isFinite(buys) && Number.isFinite(sells) && sells > 0 ? (buys / sells).toFixed(1) : 'na';
+    return `${trendDir}|rsi${rsiBucket}|vol${volBucket}|p${pressure}`;
+  }
 
   async getAiAnalysisWithCache(
     tokenMint: string,
@@ -79,35 +110,36 @@ export class AnalyzerService {
     marketContext?: MarketContext
   ): Promise<AiAnalysis | null> {
     const ttlMs = appSettings.SCANNER_PARAMS.AI_VERDICT_CACHE_TTL_MS;
-    const cached = this.aiVerdictCache.get(tokenMint);
+    const cacheKey = `${tokenMint}:${this.buildRegimeFingerprint(indicators, marketContext)}`;
+    const cached = this.aiVerdictCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < ttlMs) {
       const ageSec = Math.round((Date.now() - cached.fetchedAt) / 1000);
       logger.debug({ token: tokenSymbol, ageSec }, 'AI cache HIT — pakai vonis tanpa nunggu LLM');
       // Refresh di background agar cache tetap hangat untuk siklus berikut
-      this.refreshAiInBackground(tokenMint, tokenSymbol, currentPrice, indicators, securityFlags, marketContext);
+      this.refreshAiInBackground(cacheKey, tokenSymbol, currentPrice, indicators, securityFlags, marketContext);
       return cached.analysis;
     }
     // Cache miss: blocking seperti perilaku lama, lalu simpan ke cache
     const analysis = await this.analyzeWithLlm(tokenSymbol, currentPrice, indicators, securityFlags, marketContext);
     if (analysis) {
-      this.aiVerdictCache.set(tokenMint, { analysis, fetchedAt: Date.now() });
+      this.setAiCache(cacheKey, analysis);
     }
     return analysis;
   }
 
   private refreshAiInBackground(
-    tokenMint: string,
+    cacheKey: string,
     tokenSymbol: string,
     currentPrice: number,
     indicators: TechnicalIndicatorsSnapshot,
     securityFlags: string[],
     marketContext?: MarketContext
   ): void {
-    if (this.aiInflight.has(tokenMint)) return; // sudah ada refresh berjalan
+    if (this.aiInflight.has(cacheKey)) return; // sudah ada refresh berjalan
     const p = this.analyzeWithLlm(tokenSymbol, currentPrice, indicators, securityFlags, marketContext)
       .then((analysis) => {
         if (analysis) {
-          this.aiVerdictCache.set(tokenMint, { analysis, fetchedAt: Date.now() });
+          this.setAiCache(cacheKey, analysis);
           logger.debug({ token: tokenSymbol }, 'AI background refresh selesai, cache diperbarui');
         }
         return analysis;
@@ -117,9 +149,9 @@ export class AnalyzerService {
         return null;
       })
       .finally(() => {
-        this.aiInflight.delete(tokenMint);
+        this.aiInflight.delete(cacheKey);
       });
-    this.aiInflight.set(tokenMint, p);
+    this.aiInflight.set(cacheKey, p);
     // Fire-and-forget: jangan biarkan unhandled rejection
     p.catch(() => {});
   }
@@ -146,7 +178,8 @@ export class AnalyzerService {
     currentPrice: number,
     currentVolume: number,
     pastVolumes: number[],
-    macroCandles?: Candle[]
+    macroCandles?: Candle[],
+    maxStaleMs?: number
   ): TechnicalIndicatorsSnapshot | null {
     if (candles.length < appSettings.ANALYZER_PARAMS.MIN_CANDLES) {
       logger.warn({ candleCount: candles.length }, 'Analyzer rejected insufficient candle history');
@@ -171,8 +204,11 @@ export class AnalyzerService {
 
     const now = Date.now();
     const candleAgeMs = now - lastCandle.timestamp;
-    if (candleAgeMs > appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS) {
-      logger.warn({ candleAgeMs }, 'Analyzer rejected stale candle data');
+    // P1 (review GPT): threshold stale disesuaikan timeframe — 30 menit terlalu longgar
+    // untuk scalping 1m. Default 3 menit; pemanggil candle 5m (/scan) memakai 10 menit.
+    const maxStale = maxStaleMs ?? appSettings.ANALYZER_PARAMS.MAX_STALE_CANDLE_AGE_MS;
+    if (candleAgeMs > maxStale) {
+      logger.warn({ candleAgeMs, maxStale }, 'Analyzer rejected stale candle data');
       return null;
     }
 
@@ -248,7 +284,7 @@ export class AnalyzerService {
 ATURAN MUTLAK:
 1. JIKA VERDICT = BUY:
    - Gunakan referensi stop_loss_usd di sekitar calculatedStopLoss ($${formatUsd(indicators.calculatedStopLoss)}) yang pasti < currentPrice ($${formatUsd(currentPrice)}).
-   - Gunakan referensi take_profit_levels di sekitar calculatedTp1 (${indicators.calculatedTp1}) dan calculatedTp2 (${indicators.calculatedTp2}) yang pasti > currentPrice (${currentPrice}).
+   - Gunakan referensi take_profit_levels di sekitar calculatedTp1 ($${formatUsd(indicators.calculatedTp1)}) dan calculatedTp2 ($${formatUsd(indicators.calculatedTp2)}) yang pasti > currentPrice ($${formatUsd(currentPrice)}).
 2. key_reasons WAJIB bahasa Indonesia, maksimal 5-7 kata per poin.
 3. [MULTI-TIMEFRAME]: Jika EMA pendek (ema9 > ema21) naik tapi tren makro (macroEma9 < macroEma21) turun, waspadai fakeout/dead cat bounce (pilih WAIT/AVOID kecuali volumeSpikeRatio sangat kuat).
 4. [ANTI-TRAP]: Jika securityFlags mencatat Top 10 Holder > 50%, VERDICT WAJIB AVOID.
