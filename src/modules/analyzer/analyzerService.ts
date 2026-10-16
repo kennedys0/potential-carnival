@@ -40,8 +40,78 @@ export interface TechnicalIndicatorsSnapshot {
   macroRsi14?: number;
 }
 
+export interface MarketContext {
+  priceChangeM5Pct?: number;
+  buysM5?: number;
+  sellsM5?: number;
+  lastCandles?: Array<{ open: number; high: number; low: number; close: number }>;
+}
+
 export class AnalyzerService {
   constructor(private readonly llmClient?: any) {}
+
+  /**
+   * Cache vonis AI per token agar analisa tidak blocking setiap siklus.
+   * Strategi stale-while-revalidate: vonis fresh (< TTL) dipakai instan (0 detik),
+   * sekaligus trigger refresh background agar tetap hangat. Cache miss tetap
+   * blocking seperti sebelumnya supaya perilaku first-sighting tidak berubah.
+   */
+  private readonly aiVerdictCache = new Map<string, { analysis: AiAnalysis; fetchedAt: number }>();
+  private readonly aiInflight = new Map<string, Promise<AiAnalysis | null>>();
+
+  async getAiAnalysisWithCache(
+    tokenMint: string,
+    tokenSymbol: string,
+    currentPrice: number,
+    indicators: TechnicalIndicatorsSnapshot,
+    securityFlags: string[],
+    marketContext?: MarketContext
+  ): Promise<AiAnalysis | null> {
+    const ttlMs = appSettings.SCANNER_PARAMS.AI_VERDICT_CACHE_TTL_MS;
+    const cached = this.aiVerdictCache.get(tokenMint);
+    if (cached && Date.now() - cached.fetchedAt < ttlMs) {
+      const ageSec = Math.round((Date.now() - cached.fetchedAt) / 1000);
+      logger.debug({ token: tokenSymbol, ageSec }, 'AI cache HIT — pakai vonis tanpa nunggu LLM');
+      // Refresh di background agar cache tetap hangat untuk siklus berikut
+      this.refreshAiInBackground(tokenMint, tokenSymbol, currentPrice, indicators, securityFlags, marketContext);
+      return cached.analysis;
+    }
+    // Cache miss: blocking seperti perilaku lama, lalu simpan ke cache
+    const analysis = await this.analyzeWithLlm(tokenSymbol, currentPrice, indicators, securityFlags, marketContext);
+    if (analysis) {
+      this.aiVerdictCache.set(tokenMint, { analysis, fetchedAt: Date.now() });
+    }
+    return analysis;
+  }
+
+  private refreshAiInBackground(
+    tokenMint: string,
+    tokenSymbol: string,
+    currentPrice: number,
+    indicators: TechnicalIndicatorsSnapshot,
+    securityFlags: string[],
+    marketContext?: MarketContext
+  ): void {
+    if (this.aiInflight.has(tokenMint)) return; // sudah ada refresh berjalan
+    const p = this.analyzeWithLlm(tokenSymbol, currentPrice, indicators, securityFlags, marketContext)
+      .then((analysis) => {
+        if (analysis) {
+          this.aiVerdictCache.set(tokenMint, { analysis, fetchedAt: Date.now() });
+          logger.debug({ token: tokenSymbol }, 'AI background refresh selesai, cache diperbarui');
+        }
+        return analysis;
+      })
+      .catch((err: any) => {
+        logger.warn({ err: err?.message, token: tokenSymbol }, 'AI background refresh gagal (non-fatal)');
+        return null;
+      })
+      .finally(() => {
+        this.aiInflight.delete(tokenMint);
+      });
+    this.aiInflight.set(tokenMint, p);
+    // Fire-and-forget: jangan biarkan unhandled rejection
+    p.catch(() => {});
+  }
 
   private isValidCandle(candle: Candle): boolean {
     return (
@@ -154,7 +224,8 @@ export class AnalyzerService {
     tokenSymbol: string,
     currentPrice: number,
     indicators: TechnicalIndicatorsSnapshot,
-    securityFlags: string[]
+    securityFlags: string[],
+    marketContext?: MarketContext
   ): Promise<AiAnalysis | null> {
     if (!this.llmClient) {
       logger.warn('AI unavailable: llmClient not configured');
@@ -169,7 +240,22 @@ ATURAN MUTLAK:
 2. key_reasons WAJIB bahasa Indonesia, maksimal 5-7 kata per poin.
 3. [MULTI-TIMEFRAME]: Jika EMA pendek (ema9 > ema21) naik tapi tren makro (macroEma9 < macroEma21) turun, waspadai fakeout/dead cat bounce (pilih WAIT/AVOID kecuali volumeSpikeRatio sangat kuat).
 4. [ANTI-TRAP]: Jika securityFlags mencatat Top 10 Holder > 50%, VERDICT WAJIB AVOID.
-5. Keluarkan HANYA JSON valid sesuai skema tanpa markdown block.`;
+5. Keluarkan HANYA JSON valid sesuai skema tanpa markdown block.
+SKEMA JSON WAJIB — semua field berikut HARUS ada, tidak boleh di-skip:
+{
+  "verdict": "BUY" | "WAIT" | "AVOID",
+  "confidence": <angka 0-100>,
+  "setup_type": "BREAKOUT" | "PULLBACK" | "MOMENTUM" | "REVERSAL" | "NONE",
+  "entry_zone": { "min_usd": <angka>, "max_usd": <angka> },
+  "take_profit_levels": [ { "level": 1, "price_usd": <angka>, "percentage": <angka> } ],
+  "stop_loss_usd": <angka>,
+  "risk_reward_ratio": <angka>,
+  "key_reasons": ["<string>", ...],
+  "red_flags": ["<string>", ...],
+  "invalidation_condition": "<string>",
+  "estimated_holding_time": "<string>"
+}
+6. Untuk verdict WAIT/AVOID: entry_zone isi dengan currentPrice (${currentPrice}), take_profit_levels boleh array kosong [], stop_loss_usd = ${indicators.calculatedStopLoss}, risk_reward_ratio = 0.`;
 
     let attempts = 0;
     const maxAttempts = 2;
@@ -183,6 +269,9 @@ ATURAN MUTLAK:
           indicators,
           securityFlags,
           systemPrompt,
+          marketContext,
+          timeframeShortLabel: '1m',
+          timeframeMacroLabel: '5m',
         });
         if (!result) return null;
         const analysis: AiAnalysis = result;

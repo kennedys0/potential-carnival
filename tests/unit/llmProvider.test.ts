@@ -183,6 +183,10 @@ describe('OpenAiCompatibleProvider', () => {
     const callArgs = mockFetch.mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
     expect(body.messages[0].content).toBe('CUSTOM_SYSTEM_PROMPT_RULE');
-    expect(body.messages[1].content).toContain('Trend Makro (15m): EMA 9 = $0.98, EMA 21 = $1.05, RSI 14 = 42');
+    // Format prompt diperbarui patch skema JSON 2026-10-15; pastikan data makro
+    // tetap dimasukkan (bukan format lamanya).
+    expect(body.messages[1].content).toContain('Trend Makro (15m):');
+    expect(body.messages[1].content).toContain('$0.98');
+    expect(body.messages[1].content).toContain('$1.05');
   });
 });

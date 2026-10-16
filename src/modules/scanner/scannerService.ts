@@ -34,7 +34,9 @@ export class ScannerService {
     timeframe: 'minute' | 'hour' | 'day' = 'minute',
     aggregate: number = 5
   ): Promise<Candle[]> {
-    const limit = Math.max(appSettings.ANALYZER_PARAMS.MIN_CANDLES, 50); // Get at least min candles + some buffer
+    // Ambil cukup candle agar hasil resample makro (faktor 5) tetap >= 21 candle
+    // (syarat indikator makro di AnalyzerService). 110/5 = 22 makro candle.
+    const limit = Math.max(appSettings.ANALYZER_PARAMS.MIN_CANDLES * 5 + 5, 110);
     const cacheKey = `candles:${network}:${poolAddress}:${timeframe}:${aggregate}:${limit}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) {

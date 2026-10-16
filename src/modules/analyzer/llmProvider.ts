@@ -12,12 +12,22 @@ export interface OpenAiConfig {
 const BASE_PROVIDER_FAILURE_COOLDOWN_MS = 10_000;
 const MAX_PROVIDER_FAILURE_COOLDOWN_MS = 5 * 60_000;
 
+export interface MarketContextInput {
+  priceChangeM5Pct?: number;
+  buysM5?: number;
+  sellsM5?: number;
+  lastCandles?: Array<{ open: number; high: number; low: number; close: number }>;
+}
+
 export interface AnalyzeInput {
   tokenSymbol: string;
   currentPrice: number;
   indicators: TechnicalIndicatorsSnapshot;
   securityFlags: string[];
   systemPrompt?: string;
+  marketContext?: MarketContextInput;
+  timeframeShortLabel?: string;
+  timeframeMacroLabel?: string;
 }
 
 /**
@@ -37,6 +47,46 @@ function pctDiff(current: number, reference: number): string {
   if (!Number.isFinite(current) || !Number.isFinite(reference) || reference <= 0) return '0.00%';
   const diff = ((current - reference) / reference) * 100;
   return `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}%`;
+}
+
+/** Deskripsikan bentuk 1 candle untuk AI: arah + deteksi wick distribusi/akumulasi. */
+function describeCandle(c: { open: number; high: number; low: number; close: number }): string {
+  if (![c.open, c.high, c.low, c.close].every(Number.isFinite) || c.open <= 0) return 'n/a';
+  const chg = ((c.close - c.open) / c.open) * 100;
+  const body = Math.abs(c.close - c.open);
+  const upperWick = c.high - Math.max(c.open, c.close);
+  const lowerWick = Math.min(c.open, c.close) - c.low;
+  let shape = 'netral';
+  if (body > 0) {
+    if (upperWick > 2 * body && chg > 0) shape = 'wick atas panjang (distribusi/tekanan jual)';
+    else if (lowerWick > 2 * body && chg < 0) shape = 'wick bawah panjang (akumulasi/tekanan beli)';
+    else if (chg > 0) shape = 'bullish';
+    else shape = 'bearish';
+  }
+  return `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}% ${shape}`;
+}
+
+/** Rangkai konteks orderflow & price action cepat jadi 1-2 baris prompt. */
+function formatMarketContext(mc?: MarketContextInput): string {
+  if (!mc) return '';
+  const parts: string[] = [];
+  if (Number.isFinite(mc.priceChangeM5Pct)) {
+    const v = mc.priceChangeM5Pct as number;
+    parts.push(`Perubahan harga 5m: ${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
+  }
+  if (Number.isFinite(mc.buysM5) && Number.isFinite(mc.sellsM5)) {
+    const buys = mc.buysM5 as number;
+    const sells = mc.sellsM5 as number;
+    const total = buys + sells;
+    const ratio = total > 0 ? (buys / total) * 100 : 50;
+    parts.push(`Transaksi 5m: ${buys} beli vs ${sells} jual (${ratio.toFixed(0)}% beli)`);
+  }
+  if (mc.lastCandles && mc.lastCandles.length > 0) {
+    const desc = mc.lastCandles.map(describeCandle).join(' -> ');
+    parts.push(`3 candle terakhir: ${desc}`);
+  }
+  if (parts.length === 0) return '';
+  return `\n- Orderflow & Price Action: ${parts.join(' | ')}`;
 }
 
 export class OpenAiCompatibleProvider {
@@ -67,6 +117,8 @@ export class OpenAiCompatibleProvider {
     }
 
     const { currentPrice, indicators, securityFlags } = input;
+    const shortLabel = input.timeframeShortLabel ?? '5m';
+    const macroLabel = input.timeframeMacroLabel ?? '15m';
     const hasMacro = indicators.macroEma9 !== undefined && indicators.macroEma21 !== undefined;
     const macroTrendStatus = hasMacro
       ? indicators.macroEma9! >= indicators.macroEma21!
@@ -75,7 +127,7 @@ export class OpenAiCompatibleProvider {
       : 'N/A';
 
     const macroLine = hasMacro
-      ? `\n- Trend Makro (15m): ${macroTrendStatus} | EMA9: $${formatUsd(indicators.macroEma9!)} | EMA21: $${formatUsd(indicators.macroEma21!)} | RSI14: ${indicators.macroRsi14?.toFixed(2) ?? 'N/A'}`
+      ? `\n- Trend Makro (${macroLabel}): ${macroTrendStatus} | EMA9: $${formatUsd(indicators.macroEma9!)} | EMA21: $${formatUsd(indicators.macroEma21!)} | RSI14: ${indicators.macroRsi14?.toFixed(2) ?? 'N/A'}`
       : '';
 
     const shortTrendStatus =
@@ -86,13 +138,13 @@ export class OpenAiCompatibleProvider {
 Data Kuantitatif Token Solana:
 - Token: ${input.tokenSymbol}
 - Harga Saat Ini (Entry): $${formatUsd(currentPrice)}
-- Trend Jangka Pendek (5m): ${shortTrendStatus}
+- Trend Jangka Pendek (${shortLabel}): ${shortTrendStatus}
 - EMA 9: $${formatUsd(indicators.ema9)} (Jarak harga ke EMA9: ${pctDiff(currentPrice, indicators.ema9)})
 - EMA 21: $${formatUsd(indicators.ema21)} (Jarak harga ke EMA21: ${pctDiff(currentPrice, indicators.ema21)})
 - VWAP: $${formatUsd(indicators.vwap)} (Posisi harga vs VWAP: ${pctDiff(currentPrice, indicators.vwap)})
 - RSI 14: ${indicators.rsi14.toFixed(2)}
 - ATR 14: $${formatUsd(indicators.atr14)}
-- Volume Spike Ratio: ${indicators.volumeSpikeRatio.toFixed(2)}x${macroLine}
+- Volume Spike Ratio: ${indicators.volumeSpikeRatio.toFixed(2)}x${macroLine}${formatMarketContext(input.marketContext)}
 - Referensi Stop Loss (ATR): $${formatUsd(indicators.calculatedStopLoss)}
 - Referensi Take Profit 1: $${formatUsd(indicators.calculatedTp1)}
 - Referensi Take Profit 2: $${formatUsd(indicators.calculatedTp2)}

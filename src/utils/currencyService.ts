@@ -2,7 +2,9 @@ import { logger } from './logger';
 import { appSettings } from '../config/settings';
 
 /**
- * Kurs SOL/USD/IDR dari Binance.
+ * Kurs SOL/USD/IDR.
+ * Binance diblokir dari lokasi egress proxy (HTTP 451 restricted location),
+ * jadi pakai: SOL/USD dari DexScreener, USD/IDR dari open.er-api.com (gratis).
  * ATURAN: tidak ada nilai fallback/hardcode. Jika belum ada data segar, semua getter mengembalikan `null`
  * dan pemanggil WAJIB menampilkan "N/A" (tampilan) atau menolak aksi (trading).
  */
@@ -28,23 +30,31 @@ export class CurrencyService {
     this.lastAttemptAt = now;
 
     try {
-      const response = await fetch(
-        'https://api.binance.com/api/v3/ticker/price?symbols=%5B%22SOLUSDT%22,%22USDTIDR%22%5D',
-        { signal: AbortSignal.timeout(appSettings.CURRENCY_FETCH_TIMEOUT_MS) },
-      );
-      if (!response.ok) {
-        throw new Error(`Binance returned status: ${response.status}`);
+      // Binance mengembalikan 451 (restricted location) lewat egress proxy.
+      // Alternatif: SOL/USD dari DexScreener, USD/IDR dari open.er-api.com.
+      const timeoutMs = appSettings.CURRENCY_FETCH_TIMEOUT_MS;
+      const [solRes, idrRes] = await Promise.all([
+        fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112', {
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+        fetch('https://open.er-api.com/v6/latest/USD', {
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+      ]);
+      if (!solRes.ok) {
+        throw new Error(`DexScreener returned status: ${solRes.status}`);
       }
-      const data = (await response.json()) as any[];
+      if (!idrRes.ok) {
+        throw new Error(`er-api returned status: ${idrRes.status}`);
+      }
+      const solData = (await solRes.json()) as any;
+      const idrData = (await idrRes.json()) as any;
 
-      const solData = data.find(d => d.symbol === 'SOLUSDT');
-      const idrData = data.find(d => d.symbol === 'USDTIDR');
-      
-      const usdSol = solData ? parseFloat(solData.price) : null;
-      const idrUsd = idrData ? parseFloat(idrData.price) : null;
-      
+      const usdSol = solData?.pairs?.[0]?.priceUsd ? parseFloat(solData.pairs[0].priceUsd) : null;
+      const idrUsd = idrData?.rates?.IDR ? parseFloat(idrData.rates.IDR) : null;
+
       if (!CurrencyService.valid(usdSol) || !CurrencyService.valid(idrUsd)) {
-        throw new Error('Binance response missing/invalid rate fields');
+        throw new Error('Rate response missing/invalid fields');
       }
 
       const idrSol = usdSol * idrUsd;
@@ -53,9 +63,9 @@ export class CurrencyService {
       this.usdPerSol = usdSol;
       this.idrPerUsd = idrUsd;
       this.lastSuccessAt = now;
-      logger.info({ idrPerUsd: idrUsd, idrPerSol: idrSol, usdPerSol: usdSol }, 'Currency rates updated from Binance');
+      logger.info({ idrPerUsd: idrUsd, idrPerSol: idrSol, usdPerSol: usdSol }, 'Currency rates updated (DexScreener + er-api)');
     } catch (err: any) {
-      logger.error({ err }, 'Failed to fetch currency rates from Binance');
+      logger.error({ err }, 'Failed to fetch currency rates');
     }
   }
 

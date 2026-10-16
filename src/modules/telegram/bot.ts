@@ -5,7 +5,35 @@ import { logger } from '../../utils/logger';
 export function createTelegramBot(token?: string): Bot {
   const env = getEnv();
   const botToken = token || env.TELEGRAM_BOT_TOKEN;
-  const bot = new Bot(botToken);
+
+  // Konversi AbortSignal dari shim grammy (paket abort-controller) ke native.
+  // global fetch (undici) menolak signal non-native: "Expected signal to be an
+  // instance of AbortSignal".
+  // SignalLike: bentuk minimal yang dipakai (shim grammy tidak instanceof AbortSignal).
+  interface SignalLike {
+    readonly aborted: boolean;
+    addEventListener(type: string, listener: () => void, options?: object): void;
+  }
+  const toNativeSignal = (signal: AbortSignal | SignalLike | undefined | null): AbortSignal | undefined => {
+    if (!signal) return undefined;
+    if (signal instanceof AbortSignal) return signal;
+    const controller = new AbortController();
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    return controller.signal;
+  };
+
+  const bot = new Bot(botToken, {
+    client: {
+      // @ts-expect-error grammy mengetik fetch sebagai node-fetch (punya statics),
+      // tapi yang dipakai hanya pemanggilannya — kompatibel saat runtime.
+      fetch: (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+        globalThis.fetch(url, { ...init, signal: toNativeSignal(init?.signal) }),
+    },
+  });
 
   const whitelistedUsers = env.WHITELISTED_USERS
     ? env.WHITELISTED_USERS.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id))

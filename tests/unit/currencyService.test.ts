@@ -1,14 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CurrencyService } from '../../src/utils/currencyService';
 
-const okResponse = (rates: any[] = [
-  { symbol: 'SOLUSDT', price: '180' },
-  { symbol: 'USDTIDR', price: '16666.6666666667' },
-]) => ({
+// Mock meniru sumber kurs baru (patch 2026-10-14): SOL/USD dari DexScreener,
+// USD/IDR dari open.er-api.com. fetch dipanggil 2x (Promise.all), jadi mock
+// memilih respons berdasarkan URL.
+const dexScreenerOk = (priceUsd: string = '180') => ({
   ok: true,
   status: 200,
-  json: async () => rates,
+  json: async () => ({ pairs: [{ priceUsd }] }),
 });
+const erApiOk = (idr: string = '16666.6666666667') => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ rates: { IDR: idr } }),
+});
+const okFetch = (priceUsd = '180', idr = '16666.6666666667') =>
+  vi.fn().mockImplementation((url: string) =>
+    String(url).includes('dexscreener.com')
+      ? Promise.resolve(dexScreenerOk(priceUsd))
+      : Promise.resolve(erApiOk(idr)));
 
 describe('CurrencyService (tanpa fallback palsu)', () => {
   beforeEach(() => {
@@ -29,7 +39,7 @@ describe('CurrencyService (tanpa fallback palsu)', () => {
     expect(svc.formatUsd(null)).toBe('N/A');
   });
 
-  it('tetap null (tidak melempar) bila Binance gagal', async () => {
+  it('tetap null (tidak melempar) bila fetch gagal', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
     const svc = new CurrencyService();
     await expect(svc.fetchRates()).resolves.toBeUndefined();
@@ -37,7 +47,7 @@ describe('CurrencyService (tanpa fallback palsu)', () => {
   });
 
   it('mengembalikan kurs nyata setelah fetch sukses', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse()));
+    vi.stubGlobal('fetch', okFetch());
     const svc = new CurrencyService();
     await svc.fetchRates();
     expect(svc.getUsdPerSol()).toBe(180);
@@ -47,17 +57,14 @@ describe('CurrencyService (tanpa fallback palsu)', () => {
   });
 
   it('menolak respons rusak/nol (tidak menyimpan nilai tak valid)', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse([
-      { symbol: 'SOLUSDT', price: '0' },
-      { symbol: 'USDTIDR', price: '0' },
-    ])));
+    vi.stubGlobal('fetch', okFetch('0', '0'));
     const svc = new CurrencyService();
     await svc.fetchRates();
     expect(svc.getUsdPerSol()).toBeNull();
   });
 
   it('kurs basi (melewati batas stale) kembali menjadi null', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse()));
+    vi.stubGlobal('fetch', okFetch());
     const svc = new CurrencyService();
     await svc.fetchRates();
     expect(svc.getUsdPerSol()).toBe(180);

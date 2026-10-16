@@ -79,6 +79,14 @@ export const AppSettingsSchema = z.object({
     MIN_CANDLES: z.number().int().min(21).default(21),
     MAX_STALE_CANDLE_AGE_MS: z.number().default(1800000), // 30 minutes
   }).default({}),
+  SCANNER_PARAMS: z.object({
+    // Berapa pair diproses paralel per siklus (bunuh antrian sekuensial yang bikin sinyal basi)
+    PAIR_CONCURRENCY: z.number().int().min(1).max(10).default(3),
+    // TTL cache vonis AI per token (ms) — vonis fresh dipakai instan tanpa nunggu AI
+    AI_VERDICT_CACHE_TTL_MS: z.number().default(120000),
+    // Toleransi drift harga antara analisa AI vs harga saat eksekusi (persen). Lewat dari ini -> skip.
+    EXECUTION_MAX_PRICE_DRIFT_PCT: z.number().default(5),
+  }).default({}),
   SECURITY_PARAMS: z.object({
     MIN_LIQUIDITY_USD: z.number().default(2000),
     MAX_TAX_PERCENT: z.number().default(5.0),

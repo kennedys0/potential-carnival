@@ -253,20 +253,27 @@ export class AutopilotEngine {
     const strategy = source === 'SNIPER' ? 'NEW_TOKEN_SNIPER' : 'TRENDING';
 
     // Gunakan SL/TP dinamis dari AI jika tersedia (agar analisis AI benar-benar dipakai saat exit!)
+    // PENTING: key harus sesuai parseExitPolicy (sl_percent/tp1_percent/tp2_percent),
+    // dan dynamicExitOverrides harus di-spread TERAKHIR agar menimpa default statis.
     const dynamicExitOverrides: Record<string, any> = {};
     if (ai && ai.verdict === 'BUY' && currentPriceUsd > 0) {
       if (ai.stop_loss_usd > 0 && ai.stop_loss_usd < currentPriceUsd) {
         const aiSlPct = Math.round(((currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd) * 100);
         if (aiSlPct >= 2 && aiSlPct <= 50) {
-          dynamicExitOverrides.stop_loss_pct = aiSlPct;
+          dynamicExitOverrides.sl_percent = aiSlPct;
         }
       }
       if (ai.take_profit_levels && ai.take_profit_levels.length > 0) {
-        const maxTpUsd = Math.max(...ai.take_profit_levels.map((tp) => tp.price_usd));
-        if (maxTpUsd > currentPriceUsd) {
-          const aiTpPct = Math.round(((maxTpUsd - currentPriceUsd) / currentPriceUsd) * 100);
-          if (aiTpPct >= 5 && aiTpPct <= 500) {
-            dynamicExitOverrides.take_profit_pct = aiTpPct;
+        const sortedTps = ai.take_profit_levels
+          .map((tp) => tp.price_usd)
+          .filter((p) => Number.isFinite(p) && p > currentPriceUsd)
+          .sort((a, b) => a - b);
+        if (sortedTps.length > 0) {
+          const tp1Pct = Math.round(((sortedTps[0] - currentPriceUsd) / currentPriceUsd) * 100);
+          const tp2Pct = Math.round(((sortedTps[sortedTps.length - 1] - currentPriceUsd) / currentPriceUsd) * 100);
+          if (tp1Pct >= 5 && tp1Pct <= 500) {
+            dynamicExitOverrides.tp1_percent = tp1Pct;
+            dynamicExitOverrides.tp2_percent = Math.max(tp1Pct, Math.min(500, tp2Pct));
           }
         }
       }
@@ -274,7 +281,11 @@ export class AutopilotEngine {
 
     const exitPolicy: ExitPolicySnapshot = source === 'SNIPER'
       ? parseExitPolicy(sniperExitPolicy(config))
-      : parseExitPolicy({ enabled: true, ...dynamicExitOverrides, ...((config.exit_params as any) ?? {}) });
+      : parseExitPolicy({
+          enabled: true,
+          ...((config.exit_params as any) ?? {}),
+          ...dynamicExitOverrides, // <-- di akhir agar nilai dinamis AI menimpa default statis
+        });
 
     const reservationId = await this.reservationRepo.reserve({
       userId, tokenMint, strategy, isDryRun, amountSol: orderSol,
