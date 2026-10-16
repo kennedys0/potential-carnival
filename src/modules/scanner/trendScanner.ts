@@ -288,11 +288,16 @@ export class TrendScanner {
 
       const liquidityUsd = Number(pair.liquidity?.usd ?? 0);
 
-      const security = await this.securityService.evaluateToken(tokenAddress, {
-        liquidityUsd: liquidityUsd || null,
-        marketCapUsd: pair.marketCap || pair.fdv || null,
-        pairAddress: pair.pairAddress,
-      });
+      // MICRO-OPT: security check & candle fetch jalan PARALEL (hemat ~1-2 dtk per pair).
+      // Candle tetap dipakai hanya bila lolos pre-AI safety (di bawah).
+      const [security, candles] = await Promise.all([
+        this.securityService.evaluateToken(tokenAddress, {
+          liquidityUsd: liquidityUsd || null,
+          marketCapUsd: pair.marketCap || pair.fdv || null,
+          pairAddress: pair.pairAddress,
+        }),
+        this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 1),
+      ]);
 
       // Quarantine dicatat SETELAH analisa AI (lihat bawah) dengan TTL dibedakan per hasil.
       // (FIX #2: dulu langsung 15 menit di sini, sehingga verdict WAIT ikut terkunci 15 menit.)
@@ -319,15 +324,11 @@ export class TrendScanner {
         return check.canProceedToAi;
       });
 
-      let candles: any[] = [];
       let currentVolume = Number(pair.volume?.m5 ?? 0);
       let indicators = null;
       let aiAnalysis = null;
 
       if (anyUserPassesPreAiSafety) {
-        // FIX #1: candle 1-menit agar responsif momentum awal (21 candle = 21 menit, bukan 105 menit).
-        // Resample x5 untuk makro (5m); limit 110 candle -> 22 makro candle (>= 21, syarat indikator makro).
-        candles = await this.scannerService.getCandles('solana', pair.pairAddress, 'minute', 1);
         // FIX #3: harga live DexScreener lebih fresh dari close candle (yang bisa basi dari cache).
         // Candle close hanya jadi fallback bila harga live tidak valid.
         const candleClose = candles.length > 0 ? candles[candles.length - 1].close : NaN;
@@ -347,6 +348,10 @@ export class TrendScanner {
           pastVolumes,
           macroCandles
         );
+
+        // MICRO-OPT: freshness probe dimulai PARALEL dengan AI call (hemat ~0.5 dtk),
+        // karena harga analisa (priceUsd) sudah diketahui sebelum AI dipanggil.
+        const freshnessPromise = this.checkPriceFreshness(pair.pairAddress, priceUsd, pair.baseToken.symbol);
 
         if (indicators) {
           // FIX #7b: konteks orderflow & price action cepat untuk AI
@@ -369,8 +374,9 @@ export class TrendScanner {
         }
 
         // FIX 3: Freshness guard — harga bisa bergerak selama AI analisa.
-        // Ambil harga paling fresh; jika drift melebihi toleransi, sinyal dianggap basi -> skip.
-        const freshness = await this.checkPriceFreshness(pair.pairAddress, priceUsd, pair.baseToken.symbol);
+        // Probe-nya sudah dimulai paralel sebelum AI call; tinggal tunggu hasilnya.
+        // Jika drift melebihi toleransi, sinyal dianggap basi -> skip.
+        const freshness = await freshnessPromise;
         if (!freshness.ok) {
           logger.info(
             { token: pair.baseToken.symbol, driftPct: freshness.driftPct.toFixed(2) },
