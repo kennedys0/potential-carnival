@@ -168,30 +168,61 @@ export class RuleEvaluator {
         }
       } else {
         if (indicators) {
-          let fallbackPassed = true;
-          if (indicators.ema9 <= indicators.ema21) {
-            rulesFailed.push(
-              `Fallback: EMA9 (${indicators.ema9.toFixed(4)}) <= EMA21 (${indicators.ema21.toFixed(4)})`,
-            );
-            fallbackPassed = false;
+          // Jalur eksplisit "early momentum" (pool baru < 21 candle): TIDAK ada EMA/RSI sintetis.
+          // Nilai dari DATA REAL (m5 change, rasio buy/sell, volume) — tercatat apa adanya di log.
+          if (indicators.isEarlyMomentum && indicators.earlyMomentum) {
+            const em = indicators.earlyMomentum;
+            let earlyPassed = true;
+            const buyPressure = em.buysM5 > em.sellsM5 && em.buysM5 >= 3;
+            const emChecks: Array<{ ok: boolean; passMsg: string; failMsg: string }> = [
+              {
+                ok: em.m5VolumeUsd > 0,
+                passMsg: `Early momentum: volume m5 $${em.m5VolumeUsd.toFixed(0)} > 0`,
+                failMsg: 'Early momentum: tidak ada volume m5',
+              },
+              {
+                ok: em.priceVsFirstOpenPct >= 0 || em.m5ChangePct > 0 || buyPressure,
+                passMsg: `Early momentum: aksi beli awal (vs open ${em.priceVsFirstOpenPct.toFixed(1)}%, m5 ${em.m5ChangePct.toFixed(1)}%, ${em.buysM5} buys vs ${em.sellsM5} sells)`,
+                failMsg: `Early momentum: tidak ada aksi beli awal (vs open ${em.priceVsFirstOpenPct.toFixed(1)}%, m5 ${em.m5ChangePct.toFixed(1)}%)`,
+              },
+            ];
+            for (const c of emChecks) {
+              if (c.ok) {
+                rulesPassed.push(c.passMsg);
+              } else {
+                rulesFailed.push(c.failMsg);
+                earlyPassed = false;
+              }
+            }
+            if (!earlyPassed) {
+              rulesFailed.push('Early momentum criteria not met');
+            }
           } else {
-            rulesPassed.push('Fallback: EMA9 > EMA21 (Bullish trend)');
-          }
-          if (indicators.rsi14 >= 70 || indicators.rsi14 <= 30) {
-            rulesFailed.push(`Fallback: RSI14 (${indicators.rsi14.toFixed(2)}) out of safe zone (30-70)`);
-            fallbackPassed = false;
-          } else {
-            rulesPassed.push('Fallback: RSI14 is safe');
-          }
-          if (indicators.volumeSpikeRatio < 1.5) {
-            rulesFailed.push(`Fallback: Volume Spike (${indicators.volumeSpikeRatio.toFixed(1)}x) < 1.5x`);
-            fallbackPassed = false;
-          } else {
-            rulesPassed.push('Fallback: Volume Spike >= 1.5x');
-          }
+            let fallbackPassed = true;
+            if (indicators.ema9 <= indicators.ema21) {
+              rulesFailed.push(
+                `Fallback: EMA9 (${indicators.ema9.toFixed(4)}) <= EMA21 (${indicators.ema21.toFixed(4)})`,
+              );
+              fallbackPassed = false;
+            } else {
+              rulesPassed.push('Fallback: EMA9 > EMA21 (Bullish trend)');
+            }
+            if (indicators.rsi14 >= 70 || indicators.rsi14 <= 30) {
+              rulesFailed.push(`Fallback: RSI14 (${indicators.rsi14.toFixed(2)}) out of safe zone (30-70)`);
+              fallbackPassed = false;
+            } else {
+              rulesPassed.push('Fallback: RSI14 is safe');
+            }
+            if (indicators.volumeSpikeRatio < 1.5) {
+              rulesFailed.push(`Fallback: Volume Spike (${indicators.volumeSpikeRatio.toFixed(1)}x) < 1.5x`);
+              fallbackPassed = false;
+            } else {
+              rulesPassed.push('Fallback: Volume Spike >= 1.5x');
+            }
 
-          if (!fallbackPassed) {
-            rulesFailed.push('Fallback indicators criteria not met');
+            if (!fallbackPassed) {
+              rulesFailed.push('Fallback indicators criteria not met');
+            }
           }
         } else {
           rulesFailed.push('AI unavailable and technical indicators are unavailable');

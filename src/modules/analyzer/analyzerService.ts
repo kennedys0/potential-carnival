@@ -6,6 +6,7 @@ import { calculateATR, Candle } from './indicators/atr';
 import { calculateVolumeSpikeRatio } from './indicators/volumeSpike';
 import { appSettings } from '../../config/settings';
 import { calculateVWAP } from './indicators/vwap';
+import { formatUsd } from './llmProvider';
 
 export const AiAnalysisSchema = z.object({
   verdict: z.enum(['BUY', 'WAIT', 'AVOID']),
@@ -38,6 +39,16 @@ export interface TechnicalIndicatorsSnapshot {
   macroEma9?: number;
   macroEma21?: number;
   macroRsi14?: number;
+  // Jalur eksplisit "early momentum" untuk pool baru (< 21 candle): TIDAK memakai
+  // EMA/RSI sintetis. Gate fallback memakai metrik real di earlyMomentum, bukan field di atas.
+  isEarlyMomentum?: boolean;
+  earlyMomentum?: {
+    m5ChangePct: number;
+    buysM5: number;
+    sellsM5: number;
+    m5VolumeUsd: number;
+    priceVsFirstOpenPct: number;
+  };
 }
 
 export interface MarketContext {
@@ -225,7 +236,8 @@ export class AnalyzerService {
     currentPrice: number,
     indicators: TechnicalIndicatorsSnapshot,
     securityFlags: string[],
-    marketContext?: MarketContext
+    marketContext?: MarketContext,
+    timeframeLabels?: { short: string; macro: string }
   ): Promise<AiAnalysis | null> {
     if (!this.llmClient) {
       logger.warn('AI unavailable: llmClient not configured');
@@ -235,7 +247,7 @@ export class AnalyzerService {
     const systemPrompt = `Anda adalah AI Scalper Profesional untuk Solana. Analisis indikator teknikal & security flags berikut, lalu kembalikan keputusan BUY/WAIT/AVOID dalam format JSON murni.
 ATURAN MUTLAK:
 1. JIKA VERDICT = BUY:
-   - Gunakan referensi stop_loss_usd di sekitar calculatedStopLoss (${indicators.calculatedStopLoss}) yang pasti < currentPrice (${currentPrice}).
+   - Gunakan referensi stop_loss_usd di sekitar calculatedStopLoss ($${formatUsd(indicators.calculatedStopLoss)}) yang pasti < currentPrice ($${formatUsd(currentPrice)}).
    - Gunakan referensi take_profit_levels di sekitar calculatedTp1 (${indicators.calculatedTp1}) dan calculatedTp2 (${indicators.calculatedTp2}) yang pasti > currentPrice (${currentPrice}).
 2. key_reasons WAJIB bahasa Indonesia, maksimal 5-7 kata per poin.
 3. [MULTI-TIMEFRAME]: Jika EMA pendek (ema9 > ema21) naik tapi tren makro (macroEma9 < macroEma21) turun, waspadai fakeout/dead cat bounce (pilih WAIT/AVOID kecuali volumeSpikeRatio sangat kuat).
@@ -255,7 +267,7 @@ SKEMA JSON WAJIB — semua field berikut HARUS ada, tidak boleh di-skip:
   "invalidation_condition": "<string>",
   "estimated_holding_time": "<string>"
 }
-6. Untuk verdict WAIT/AVOID: entry_zone isi dengan currentPrice (${currentPrice}), take_profit_levels boleh array kosong [], stop_loss_usd = ${indicators.calculatedStopLoss}, risk_reward_ratio = 0.`;
+6. Untuk verdict WAIT/AVOID: entry_zone isi dengan currentPrice ($${formatUsd(currentPrice)}), take_profit_levels boleh array kosong [], stop_loss_usd = $${formatUsd(indicators.calculatedStopLoss)}, risk_reward_ratio = 0.`;
 
     let attempts = 0;
     const maxAttempts = 2;
@@ -270,11 +282,17 @@ SKEMA JSON WAJIB — semua field berikut HARUS ada, tidak boleh di-skip:
           securityFlags,
           systemPrompt,
           marketContext,
-          timeframeShortLabel: '1m',
-          timeframeMacroLabel: '5m',
+          timeframeShortLabel: timeframeLabels?.short ?? '1m',
+          timeframeMacroLabel: timeframeLabels?.macro ?? '5m',
         });
         if (!result) return null;
         const analysis: AiAnalysis = result;
+
+        // FIX (review Claude minor): normalisasi confidence pecahan (0.85 -> 85).
+        // Skema zod mengizinkan 0-100, jadi 0.85 lolos validasi tapi gagal >= 70 di RuleEvaluator.
+        if (Number.isFinite(analysis.confidence) && analysis.confidence > 0 && analysis.confidence <= 1) {
+          analysis.confidence = Math.round(analysis.confidence * 100);
+        }
 
         if (analysis.verdict === 'BUY') {
           if (!analysis.take_profit_levels || analysis.take_profit_levels.length === 0) {

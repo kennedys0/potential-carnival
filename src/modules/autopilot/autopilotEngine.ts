@@ -257,10 +257,14 @@ export class AutopilotEngine {
     // dan dynamicExitOverrides harus di-spread TERAKHIR agar menimpa default statis.
     const dynamicExitOverrides: Record<string, any> = {};
     if (ai && ai.verdict === 'BUY' && currentPriceUsd > 0) {
+      // FIX (review Claude #3): SL AI di-clamp ke setting user — AI boleh MENGETATKAN
+      // (mis. user 8%, AI 5%), tapi tidak boleh MELONGGARKAN (user 5%, AI 50%).
+      const rawUserSl = Number((config.exit_params as any)?.sl_percent);
+      const userSlPct = Number.isFinite(rawUserSl) && rawUserSl > 0 ? rawUserSl : 8;
       if (ai.stop_loss_usd > 0 && ai.stop_loss_usd < currentPriceUsd) {
         const aiSlPct = Math.round(((currentPriceUsd - ai.stop_loss_usd) / currentPriceUsd) * 100);
         if (aiSlPct >= 2 && aiSlPct <= 50) {
-          dynamicExitOverrides.sl_percent = aiSlPct;
+          dynamicExitOverrides.sl_percent = Math.min(aiSlPct, userSlPct);
         }
       }
       if (ai.take_profit_levels && ai.take_profit_levels.length > 0) {

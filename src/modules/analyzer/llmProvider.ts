@@ -34,7 +34,7 @@ export interface AnalyzeInput {
  * Mencegah JavaScript mengubah angka mikro (misal 0.000000045) menjadi "4.5e-8"
  * yang sering membuat LLM salah baca jumlah nol (halusinasi desimal).
  */
-function formatUsd(val: number): string {
+export function formatUsd(val: number): string {
   if (!Number.isFinite(val)) return '0';
   if (val === 0) return '0';
   if (Math.abs(val) < 0.000001) return val.toFixed(10).replace(/\.?0+$/, '');
@@ -183,7 +183,9 @@ Berikan analisis objek JSON sesuai skema yang diminta pada instruksi sistem.
             },
           ],
           temperature: 0.1,
-          max_tokens: 500,
+          // FIX (review Claude #6): 500 token berisiko memotong JSON — model reasoning
+          // memakai jatah token untuk <think>, sehingga JSON terpotong -> parse gagal -> null.
+          max_tokens: 1500,
         }),
         signal: controller.signal,
       });

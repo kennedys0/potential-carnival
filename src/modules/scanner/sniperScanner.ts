@@ -198,30 +198,43 @@ export class SniperScanner {
           macroCandles
         );
 
-        // FALLBACK KHUSUS SNIPER POOL BARU (< 21 menit):
-        // Pool yang baru lahir 1-15 menit belum punya 21 candle 1-menit.
-        // Jika candles < 21 tapi pool punya metrik momentum positif di DexScreener/candle awal,
-        // bangun synthetic snapshot agar tidak mati konyol di RuleEvaluator fallback!
+        // JALUR EKSPLISIT "EARLY MOMENTUM" UNTUK POOL BARU (< 21 candle 1m):
+        // Pool yang baru lahir 1-15 menit belum punya cukup candle untuk EMA/RSI.
+        // DILARANG memalsukan indikator (dulu: ema9=price*1.005, rsi14=55 — selalu lolos gate).
+        // Sebagai gantinya, nilai momentum dari DATA REAL (m5 change, rasio buy/sell, volume),
+        // dan RuleEvaluator memakai metrik real ini — bukan EMA/RSI.
         if (!indicators) {
           const m5Change = Number((pair as any).priceChange?.m5 ?? 0);
           const m5Buys = Number((pair as any).txns?.m5?.buys ?? 0);
           const m5Sells = Number((pair as any).txns?.m5?.sells ?? 0);
-          const m5Vol = Number(pair.volume?.m5 ?? currentVolume ?? 0);
+          const m5Vol = Number(pair.volume?.m5 ?? 0);
           const firstOpen = candles.length > 0 ? candles[0].open : priceUsd;
-          const isBullishEarlyAction =
-            priceUsd >= firstOpen || m5Change > 0 || (m5Buys > m5Sells && m5Buys >= 3);
+          const priceVsFirstOpenPct = firstOpen > 0 ? ((priceUsd - firstOpen) / firstOpen) * 100 : 0;
+          const hasEarlyMomentum =
+            m5Vol > 0 &&
+            (priceUsd >= firstOpen || m5Change > 0 || (m5Buys > m5Sells && m5Buys >= 3));
 
-          if (isBullishEarlyAction && m5Vol > 0) {
+          if (hasEarlyMomentum) {
             indicators = {
-              ema9: priceUsd * 1.005, // Representasi momentum awal bullish (EMA9 > EMA21)
-              ema21: priceUsd * 0.995,
-              rsi14: 55, // Zona aman momentum awal (30 - 70)
-              atr14: priceUsd * 0.05,
-              vwap: priceUsd * 0.99,
-              volumeSpikeRatio: Math.max(1.6, m5Buys / Math.max(1, m5Sells)),
-              calculatedStopLoss: priceUsd * 0.85,
-              calculatedTp1: priceUsd * 1.25,
-              calculatedTp2: priceUsd * 1.5,
+              // Field teknikal diset NaN dengan SENGAJA — tidak ada kalkulasi di sini.
+              // Gate fallback membaca earlyMomentum di bawah, bukan field ini.
+              ema9: NaN,
+              ema21: NaN,
+              rsi14: NaN,
+              atr14: NaN,
+              vwap: NaN,
+              volumeSpikeRatio: NaN,
+              calculatedStopLoss: priceUsd * 0.9,
+              calculatedTp1: NaN,
+              calculatedTp2: NaN,
+              isEarlyMomentum: true,
+              earlyMomentum: {
+                m5ChangePct: m5Change,
+                buysM5: m5Buys,
+                sellsM5: m5Sells,
+                m5VolumeUsd: m5Vol,
+                priceVsFirstOpenPct,
+              },
             };
           }
         }

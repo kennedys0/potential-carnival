@@ -82,8 +82,10 @@ export const AppSettingsSchema = z.object({
   SCANNER_PARAMS: z.object({
     // Berapa pair diproses paralel per siklus (bunuh antrian sekuensial yang bikin sinyal basi)
     PAIR_CONCURRENCY: z.number().int().min(1).max(10).default(3),
-    // TTL cache vonis AI per token (ms) — vonis fresh dipakai instan tanpa nunggu AI
-    AI_VERDICT_CACHE_TTL_MS: z.number().default(120000),
+    // TTL cache vonis AI per token (ms) — vonis fresh dipakai instan tanpa nunggu AI.
+    // 300 dtk agar cache benar-benar kena hit (karantina WAIT 120 dtk < TTL);
+    // freshness guard tetap memvalidasi harga sebelum eksekusi.
+    AI_VERDICT_CACHE_TTL_MS: z.number().default(300000),
     // Toleransi drift harga antara analisa AI vs harga saat eksekusi (persen). Lewat dari ini -> skip.
     EXECUTION_MAX_PRICE_DRIFT_PCT: z.number().default(5),
   }).default({}),

@@ -87,7 +87,22 @@ export async function handleScanCommand(
 
     // BACKGROUND PROCESSING: AI Analysis
     if (indicators) {
-      analyzerService.analyzeWithLlm(pair.baseToken.symbol, priceUsd, indicators, security.riskFlags)
+      // FIX (review Claude minor): /scan pakai candle 5m/15m — kirim label timeframe yang benar
+      // (jangan hardcoded '1m'/'5m') + marketContext agar verdict konsisten dengan autopilot.
+      const marketContext = {
+        priceChangeM5Pct: Number(pair.priceChange?.m5 ?? NaN),
+        buysM5: Number((pair as any).txns?.m5?.buys ?? NaN),
+        sellsM5: Number((pair as any).txns?.m5?.sells ?? NaN),
+        lastCandles: candles.slice(-3).map((c: any) => ({ open: c.open, high: c.high, low: c.low, close: c.close })),
+      };
+      analyzerService.analyzeWithLlm(
+        pair.baseToken.symbol,
+        priceUsd,
+        indicators,
+        security.riskFlags,
+        marketContext,
+        { short: '5m', macro: '15m' }
+      )
         .then(async (aiAnalysis) => {
           const finalReportText = formatTokenReport(pair, security, aiAnalysis, true, false);
           await ctx.api.editMessageText(chatId, activeMessageId!, finalReportText, {

@@ -339,7 +339,10 @@ export class TrendScanner {
         const macroCandles = resampleCandles(candles, 5);
         const pastVolumes = candles.slice(0, Math.max(0, candles.length - 1)).map((c) => c.volume);
         const latestCandleVol = candles.length > 0 ? candles[candles.length - 1].volume : 0;
-        currentVolume = Math.max(Number(pair.volume?.m5 ?? 0), latestCandleVol);
+        // FIX (review Claude #2): samakan satuan volume — m5 dibagi 5 agar setara candle 1m.
+        // Sebelumnya max(m5, vol1m) membuat volumeSpikeRatio membengkak ~5x (sinyal spike palsu).
+        const estimated1mVolFromM5 = Number(pair.volume?.m5 ?? 0) / 5;
+        currentVolume = Math.max(estimated1mVolFromM5, latestCandleVol);
 
         indicators = this.analyzerService.calculateIndicators(
           candles,
@@ -351,7 +354,8 @@ export class TrendScanner {
 
         // MICRO-OPT: freshness probe dimulai PARALEL dengan AI call (hemat ~0.5 dtk),
         // karena harga analisa (priceUsd) sudah diketahui sebelum AI dipanggil.
-        const freshnessPromise = this.checkPriceFreshness(pair.pairAddress, priceUsd, pair.baseToken.symbol);
+        // Keputusan drift dibuat SETELAH AI selesai, dengan batas adaptif (lihat bawah).
+        const freshPricePromise = this.fetchFreshPrice(pair.pairAddress, pair.baseToken.symbol);
 
         if (indicators) {
           // FIX #7b: konteks orderflow & price action cepat untuk AI
@@ -373,27 +377,50 @@ export class TrendScanner {
           );
         }
 
-        // FIX 3: Freshness guard — harga bisa bergerak selama AI analisa.
-        // Probe-nya sudah dimulai paralel sebelum AI call; tinggal tunggu hasilnya.
-        // Jika drift melebihi toleransi, sinyal dianggap basi -> skip.
-        const freshness = await freshnessPromise;
-        if (!freshness.ok) {
+        // FIX 3 (diperkuat review Claude #4): Freshness guard — harga bisa bergerak selama AI analisa.
+        // Batas drift ADAPTIF: setengah jarak SL AI (min 1%, maks 5%). SL minimum 2% berarti
+        // drift fix 5% bisa membuat entry sudah 2.5x melewati stop — sekarang dibatasi.
+        const { freshPrice } = await freshPricePromise;
+        let maxDriftPct = appSettings.SCANNER_PARAMS.EXECUTION_MAX_PRICE_DRIFT_PCT;
+        if (
+          aiAnalysis?.verdict === 'BUY' &&
+          Number.isFinite(aiAnalysis.stop_loss_usd) &&
+          aiAnalysis.stop_loss_usd > 0 &&
+          priceUsd > 0
+        ) {
+          const aiSlPct = ((priceUsd - aiAnalysis.stop_loss_usd) / priceUsd) * 100;
+          if (aiSlPct > 0) {
+            maxDriftPct = Math.min(5, Math.max(1, aiSlPct / 2));
+          }
+        }
+        const driftPct =
+          Number.isFinite(freshPrice) && freshPrice > 0 && priceUsd > 0
+            ? (Math.abs(freshPrice - priceUsd) / priceUsd) * 100
+            : 0;
+        if (driftPct > maxDriftPct) {
           logger.info(
-            { token: pair.baseToken.symbol, driftPct: freshness.driftPct.toFixed(2) },
+            { token: pair.baseToken.symbol, driftPct: driftPct.toFixed(2), maxDriftPct: maxDriftPct.toFixed(2) },
             'TrendScanner: skip — harga bergerak terlalu jauh sejak analisa AI (sinyal basi)'
           );
           return;
         }
-        priceUsd = freshness.freshPrice;
+        if (Number.isFinite(freshPrice) && freshPrice > 0) {
+          priceUsd = freshPrice;
+        }
 
-        // FIX #2: quarantine TTL dibedakan per hasil — WAIT cuma 2 menit agar
-        // breakout berikutnya tidak terlewat; hard-blocked/gagal safety tetap 15 menit.
+        // FIX (review Claude #2/#5): quarantine TTL dibedakan per hasil —
+        // WAIT cuma 2 menit agar breakout berikutnya tidak terlewat;
+        // AI null (provider down / JSON invalid) cuma 60 detik, bukan 10 menit —
+        // token tidak boleh "dibakar" tanpa pernah dianalisa;
+        // hard-blocked/gagal safety tetap 15 menit.
         const quarantineTtlSec =
           security.isHardBlocked || !anyUserPassesPreAiSafety
             ? 15 * 60
-            : aiAnalysis?.verdict === 'WAIT'
-              ? 2 * 60
-              : 10 * 60;
+            : !aiAnalysis
+              ? 60
+              : aiAnalysis.verdict === 'WAIT'
+                ? 2 * 60
+                : 10 * 60;
         await ctx.redis.set(`scanned_token:${tokenAddress}`, '1', 'EX', quarantineTtlSec);
       } else {
         // Gagal pre-AI safety untuk semua user -> quarantine 15 menit (tidak perlu dicek tiap siklus)
@@ -543,29 +570,19 @@ export class TrendScanner {
    * FIX 3: bandingkan harga analisa vs harga fresh dari DexScreener.
    * Fail-open: jika harga fresh tidak bisa diambil, lanjut seperti biasa.
    */
-  private async checkPriceFreshness(
+  // Mengambil harga paling fresh dari DexScreener (dipakai freshness guard).
+  // Fail-open: bila gagal diambil, kembalikan NaN dan pemanggil memakai harga analisa.
+  private async fetchFreshPrice(
     pairAddress: string,
-    analysisPrice: number,
     symbol: string
-  ): Promise<{ ok: boolean; freshPrice: number; driftPct: number }> {
-    const maxDriftPct = appSettings.SCANNER_PARAMS.EXECUTION_MAX_PRICE_DRIFT_PCT;
+  ): Promise<{ freshPrice: number }> {
     try {
       const freshPair = await this.dexScreener.getPairByAddress(pairAddress);
       const freshPrice = freshPair ? Number(freshPair.priceUsd) : NaN;
-      if (!Number.isFinite(freshPrice) || freshPrice <= 0 || !(analysisPrice > 0)) {
-        return { ok: true, freshPrice: analysisPrice, driftPct: 0 };
-      }
-      const driftPct = (Math.abs(freshPrice - analysisPrice) / analysisPrice) * 100;
-      if (driftPct > maxDriftPct) {
-        logger.info(
-          { token: symbol, analysisPrice, freshPrice, driftPct: driftPct.toFixed(2), maxDriftPct },
-          'TrendScanner: freshness guard menolak sinyal basi'
-        );
-        return { ok: false, freshPrice, driftPct };
-      }
-      return { ok: true, freshPrice, driftPct };
+      return { freshPrice };
     } catch {
-      return { ok: true, freshPrice: analysisPrice, driftPct: 0 };
+      logger.debug({ token: symbol }, 'TrendScanner: gagal ambil harga fresh (fail-open, pakai harga analisa)');
+      return { freshPrice: NaN };
     }
   }
 }
